@@ -140,6 +140,10 @@ mv pyproject.toml.bak pyproject.toml
 
 ### 8. Set up the .env file
 
+The `.env` file is already committed in the repository (force-added despite
+`.gitignore`), so it will be present after cloning. All API keys are blank
+by default. If for any reason it is missing, recreate it:
+
 ```bash
 cp .env.example .env
 ```
