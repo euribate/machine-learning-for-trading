@@ -22,10 +22,24 @@ insert, so nothing shadows stdlib or installed packages). Chapter helper module
 names do not collide, so a flat append is unambiguous.
 """
 
+import os
 import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent
+
+# Load .env at interpreter startup so ML4T_DATA_PATH (and API keys) are
+# available to the ml4t library and all notebooks without an explicit
+# load_dotenv() call in every file.
+_env_file = _REPO_ROOT / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+
+        _load_dotenv(_env_file, override=False)
+    except ImportError:
+        # python-dotenv not installed yet (e.g. during initial uv sync)
+        pass
 
 for _chapter_dir in sorted(_REPO_ROOT.glob("[0-9][0-9]_*")):
     if _chapter_dir.is_dir():
