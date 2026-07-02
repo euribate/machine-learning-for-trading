@@ -243,12 +243,14 @@ gmm_grid = fit_gmm_grid(factors_scaled, [2, 3, 4, 5, 6])
 | 6 | 26,820 | 25,148 | 0.036 | 0.078 |
 
 **Interpretation**:
-- BIC is minimized at K=2 (though K=3 is very close at 26,366)
-- Silhouette is maximized at K=2 (0.288 GMM, 0.234 K-Means)
+- BIC is minimized at K=3 (26,366), with K=2 very close (26,391 — a difference of
+  just 25 points, well within noise for BIC comparisons)
+- Silhouette is maximized at K=2 (0.288 GMM, 0.234 K-Means) and drops sharply at K=3
 - AIC keeps decreasing through K=6 (as expected — AIC has weaker complexity penalty)
 - GMM silhouette >= K-Means silhouette at every K except K=4 (0.123 vs 0.125),
   confirming that GMM's ellipsoidal clusters better fit the correlated factor data
-- **K=2 is the clear choice** based on BIC + silhouette agreement
+- **K=2 is chosen**: BIC is near-minimal and silhouette is clearly highest, favoring
+  the simpler, more interpretable two-regime split
 
 ### Step 8: Model Selection Visualization
 
@@ -373,7 +375,7 @@ dataset now extending through Feb 2026 (1,196 rows), several values have shifted
 
 | Location | Comment claims | Actual value | Severity |
 |----------|---------------|--------------|----------|
-| **Model Selection** cell | BIC at K=2 = 26,170 | 26,391.1 | Minor (direction correct) |
+| **Model Selection** cell | "BIC is minimised at K=2 (26,170)" | BIC is minimized at K=3 (26,366); K=2 is 26,391 | **Incorrect** |
 | **Model Selection** cell | Silhouette at K=2 = 0.27 | 0.288 | Minor |
 | **Model Selection** cell | AIC at K=6 = 24,930 | 25,147.7 | Minor |
 | **Model Selection** cell | "silhouette turns negative for K>=4" | All positive (0.123, 0.110, 0.036) | **Incorrect** |
@@ -393,7 +395,9 @@ dataset now extending through Feb 2026 (1,196 rows), several values have shifted
 
 Despite the numeric shifts, **all qualitative conclusions remain correct**:
 
-- BIC and silhouette still select K=2 (correct)
+- BIC is actually minimized at K=3 (26,366 vs 26,391 at K=2), but silhouette
+  clearly favors K=2 (0.288 vs 0.126). The choice of K=2 is justified by
+  silhouette and parsimony, not by BIC alone
 - Value is still countercyclical (correct)
 - Momentum is still procyclical (correct)
 - Carry and Defensive still turn negative in Risk-Off (correct, and more so)
@@ -402,14 +406,19 @@ Despite the numeric shifts, **all qualitative conclusions remain correct**:
 - Volatility ratio is still ~2.2x direct and ~1.3x rolling (correct)
 - Regime signals are still noisy with ~4 month average transitions (correct)
 
-### One Factual Error
+### Factual Errors
 
-The claim that "silhouette scores turn negative for K>=4" is **wrong** with the
-current data. All silhouette scores remain positive (0.123 at K=4, 0.110 at K=5,
-0.036 at K=6). They are low and declining, indicating increasingly poor separation,
-but they do not cross zero. The sentence should be corrected to something like:
-"Silhouette scores drop sharply for K>=3 and approach zero at K=6, indicating
-increasingly overlapping clusters."
+1. **"BIC is minimised at K=2"** — Wrong. BIC is minimized at K=3 (26,366 vs
+   26,391 at K=2). The difference is small (25 points), but the claim is factually
+   incorrect. K=2 is still a defensible choice based on silhouette (0.288 vs 0.126)
+   and parsimony, but the justification should not invoke BIC minimality.
+
+2. **"silhouette scores turn negative for K>=4"** — Wrong. All silhouette scores
+   remain positive (0.123 at K=4, 0.110 at K=5, 0.036 at K=6). They are low and
+   declining, indicating increasingly poor separation, but they do not cross zero.
+   The sentence should be corrected to something like: "Silhouette scores drop
+   sharply for K>=3 and approach zero at K=6, indicating increasingly overlapping
+   clusters."
 
 ---
 
