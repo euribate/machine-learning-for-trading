@@ -39,7 +39,14 @@ uv pip install -e "." --python .venv/bin/python
 # 5. Restore pyproject.toml
 mv pyproject.toml.bak pyproject.toml
 
-# 6. Verify
+# 6. Set ML4T_DATA_PATH in .env (CRITICAL - notebooks will fail without this)
+sed -i.bak "s|ML4T_DATA_PATH=MUST_BE_SET_AFTER_CLONE|ML4T_DATA_PATH=$(pwd)/data|" .env
+rm -f .env.bak
+
+# 7. Download free datasets
+.venv/bin/python data/download_all.py --free-only
+
+# 8. Verify
 .venv/bin/python -c "import torch, sklearn, lightgbm, xgboost; print('All OK')"
 ```
 
@@ -53,6 +60,11 @@ uv venv --python 3.12 .venv
 sed -i.bak 's/requires-python = ">=3.14"/requires-python = ">=3.12"/' pyproject.toml
 uv pip install -e "." --python .venv/Scripts/python.exe
 mv pyproject.toml.bak pyproject.toml
+# Set ML4T_DATA_PATH (use Windows-style path):
+sed -i.bak "s|ML4T_DATA_PATH=MUST_BE_SET_AFTER_CLONE|ML4T_DATA_PATH=$(cygpath -w $(pwd))\\\data|" .env
+rm -f .env.bak
+# Download free datasets:
+.venv/Scripts/python.exe data/download_all.py --free-only
 ```
 
 ### Important Notes
@@ -60,6 +72,10 @@ mv pyproject.toml.bak pyproject.toml
 - **Do NOT use `uv sync`** -- it enforces the lockfile which targets Python
   3.14 and will fail to build packages without a C compiler.
 - Use `uv pip install -e .` instead, which resolves dependencies fresh.
+- **CRITICAL**: `ML4T_DATA_PATH` in `.env` MUST be set to the absolute path
+  of the repo's `data/` folder. Without this, notebooks look for data relative
+  to their own directory (e.g. `01_process_is_edge/data/`) and fail with
+  `FileNotFoundError`. The setup steps above handle this automatically.
 - The `.env` file is already in the repo with blank API keys. Edit it to add
   keys only if needed for specific chapters.
 - If `import talib` fails on macOS, run: `brew install ta-lib`

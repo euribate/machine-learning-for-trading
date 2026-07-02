@@ -138,14 +138,27 @@ mv pyproject.toml.bak pyproject.toml
 # Or: git checkout pyproject.toml
 ```
 
-### 8. Set up the .env file
+### 8. Set ML4T_DATA_PATH in .env (CRITICAL)
 
 The `.env` file is already committed in the repository (force-added despite
-`.gitignore`), so it will be present after cloning. All API keys are blank
-by default. If for any reason it is missing, recreate it:
+`.gitignore`), so it will be present after cloning. However, **you must set
+`ML4T_DATA_PATH`** to the absolute path of the repo's `data/` folder.
+
+Without this, the ml4t library resolves `./data` relative to each notebook's
+working directory (e.g. `01_process_is_edge/data/`) instead of the repo root,
+causing `FileNotFoundError` when loading datasets.
 
 ```bash
-cp .env.example .env
+# macOS/Linux — auto-detect and set:
+sed -i.bak "s|ML4T_DATA_PATH=MUST_BE_SET_AFTER_CLONE|ML4T_DATA_PATH=$(pwd)/data|" .env
+rm -f .env.bak
+
+# Windows (Git Bash):
+sed -i.bak "s|ML4T_DATA_PATH=MUST_BE_SET_AFTER_CLONE|ML4T_DATA_PATH=$(cygpath -w $(pwd))\\\data|" .env
+rm -f .env.bak
+
+# Or manually edit .env and set:
+#   ML4T_DATA_PATH=/absolute/path/to/machine-learning-for-trading/data
 ```
 
 Edit `.env` to add any API keys you need. All keys are optional. The most
