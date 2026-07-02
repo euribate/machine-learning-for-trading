@@ -287,7 +287,22 @@ each month. This visualization reveals:
 - K=3-4: increasingly fragmented
 - K=5-6: noisy, with some regimes appearing only briefly
 
-### Step 10: Two-Regime Labeling
+### Steps 10-15: Confirming What the GMM Reveals
+
+The GMM in Step 7 is the regime detector. It looks at 99 years of monthly
+factor returns and says: "there are two distinct clusters in this data."
+But at this point, the clusters are just statistical groupings — label 0
+and label 1, with no guarantee they correspond to anything economically
+meaningful. They could be noise.
+
+Steps 10 through 15 exist to answer a single question: **are these
+clusters real?** Each step adds a layer of evidence. Without this
+validation, the GMM output would just be "cluster 0 and cluster 1" —
+two groups of months with no proof they mean anything. The confirmation
+chain is what turns a statistical artifact into an economic insight.
+Here is the progression:
+
+#### Step 10: Give the clusters names
 
 ```python
 regime_equity_returns = factors_df["Equity indices Market"].groupby(labels_2).mean()
@@ -295,48 +310,53 @@ good_regime = regime_equity_returns.idxmax()
 bad_regime = 1 - good_regime
 ```
 
-**Why**: GMM labels are arbitrary (0 or 1). The code assigns "Risk-On" to the
-regime with higher average equity returns and "Risk-Off" to the other. This is
-purely for interpretability — it does not change the model.
+The GMM outputs arbitrary numeric labels (0 or 1). This step gives them
+interpretable names: "Risk-On" = the regime with higher average equity
+returns, "Risk-Off" = the other. It does not change the model — it only
+renames the labels so the rest of the analysis is readable.
 
 **Result**: Risk-On = 927 months (77.9%), Risk-Off = 263 months (22.1%).
 
-### Step 11: Two-Regime Timeline with Historical Events
+#### Step 11: Do the clusters align with known history?
+
+**Confirmation test**: If the GMM is capturing something real, major
+stress events should tend to fall in Risk-Off periods.
 
 A two-panel figure:
-- **Top**: Swim lanes for Risk-On / Risk-Off, with vertical lines at major events
-  (1929 Great Crash, 1937 Recession, 1973 Oil Crisis, 1987 Black Monday,
-  2000 Dot-com, 2008 GFC, 2020 COVID)
+- **Top**: Swim lanes for Risk-On / Risk-Off, with red vertical lines at
+  major events (1929 Great Crash, 1937 Recession, 1973 Oil Crisis,
+  1987 Black Monday, 2000 Dot-com, 2008 GFC, 2020 COVID)
 - **Bottom**: Cumulative equity return (log scale), colored by regime
 
-**How to read it**: In the top panel, the two swim-lane rows are "Risk-Off"
-(bottom) and "Risk-On" (top). A dark fill in a row means that regime is active
-at that month. Red vertical lines and labels mark major historical events
-(1929 Great Crash, 1937 Recession, 1973 Oil Crisis, 1987 Black Monday,
-2000 Dot-com, 2008 GFC, 2020 COVID). To check whether a crisis coincides with
-Risk-Off, look at whether the Risk-Off row (bottom) is dark (filled) where the
-red line falls.
+**How to read it**: In the top panel, the two rows are "Risk-Off" (bottom)
+and "Risk-On" (top). A dark fill means that regime is active at that month.
+To check whether a crisis coincides with Risk-Off, look at whether the
+Risk-Off row is dark where the red line falls.
 
-Note that the GMM assigns regimes based on factor returns, not event narratives.
-A crisis may start with the model still in Risk-On and only flip to Risk-Off
-once factor dislocations materialize (often with a one- or two-month lag). Short
-or localized shocks (e.g., Black Monday — a single-day crash) may not generate
-enough sustained factor stress to flip the monthly regime at all. The alignment
-between events and Risk-Off is a general pattern, not a one-to-one match.
+Note that the GMM assigns regimes based on factor returns, not event
+narratives. A crisis may start with the model still in Risk-On and only
+flip to Risk-Off once factor dislocations materialize (often with a one-
+or two-month lag). Short or localized shocks (e.g., Black Monday — a
+single-day crash) may not generate enough sustained factor stress to flip
+the monthly regime at all. The alignment between events and Risk-Off is a
+general pattern, not a one-to-one match.
 
-### Step 12: Volatility Analysis
+**Verdict**: Confirmed — stress events cluster in Risk-Off periods.
+
+#### Step 12: Is there a measurable risk difference?
+
+**Confirmation test**: If the two clusters represent genuinely different
+market environments, volatility should differ between them. If it doesn't,
+the clusters might just be splitting noise.
 
 12-month rolling volatility (annualized) is computed and split by regime.
 
-**Actual results** (verified):
+| Regime | Mean Vol | Median Vol |
+|--------|----------|------------|
+| Risk-On | 9.8% | 8.9% |
+| Risk-Off | 12.6% | 11.0% |
 
-| Regime | Mean Vol | Median Vol | Max Vol |
-|--------|----------|------------|---------|
-| Risk-On | 9.8% | 8.9% | — |
-| Risk-Off | 12.6% | 11.0% | — |
-
-Rolling-vol ratio: **1.29x** (Risk-Off is 29% more volatile on average, using
-the smoothed rolling measure).
+Rolling-vol ratio: **1.29x** (Risk-Off is 29% more volatile on average).
 
 The figure includes the regime swim-lane panel on top and rolling volatility
 time series below, with dashed horizontal lines at each regime's mean.
@@ -345,11 +365,17 @@ time series below, with dashed horizontal lines at each regime's mean.
 means are saved to `output/factor_regimes/figure_1_5/inputs.npz` for use by
 the book's publication-quality figure generation script.
 
-### Step 13: Factor Returns by Regime
+**Verdict**: Confirmed — Risk-Off has meaningfully higher volatility.
 
-Mean monthly returns are annualized (x12) and displayed as a grouped bar chart.
+#### Step 13: Do factors behave differently across regimes?
 
-**Actual results** (verified 2026-07-02):
+**Confirmation test**: This is the core economic question. If the clusters
+are real, different investment strategies should produce different returns
+in each regime. If all factors behave the same regardless of regime, the
+clusters are not useful.
+
+Mean monthly returns are annualized (x12) and displayed as a grouped bar
+chart.
 
 | Factor | Risk-On (%) | Risk-Off (%) |
 |--------|-------------|--------------|
@@ -363,9 +389,18 @@ Mean monthly returns are annualized (x12) and displayed as a grouped bar chart.
 | Bonds | +1.1 | +2.7 |
 | Commodities | +4.4 | +7.4 |
 
-### Step 14: Regime Statistics
+**Verdict**: Confirmed — factor behavior shifts dramatically across regimes.
+Value is countercyclical (returns *increase* during Risk-Off: +5.1% vs +1.7%).
+Momentum collapses (from +4.5% to +0.1%). Carry and Defensive, despite their
+"safe" names, turn negative (-1.3% and -1.0%). Bonds outperform in Risk-Off
+(+2.7% vs +1.1%), consistent with flight-to-quality.
 
-Comprehensive statistics for each regime (equity market returns only):
+#### Step 14: How stark is the difference?
+
+**Confirmation test**: Risk and return statistics across regimes quantify the
+economic magnitude. If Risk-Off has similar Sharpe and drawdown to Risk-On,
+the regime distinction is academic. If the gap is wide, the distinction
+matters for real portfolios.
 
 | Metric | Risk-On | Risk-Off |
 |--------|---------|----------|
@@ -376,13 +411,22 @@ Comprehensive statistics for each regime (equity market returns only):
 | Sharpe Ratio | 1.17 | 0.04 |
 | Max Drawdown | -24.3% | -83.5% |
 
-Direct volatility ratio: **2.26x** (much higher than the rolling 1.29x because
-the direct measure captures the full variance of all months within each regime,
+Direct volatility ratio: **2.26x** (much higher than the rolling 1.29x
+because the direct measure captures the full variance within each regime,
 including extreme months that the 12-month rolling window smooths out).
 
-### Step 15: Duration Analysis
+**Verdict**: Confirmed — the difference is stark. Risk-On delivers a
+Sharpe of 1.17 while Risk-Off drops to 0.04: equity exposure during
+Risk-Off is essentially uncompensated risk. The -83.5% max drawdown in
+Risk-Off reflects the Great Depression and underscores that these are not
+mild corrections.
 
-**Actual results** (verified):
+#### Step 15: Could you trade on this?
+
+**Confirmation test**: Even if the regimes are real and economically
+meaningful, they are only useful for trading if they are stable enough to
+act on. If the model flips regime every month, transaction costs would
+erode any benefit from regime-timing.
 
 | Metric | Value |
 |--------|-------|
@@ -394,6 +438,30 @@ including extreme months that the 12-month rolling window smooths out).
 | Risk-Off avg duration | 1.9 months |
 | Risk-Off max duration | 14 months |
 | Risk-Off episodes | 138 |
+
+**Verdict**: Not directly. With 275 transitions over 99 years, the model
+switches regime roughly every 4 months. Risk-Off episodes average just
+1.9 months — they capture acute stress bursts, not prolonged bear markets.
+A strategy that reallocates based on these signals would trade frequently,
+incurring transaction costs that may erode the regime-timing benefit.
+
+#### Summary of the confirmation chain
+
+| Step | Question | Answer |
+|------|----------|--------|
+| 11 | Do clusters align with history? | Yes — crises fall in Risk-Off |
+| 12 | Is there a real risk difference? | Yes — 1.29x higher rolling vol |
+| 13 | Do factors behave differently? | Yes — value up, momentum down |
+| 14 | Is the difference significant? | Yes — Sharpe 1.17 vs 0.04 |
+| 15 | Can you trade on it? | No — too noisy (4.3 month avg) |
+
+The conclusion: the GMM's two-cluster split is **economically real and
+statistically meaningful**, but **too noisy for direct tactical use**.
+It is a tool for *understanding* how factor dynamics shift across market
+environments — not a ready-made trading signal. Building a predictive
+regime model that can be traded requires walk-forward fitting, point-in-time
+information sets, and embargoed cross-validation, which the book covers
+from Chapter 6 onward.
 
 ---
 
