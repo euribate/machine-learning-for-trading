@@ -114,22 +114,31 @@ which is stationary and captures inflationary regimes.
 
 ## 3. Step-by-Step Code Walkthrough
 
+The notebook follows a two-part structure. **Part 1** builds a simple regime
+model from 4 hand-picked macro indicators, validates it against the S&P 500,
+and then examines the correlation structure of those indicators. **Part 2**
+asks: *can we do better with more data?* — expanding to 25 indicators,
+comparing multiple clustering methods, and testing dimensionality reduction.
+
 ### Part 1: Core Analysis (4 Indicators)
 
-#### Step 1: Load FRED Macro Data
+> **Goal**: Build a minimal, interpretable regime model and verify that the
+> clusters correspond to distinct market environments.
+
+#### Steps 1-4: Data Preparation
+
+**Step 1 — Load FRED data**:
 
 ```python
 macro_raw = load_macro()
 ```
 
-**Output**: 9,497 daily rows, 25 series, 2000-01-01 to 2025-12-31.
-
 The `load_macro()` function reads the FRED parquet file downloaded via
 `data/macro/download.py` (requires `FRED_API_KEY` in `.env`).
+Output: 9,497 daily rows, 25 series, 2000-01-01 to 2025-12-31.
 
-#### Step 2: Select Core Indicators
-
-Four indicators are selected:
+**Step 2 — Select core indicators**: Four indicators are chosen to cover the
+main dimensions of the macro environment:
 
 | Indicator | What it measures | Why included |
 |-----------|-----------------|-------------|
@@ -138,24 +147,21 @@ Four indicators are selected:
 | T10Y2Y | 10Y-2Y Treasury spread | Yield curve slope — classic recession predictor |
 | CPIAUCSL | Consumer Price Index (level) | Inflation — converted to YoY % change |
 
-**Why these 4**: They cover the four main dimensions of the macro environment:
-labour market, monetary policy, term structure, and prices. They are available
-monthly with minimal lags and have long, reliable histories.
+These four cover labour market, monetary policy, term structure, and prices.
+They are available monthly with minimal lags and have long, reliable histories.
 
-#### Step 3: Resample to Monthly
+**Step 3 — Resample to monthly**: Daily FRED data is resampled by taking the
+last observation in each month. Forward-fill handles release lags (e.g., CPI
+publishes mid-month for the prior month). A backward-fill catches leading
+nulls — this introduces a small look-ahead at the panel boundary, acceptable
+for a descriptive demo. The data is filtered to 2002+ where all 4 series have
+reliable coverage.
 
-Daily FRED data is resampled to monthly by taking the last observation in each
-month. Forward-fill handles release lags (e.g., CPI publishes mid-month for the
-prior month). A backward-fill catches leading nulls — this introduces a small
-look-ahead at the panel boundary, acceptable for a descriptive demo.
-
-The data is filtered to 2002+ where all 4 series have reliable coverage.
-
-**Result**: 289 raw monthly rows → 277 months after CPI YoY transformation
+Result: 289 raw monthly rows → 277 months after CPI YoY transformation
 (loses 12 months for the lagged percentage change). Date range: Jan 2003 to
 Jan 2026.
 
-#### Step 4: CPI Level → YoY and Standardize
+**Step 4 — Transform CPI and standardize**:
 
 ```python
 macro_df["cpi_yoy"] = macro_df["cpiaucsl"].pct_change(12) * 100
@@ -164,7 +170,7 @@ macro_scaled = StandardScaler().fit_transform(macro_df)
 
 The 4 working features after this step: `unrate`, `dff`, `t10y2y`, `cpi_yoy`.
 
-**Actual descriptive statistics** (verified):
+Actual descriptive statistics (verified):
 
 | Stat | unrate | dff | t10y2y | cpi_yoy |
 |------|--------|-----|--------|---------|
@@ -173,24 +179,29 @@ The 4 working features after this step: `unrate`, `dff`, `t10y2y`, `cpi_yoy`.
 | Min | 3.40 | 0.04 | -1.06 | -1.96 |
 | Max | 14.80 | 5.41 | 2.84 | 8.98 |
 
-#### Step 5: Fit GMM with K=4
+At this point the data is clean, stationary, and on a common scale. The next
+step fits the clustering model.
+
+#### Steps 5-6: Fit GMM and Label Regimes
+
+**Step 5 — Fit GMM with K=4**:
 
 ```python
 gmm_macro = GaussianMixture(n_components=4, ...)
 ```
 
-**Silhouette score**: 0.252 (reasonable structure; above 0.25 threshold).
+K=4 is fixed *a priori* to match the Two Sigma approach and to capture four
+recognized economic phases (Expansion, Recovery, Crisis, Tightening). No
+BIC/AIC grid search is performed — the goal is interpretability against known
+economic narratives, not statistical optimality.
 
-No BIC/AIC grid search here. K=4 is fixed to match the Two Sigma approach
-and to produce clusters interpretable as known economic phases.
+Silhouette score: **0.252** (reasonable structure; above 0.25 threshold).
 
-#### Step 6: Regime Characteristics and Labeling
+**Step 6 — Regime labeling**: The GMM assigns arbitrary numeric labels (0-3).
+The code examines the mean values of each indicator per cluster, then applies a
+priority cascade of rules to assign interpretive names:
 
-The GMM assigns arbitrary numeric labels (0-3). The code examines the mean
-values of each indicator per cluster, then applies a priority cascade of
-rules to assign interpretive names:
-
-**Actual regime means** (verified):
+Actual regime means (verified):
 
 | Cluster | unrate | dff | t10y2y | cpi_yoy | Label |
 |---------|--------|-----|--------|---------|-------|
@@ -199,7 +210,7 @@ rules to assign interpretive names:
 | 2 | 7.62 | 0.11 | 1.88 | 1.58 | Recovery |
 | 3 | 4.43 | 3.79 | 0.24 | 4.01 | Tightening |
 
-**Labeling rules** (priority order):
+Labeling rules (priority order):
 1. unrate > 10 → **Crisis** (cluster 1: COVID-era unemployment spike)
 2. unrate > 6 and dff < 0.5 → **Recovery** (cluster 2: high unemployment
    but Fed at zero = post-crisis healing)
@@ -210,17 +221,21 @@ rules to assign interpretive names:
    moderate rates)
 6. Fallback → Transition
 
-#### Steps 7-8: S&P 500 Validation
+The model has produced four clusters with economically coherent profiles. But
+do these clusters actually correspond to different market conditions? The next
+steps test that.
 
-This is the core confirmation step — analogous to the confirmation chain
-in `factor_regimes`. The question: **do the macro clusters correspond to
-meaningfully different market environments?**
+#### Steps 7-9: Validating the Regimes Against the Market
 
-The S&P 500 daily index is loaded, resampled to monthly, aligned to the
-macro regime dates, and split by regime. For each regime, the code computes
-annualized volatility and maximum drawdown.
+The core question: **do the macro clusters correspond to meaningfully different
+market environments?** If the regimes are real, they should map to distinct
+volatility and drawdown profiles in the S&P 500.
 
-**Actual regime statistics** (verified):
+**Steps 7-8 — S&P 500 validation**: The S&P 500 daily index is loaded,
+resampled to monthly, aligned to the macro regime dates, and split by regime.
+For each regime, the code computes annualized volatility and maximum drawdown.
+
+Actual regime statistics (verified):
 
 | Regime | Months | Ann. Vol (%) | Max DD (%) |
 |--------|--------|-------------|-----------|
@@ -229,33 +244,44 @@ annualized volatility and maximum drawdown.
 | Crisis | 4 | 16.0 | 9.2 |
 | Tightening | 82 | 16.0 | 40.5 |
 
-**Interpretation**: Volatility rises monotonically from Expansion (12.3%)
-through Recovery (15.2%) to Crisis/Tightening (16.0%). This confirms that
-macro regimes capture genuinely different risk environments.
+**Verdict**: Volatility rises monotonically from Expansion (12.3%) through
+Recovery (15.2%) to Crisis/Tightening (16.0%). The regimes capture genuinely
+different risk environments, confirming the model is picking up real economic
+structure, not noise.
 
-The Crisis regime has only 4 months (COVID peak) — too few for reliable
+Note: the Crisis regime has only 4 months (COVID peak) — too few for reliable
 statistics. Its 9.2% max drawdown is misleadingly low because the drawdown
-calculation resets within each regime's non-contiguous months. The true
-COVID drawdown (~34%) spans months that the GMM splits across Crisis and
-Recovery.
+calculation resets within each regime's non-contiguous months. The true COVID
+drawdown (~34%) spans months that the GMM splits across Crisis and Recovery.
 
-#### Step 9: Regime Timeline Visualization (Figure 1.6)
-
-A multi-panel figure with:
+**Step 9 — Regime timeline visualization (Figure 1.6)**: A multi-panel figure
+summarizes the results:
 - **Left**: Swim lanes per regime (filled when active), with event markers
   at 2008 (GFC), 2020 (COVID), 2022 (Inflation).
 - **Right columns**: Horizontal bar charts showing annualized volatility
   and max drawdown per regime.
 
 Regimes are sorted from lowest to highest volatility (Expansion at top,
-Crisis/Tightening at bottom).
+Crisis/Tightening at bottom). Artifacts are persisted to
+`output/macro_regimes/figure_1_6/inputs.npz` for the book's publication-quality
+figure generator.
 
-Artifacts are persisted to `output/macro_regimes/figure_1_6/inputs.npz`
-for the book's publication-quality figure generator.
+At this point the core model is built and validated. The remaining step in
+Part 1 examines *why* joint clustering works and *what the model might be
+missing*.
 
-#### Step 10: Correlation Heatmap
+#### Step 10: Understanding the Indicator Relationships
 
-**Actual correlations** (verified):
+Before expanding to more indicators, the notebook pauses to examine how the
+four core indicators relate to each other. This serves two purposes:
+
+1. **Justifies the GMM approach**: If the indicators were uncorrelated,
+   K-Means would suffice. The correlation heatmap shows they are not.
+2. **Exposes the model's blind spots**: If some economic dimensions are
+   missing or redundant in the 4-indicator set, that motivates expanding to
+   a broader panel in Part 2.
+
+Actual correlations (verified):
 
 | | dff | t10y2y | unrate | cpi_yoy |
 |--|-----|--------|--------|---------|
@@ -271,66 +297,120 @@ for the book's publication-quality figure generator.
 - **CPI YoY** is largely orthogonal to the other three — inflation regimes
   can coexist with both recession and expansion.
 
-These correlations motivate joint clustering: no single indicator captures
-the full macro state.
+**Implication**: Three of the four indicators (UNRATE, DFF, T10Y2Y) are
+strongly correlated — they partially capture the same underlying dynamic
+(the Fed's response to the business cycle). CPI brings an independent
+dimension, but it is the *only* additional axis. This suggests the
+4-indicator model may be information-starved: its modest silhouette of 0.252
+could improve if more independent economic dimensions were included.
+
+This leads directly to Part 2.
 
 ### Part 2: Extended Analysis (25 Indicators)
 
-#### Step 11: Prepare Full Dataset
+> **Goal**: Test whether a richer set of indicators produces better-separated
+> regimes and whether alternative clustering methods confirm the core model's
+> findings.
 
-All 25 FRED series with <50% missing data are selected. They span interest
-rates (DFF, DGS1-DGS30), yield curve spreads, VIX, initial claims (ICSA),
-Fed balance sheet (WALCL), CPI, core CPI, PCE, unemployment, payrolls,
-labor participation, industrial production, M2, GDP, and derived yield
-curve slopes.
+Part 1 showed that the 4-indicator model works (the regimes map to distinct
+volatility environments) but is limited: three of the four indicators are
+highly correlated, and the silhouette of 0.252 is modest. Part 2 investigates
+three questions:
 
-**Result**: 277 months, 25 series (standardized with `scale()`).
+1. **More data**: Do 25 indicators produce better clusters than 4?
+2. **Alternative methods**: Do K-Means and hierarchical clustering agree
+   with GMM?
+3. **Dimensionality**: Can PCA compress 25 indicators without losing cluster
+   quality?
 
-#### Step 12: Visualize All Series
+#### Step 11-12: Exploring the Extended Dataset
 
-A grid of 20 time series plots (standardized). The notebook's comment notes
-that VIX, ICSA, and DFF show the most visible regime structure (sharp spikes
+**Step 11 — Prepare full dataset**: All 25 FRED series with <50% missing data
+are selected. They span interest rates (DFF, DGS1-DGS30), yield curve spreads,
+VIX, initial claims (ICSA), Fed balance sheet (WALCL), CPI, core CPI, PCE,
+unemployment, payrolls, labor participation, industrial production, M2, GDP,
+and derived yield curve slopes.
+
+Result: 277 months, 25 series (standardized with `scale()`).
+
+**Step 12 — Visualize all series**: Before clustering, the notebook plots all
+25 standardized time series on a grid. This is an exploratory step — it lets
+you visually identify which indicators carry regime information and which are
+noise. VIX, ICSA, and DFF show the most visible regime structure (sharp spikes
 and level shifts), while slow-moving series (M2, housing) carry less regime
 information.
 
-#### Step 13: Hierarchical Clustering (Feature Correlation)
+With the data explored, the next step examines the internal correlation
+structure to understand how these 25 indicators relate to each other.
 
-A `seaborn.clustermap` groups the 25 indicators by correlation similarity.
+#### Step 13: Hierarchical Clustering of Features
+
+A `seaborn.clustermap` groups the 25 indicators by correlation similarity
+(Ward linkage). This answers: **which indicators carry redundant information,
+and which bring independent dimensions?**
+
 Four blocks emerge:
-- Labour / yield-curve block (CIVPART, UNRATE, T10Y2Y)
-- Stress block (VIX, ICSA)
-- Growth / price-level block (INDPRO, CPI, M2)
-- Short-rate block (DFF, DGS1-DGS3)
+- **Labour / yield-curve block** (CIVPART, UNRATE, T10Y2Y) — the business
+  cycle, confirming the high correlations seen in Step 10.
+- **Stress block** (VIX, ICSA) — market fear and layoffs, absent from the
+  core model.
+- **Growth / price-level block** (INDPRO, CPI, M2) — real economy and
+  inflation.
+- **Short-rate block** (DFF, DGS1-DGS3) — monetary policy at different
+  maturities.
+
+This confirms that the 25 indicators are *not* 25 independent signals — they
+cluster into ~4 thematic groups. It also reveals what the core model was
+missing: the stress dimension (VIX, initial claims) and the growth dimension
+(industrial production, M2) were not represented in the 4-indicator set.
 
 #### Step 14: GMM vs K-Means on Extended Data
 
-Both models fitted with K=4 on the 25-indicator dataset.
+Now the central test: do the richer data and alternative methods confirm
+the core model's regime structure?
 
-**Actual silhouette scores** (verified):
+Both GMM and K-Means are fitted with K=4 on the 25-indicator dataset.
+
+Actual silhouette scores (verified):
 
 | Model | Silhouette |
 |-------|-----------|
 | GMM | 0.417 |
 | K-Means | 0.448 |
 
-Both are substantially higher than the core 4-indicator GMM (0.252), indicating
-that the extended panel captures more cluster structure. K-Means edges out GMM
-slightly on silhouette, but GMM provides probability assignments that K-Means
-cannot.
+Both are substantially higher than the core 4-indicator GMM (0.252),
+confirming that the extended panel captures more cluster structure. K-Means
+edges out GMM slightly on silhouette, but silhouette is a distance-based
+metric that naturally favors K-Means's spherical clusters. GMM provides
+probability assignments that K-Means cannot — and these matter.
 
 The GMM probability heatmap shows soft transitions between regimes (gradual
 color changes), while the K-Means heatmap shows hard switches (binary on/off).
 The soft transitions are more realistic — economic conditions don't snap
 between states overnight.
 
-#### Step 15: Agglomerative Clustering (Observations)
+#### Step 15: Hierarchical Clustering of Observations
 
-Ward linkage dendrogram on the 277 monthly observations (not features).
+Step 13 clustered the *features* (columns) to see which indicators group
+together. This step clusters the *observations* (rows — the 277 months) using
+Ward linkage to see whether a completely different algorithm (agglomerative,
+bottom-up) agrees with GMM's top-down partitioning.
 
-**Cophenetic correlation**: 0.710 — above the 0.7 quality threshold, confirming
-that the hierarchical tree faithfully represents the pairwise distance structure.
+The dendrogram visualizes how months merge into clusters at increasing
+distance thresholds.
 
-#### Step 16: PCA Preprocessing
+**Cophenetic correlation**: 0.710 — above the 0.7 quality threshold,
+confirming that the hierarchical tree faithfully represents the pairwise
+distance structure. The fact that a third, structurally different clustering
+method also finds coherent groupings reinforces confidence in the regime
+structure.
+
+#### Step 16: Can PCA Reduce Dimensionality Without Losing Cluster Quality?
+
+With 25 indicators, the GMM must estimate a large number of covariance
+parameters. PCA can compress the data into fewer orthogonal dimensions,
+potentially reducing noise and speeding up fitting — but at the risk of
+discarding cluster-relevant signal.
 
 PCA on the 25-indicator dataset:
 
@@ -342,16 +422,20 @@ PCA on the 25-indicator dataset:
 | PC4 | 93.6% |
 | PC5 | 96.0% |
 
-4 components capture 93.6% of variance — the 25 indicators are largely
-driven by ~4 underlying economic factors.
+Just 4 components capture 93.6% of variance — consistent with the 4 thematic
+blocks found by hierarchical clustering in Step 13. The 25 indicators are
+largely driven by ~4 underlying economic factors.
 
-GMM fitted on the 10-component PCA reduction achieves silhouette 0.396 —
-lower than raw (0.417), suggesting that the lost variance (0.2%) contains
-some cluster-relevant signal.
+GMM fitted on the 10-component PCA reduction achieves silhouette **0.396** —
+lower than raw (0.417), suggesting that some of the discarded variance
+(~4%) contains cluster-relevant signal. PCA helps with interpretability
+(fewer dimensions to reason about) but does not improve separation.
 
-#### Step 17: Core vs Extended Comparison
+#### Step 17: Final Comparison — Core vs Extended
 
-**Actual silhouette comparison** (verified):
+The notebook concludes by comparing all three approaches side by side:
+
+Actual silhouette comparison (verified):
 
 | Model | Silhouette |
 |-------|-----------|
@@ -359,12 +443,16 @@ some cluster-relevant signal.
 | Extended (25 indicators) | 0.417 |
 | Extended + PCA (10 components) | 0.396 |
 
-The extended panel provides better separation, but the core model is more
-interpretable. The trade-off depends on the use case:
+The extended panel provides substantially better separation (+65% over core),
+but the core model is more interpretable. The trade-off depends on the use
+case:
 - **Narrative / communication**: Use the 4-indicator model — easy to explain
   ("unemployment is high, rates are low → Recovery").
 - **Quantitative risk model**: Use the 25-indicator model — better cluster
   quality justifies the complexity.
+- **Middle ground**: PCA on 25 indicators gives nearly as good separation
+  (0.396) with fewer dimensions, but the principal components lack intuitive
+  economic meaning.
 
 ---
 
