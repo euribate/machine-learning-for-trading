@@ -101,9 +101,30 @@ choice when the goal is interpretability and generalization, not maximum likelih
 
 **AIC (Akaike Information Criterion)**:
 `AIC = -2 * log_likelihood + 2 * k`
-AIC penalizes complexity less than BIC. It tends to favor more complex models. With
-enough data, AIC will always prefer more clusters because the likelihood keeps
-improving.
+**Lower is better**. AIC penalizes complexity less than BIC (the penalty term is
+`2k` vs `k * ln(n)`, and `ln(n) > 2` for any dataset with more than 7 observations).
+As a result, AIC tends to favor more complex models. In this notebook, AIC
+decreases monotonically from K=2 (25,837) to K=6 (25,148), so based on AIC alone
+you would choose K=6 — the most complex model in the grid.
+
+**Why report AIC if BIC is preferred?** AIC and BIC answer different questions.
+BIC approximates `-2 * ln(marginal likelihood)` — the negative log of the
+probability that the model generated the data (Bayesian model evidence). Because
+of the negative sign, lower BIC means higher marginal likelihood, i.e. the model
+is more probable. BIC is *consistent*: given enough data, it will select the true
+number of components if the data truly comes from a mixture. AIC instead minimizes
+the expected out-of-sample prediction error (Kullback-Leibler divergence) and is
+*efficient*: it selects the model that best predicts new observations, even if the
+"true" model is not in the candidate set. In practice:
+
+- Use **BIC** when the goal is to find the simplest adequate model (regime
+  identification, interpretability, narrative). This is the case in this notebook.
+- Use **AIC** when the goal is out-of-sample density estimation or forecasting, where
+  a slightly more complex model may capture structure that BIC would prune away.
+- Reporting both exposes the tension between parsimony and fit, which is itself
+  informative: when BIC and AIC agree, the choice is unambiguous; when they disagree
+  (as here), it signals that additional clusters improve fit but not enough to justify
+  their complexity under the stricter BIC criterion.
 
 **Silhouette Score**:
 Measures how similar each point is to its own cluster vs. the nearest other cluster.
@@ -288,9 +309,20 @@ A two-panel figure:
   2000 Dot-com, 2008 GFC, 2020 COVID)
 - **Bottom**: Cumulative equity return (log scale), colored by regime
 
-**What to look for**: Historical stress events should cluster in the Risk-Off
-regime. The visualization confirms this: the Great Depression, stagflation,
-GFC, and COVID all show Risk-Off activation.
+**How to read it**: In the top panel, the two swim-lane rows are "Risk-Off"
+(bottom) and "Risk-On" (top). A dark fill in a row means that regime is active
+at that month. Red vertical lines and labels mark major historical events
+(1929 Great Crash, 1937 Recession, 1973 Oil Crisis, 1987 Black Monday,
+2000 Dot-com, 2008 GFC, 2020 COVID). To check whether a crisis coincides with
+Risk-Off, look at whether the Risk-Off row (bottom) is dark (filled) where the
+red line falls.
+
+Note that the GMM assigns regimes based on factor returns, not event narratives.
+A crisis may start with the model still in Risk-On and only flip to Risk-Off
+once factor dislocations materialize (often with a one- or two-month lag). Short
+or localized shocks (e.g., Black Monday — a single-day crash) may not generate
+enough sustained factor stress to flip the monthly regime at all. The alignment
+between events and Risk-Off is a general pattern, not a one-to-one match.
 
 ### Step 12: Volatility Analysis
 
