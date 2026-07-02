@@ -236,16 +236,18 @@ gmm_grid = fit_gmm_grid(factors_scaled, [2, 3, 4, 5, 6])
 
 | K | BIC | AIC | Silhouette (GMM) | Silhouette (K-Means) |
 |---|-----|-----|------------------|---------------------|
-| 2 | 26,391 | 25,837 | 0.288 | — |
-| 3 | 26,366 | 25,532 | 0.126 | — |
-| 4 | 26,417 | 25,304 | 0.123 | — |
-| 5 | 26,634 | 25,241 | 0.110 | — |
-| 6 | 26,820 | 25,148 | 0.036 | — |
+| 2 | 26,391 | 25,837 | 0.288 | 0.234 |
+| 3 | 26,366 | 25,532 | 0.126 | 0.117 |
+| 4 | 26,417 | 25,304 | 0.123 | 0.125 |
+| 5 | 26,634 | 25,241 | 0.110 | 0.091 |
+| 6 | 26,820 | 25,148 | 0.036 | 0.078 |
 
 **Interpretation**:
 - BIC is minimized at K=2 (though K=3 is very close at 26,366)
-- Silhouette is maximized at K=2 (0.288)
+- Silhouette is maximized at K=2 (0.288 GMM, 0.234 K-Means)
 - AIC keeps decreasing through K=6 (as expected — AIC has weaker complexity penalty)
+- GMM silhouette >= K-Means silhouette at every K except K=4 (0.123 vs 0.125),
+  confirming that GMM's ellipsoidal clusters better fit the correlated factor data
 - **K=2 is the clear choice** based on BIC + silhouette agreement
 
 ### Step 8: Model Selection Visualization
