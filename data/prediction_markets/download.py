@@ -521,6 +521,21 @@ def main() -> None:
     atomic_write_parquet(metadata_df, metadata_path)
     summary["metadata_file"] = str(metadata_path)
 
+    # Kalshi (CFTC-regulated) and Polymarket restrict access by jurisdiction, so
+    # "list markets" can fail at the network layer from some regions even though
+    # the endpoints are up. This dataset is optional; note it rather than failing.
+    # Fire the note whenever nothing was retrieved from the providers actually
+    # attempted (success sets *_rows; a bare "kalshi"/"polymarket" key means that
+    # provider was tried and returned no data), covering the single-provider case.
+    retrieved_any = "kalshi_rows" in summary or "polymarket_rows" in summary
+    no_data_reported = summary.get("kalshi") == "no data" or summary.get("polymarket") == "no data"
+    if no_data_reported and not retrieved_any:
+        print(
+            "\nNote: no prediction-market data was retrieved. Kalshi and Polymarket "
+            "geo-restrict API access, so this can happen outside their supported "
+            "regions. It is optional and does not affect the core datasets."
+        )
+
     print_download_summary(summary)
 
 

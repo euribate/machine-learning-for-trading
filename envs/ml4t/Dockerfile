@@ -65,7 +65,7 @@ RUN /opt/ml4t/bin/pip freeze | grep -E '^(torch|torchaudio|torchvision)==' > /tm
 # Install ml4t libraries from PyPI
 # --pre allows pre-release versions
 RUN /opt/ml4t/bin/pip install --no-cache-dir --pre \
-    "ml4t-data>=0.1.0b11" \
+    "ml4t-data>=0.1.0b15" \
     "ml4t-diagnostic>=0.1.0b19" \
     "ml4t-engineer>=0.1.0b8" \
     "ml4t-live>=0.1.0b3" \

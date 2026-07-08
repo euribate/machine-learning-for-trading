@@ -40,7 +40,7 @@ RUN pip install --no-cache-dir \
     "catboost>=1.2" \
     "psutil>=5.9" \
     "jupyterlab>=4.1" \
-    "ml4t-data>=0.1.0b9" \
+    "ml4t-data>=0.1.0b15" \
     "ml4t-diagnostic>=0.1.0b7" \
     "ml4t-engineer>=0.1.0b2" \
     "pytest>=8.0" \

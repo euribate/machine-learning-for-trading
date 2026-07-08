@@ -149,7 +149,20 @@ jobs:
 
           # --- Chapter matrix (all chapters including Ch01 and Ch05) ---
           chapters="[]"
-          add_ch() { chapters=$(echo "$chapters" | jq -c --arg n "$1" --arg f "$2" '. + [{"name":$n,"filter":$f}]'); }
+          # Public-subset scoping: include a chapter only if at least one of its
+          # NN_* directories is actually present. The public repo ships chapters
+          # incrementally (beat by beat), so this auto-scopes the matrix to what
+          # is shipped — no per-beat workflow edits, and unshipped chapters can't
+          # fail with "no tests collected".
+          add_ch() {
+            local n="$1" f="$2" p
+            for p in $(echo "$f" | grep -oE '[0-9]{2}_' || true); do
+              if compgen -G "${p}*" >/dev/null 2>&1; then
+                chapters=$(echo "$chapters" | jq -c --arg n "$n" --arg f "$f" '. + [{"name":$n,"filter":$f}]')
+                return
+              fi
+            done
+          }
 
           if [[ "$all" == "true" ]] || [[ "${{ steps.filter.outputs.ch01 }}" == "true" ]]; then
             add_ch "ch01" "01_process"
@@ -231,7 +244,19 @@ jobs:
 
           # --- Case study matrix ---
           cases="[]"
-          add_cs() { cases=$(echo "$cases" | jq -c --arg cs "$1" '. + [{"case-study":$cs}]'); }
+          # Public repo ships case-study CONFIG but gates the pipeline code.
+          # test_case_studies.py auto-discovers stages by globbing
+          # case_studies/<cs>/[0-9][0-9]*.py, and the results registry is seeded
+          # from the test-data repo at run time (NOT shipped to this repo). So
+          # gate on the same signal the test collects: enroll a case study only
+          # once its pipeline notebooks are shipped here — currently only
+          # config/setup.yaml ships, so case-study jobs stay skipped. Future
+          # beats that ship the notebooks auto-enroll, no workflow edits.
+          add_cs() {
+            if compgen -G "case_studies/$1/[0-9][0-9]*.py" >/dev/null 2>&1; then
+              cases=$(echo "$cases" | jq -c --arg cs "$1" '. + [{"case-study":$cs}]')
+            fi
+          }
 
           if [[ "$all" == "true" ]] || [[ "${{ steps.filter.outputs.cs-etfs }}" == "true" ]]; then
             add_cs "etfs"
@@ -283,6 +308,55 @@ jobs:
         run: uvx ruff@0.15.8 check utils/ data/ tests/
       - name: Ruff format
         run: uvx ruff@0.15.8 format --check utils/ data/ tests/
+
+  # ---------------------------------------------------------------------------
+  # Fast native unit tests — download-script logic (no Docker, no network,
+  # no test-data, no secrets). Seconds per PR.
+  #
+  # Notebook tests run against pre-seeded data, so the data/**/download.py code
+  # path is invisible to them — this is how the in-container free-data download
+  # bug (#361) reached readers. These tests exercise that logic directly:
+  # path resolution / output placement, download_all dispatch modes, the
+  # firm-characteristics archive flatten, download-script registry drift, the
+  # compose /data-mount contract (static regression-lock for #361), and the
+  # drift-coverage ratchet (every free dataset keeps a live external smoke).
+  # The networked container smoke (Phase 2b) and live drift pulls (Phase 3) run
+  # in container-smoke.yml / weekly-external.yml, not here.
+  # ---------------------------------------------------------------------------
+  test-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      - name: Install minimal test deps
+        # Just the import surface of the download-logic tests (utils/downloading
+        # + data/download_all + firm-char extract_zip). Intentionally NOT the
+        # full project env (no torch/ml4t-*) so this stays a fast per-commit gate.
+        run: |
+          uv venv --python 3.14
+          uv pip install pytest polars pyyaml python-dotenv plotly
+      - name: Run download-logic unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          # Override the workflow-level test-data path: this job checks out no
+          # test-data. utils.config validates ML4T_DATA_PATH exists at import and
+          # reads the env var ahead of .env, so point both at the repo's own dirs.
+          ML4T_PATH: ${{ github.workspace }}
+          ML4T_DATA_PATH: ${{ github.workspace }}/data
+        run: |
+          # utils.config also requires a .env file to exist; create a minimal one.
+          printf 'ML4T_PATH=%s\nML4T_DATA_PATH=%s/data\n' \
+            "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" > .env
+          .venv/bin/python -m pytest \
+            tests/test_download_helpers.py \
+            tests/test_firm_characteristics_extract.py \
+            tests/test_download_all_dispatch.py \
+            tests/test_download_scripts_registry.py \
+            tests/test_compose_mounts.py \
+            tests/test_download_coverage.py \
+            -v --tb=short
 
   # ---------------------------------------------------------------------------
   # Chapter notebook tests — inside Docker (ml4t/ml4t:latest)
