@@ -526,11 +526,19 @@ def outlier_flags(
             results["impossible_return_examples"] = examples.to_dicts()
 
     # Spike detection: single-bar reversals
-    # A spike is when price moves sharply then reverts (e.g., OHLC where H > 2*C or L < C/2)
-    if all(c in df.columns for c in ["open", "high", "low", "close"]):
+    # A spike is when price moves sharply then reverts (e.g., OHLC where H > 2*C or L < C/2).
+    # Resolve the high/low/close names so roll-adjusted panels (adj_*) are covered too;
+    # the spike ratio is adjust-invariant (all OHLC in a bar share one adjustment factor).
+    def _resolve(*names: str) -> str | None:
+        return next((n for n in names if n in df.columns), None)
+
+    hi_col = _resolve("high", "adj_high")
+    lo_col = _resolve("low", "adj_low")
+    cl_col = _resolve("close", "adj_close")
+    if hi_col and lo_col and cl_col:
         # Detect bars where high is >50% above close
-        high_spike = df["high"] > df["close"] * 1.5
-        low_spike = df["low"] < df["close"] * 0.5
+        high_spike = df[hi_col] > df[cl_col] * 1.5
+        low_spike = df[lo_col] < df[cl_col] * 0.5
         n_spikes = (high_spike | low_spike).sum()
         results["flags"]["price_spikes"] = n_spikes
 
@@ -714,7 +722,9 @@ DATASET_REGISTRY = {
         "time_col": "session_date",
         "symbol_col": "product",
         "freq": "daily",
-        "price_cols": ["open", "high", "low", "close"],
+        # Diagnostics run on the adjusted series (the canonical downstream series);
+        # per-row OHLC share one cum_ratio, so integrity checks are adjust-invariant.
+        "price_cols": ["adj_open", "adj_high", "adj_low", "adj_close"],
         "volume_col": "volume",
         "description": "CME futures (front month)",
     },
@@ -861,6 +871,25 @@ if us_equities is not None:
     idx_check = check_index_integrity(us_equities, config["time_col"], config["symbol_col"])
     print(f"Index Integrity: {'PASSED' if idx_check['passed'] else 'FAILED'}")
 
+    # Duplicates and coverage (same battery as the other panels; this is the
+    # largest dataset and the one that most needs the full check).
+    dupe_check = check_duplicates(
+        us_equities,
+        key_cols=[config["time_col"], config["symbol_col"]],
+        value_cols=config["price_cols"],
+    )
+    cov_report = coverage_report(
+        us_equities,
+        config["time_col"],
+        config["symbol_col"],
+        config["price_cols"] + [config["volume_col"]],
+    )
+    print(
+        f"Duplicates:      {'PASSED' if dupe_check['passed'] else 'FAILED'} "
+        f"(exact: {dupe_check['exact_duplicates']}, key: {dupe_check['key_duplicates']})"
+    )
+    print(f"Coverage: {cov_report['overall_coverage_pct']}%")
+
     # Penny stocks and extreme returns
     penny = us_equities.filter(pl.col("close") < 1)
     us_equities_ret = us_equities.sort(["symbol", "timestamp"]).with_columns(
@@ -887,6 +916,8 @@ if us_equities is not None:
 
     diagnostic_results["us_equities"] = {
         "index": idx_check,
+        "duplicates": dupe_check,
+        "coverage": cov_report,
         "outliers": outliers,
         "penny_stocks": len(penny),
         "extreme_returns": len(extreme_ret),
@@ -1013,7 +1044,7 @@ if cme_futures is not None:
         cme_futures.group_by("product")
         .agg(
             pl.len().alias("n_rows"),
-            pl.col("close").is_null().sum().alias("n_null_close"),
+            pl.col("adj_close").is_null().sum().alias("n_null_close"),
         )
         .sort("product")
     )
@@ -1039,8 +1070,22 @@ if fx_pairs is not None:
     print(f"Loaded {len(fx_pairs):,} rows, {fx_pairs['symbol'].n_unique()} pairs")
 
     idx_check = check_index_integrity(fx_pairs, config["time_col"], config["symbol_col"])
-    fx_pairs_with_weekday = fx_pairs.with_columns(weekday=pl.col("timestamp").dt.weekday())
-    weekend_data = fx_pairs_with_weekday.filter(pl.col("weekday").is_in([5, 6]))
+    # Polars dt.weekday() is ISO: Monday=1 ... Saturday=6, Sunday=7. The FX week
+    # reopens Sunday 17:00 EST, which lands at 21:00-22:00 UTC across daylight
+    # saving, so Sunday bars at or after 21:00 UTC are the legitimate weekly
+    # reopen. Saturday bars and Sunday-daytime bars are the true anomalies.
+    FX_REOPEN_HOUR_UTC = 21
+    fx_pairs_with_weekday = fx_pairs.with_columns(
+        weekday=pl.col("timestamp").dt.weekday(),
+        hour=pl.col("timestamp").dt.hour(),
+    )
+    weekend_data = fx_pairs_with_weekday.filter(pl.col("weekday").is_in([6, 7]))
+    reopen_bars = weekend_data.filter(
+        (pl.col("weekday") == 7) & (pl.col("hour") >= FX_REOPEN_HOUR_UTC)
+    )
+    anomalous_weekend = weekend_data.filter(
+        (pl.col("weekday") == 6) | (pl.col("hour") < FX_REOPEN_HOUR_UTC)
+    )
     cov_report = coverage_report(
         fx_pairs,
         config["time_col"],
@@ -1049,18 +1094,26 @@ if fx_pairs is not None:
     )
 
     print(f"Index Integrity: {'PASSED' if idx_check['passed'] else 'FAILED'}")
-    print(f"Weekend data points: {len(weekend_data)} (expected: 0 or near 0)")
+    print(
+        f"Weekend bars: {len(weekend_data)} "
+        f"({len(reopen_bars)} Sunday reopen, expected; "
+        f"{len(anomalous_weekend)} anomalous)"
+    )
     print(f"Coverage: {cov_report['overall_coverage_pct']}%")
 
     diagnostic_results["fx_pairs"] = {
         "index": idx_check,
         "coverage": cov_report,
         "weekend_data": len(weekend_data),
+        "reopen_bars": len(reopen_bars),
+        "anomalous_weekend": len(anomalous_weekend),
     }
 
 # %% [markdown]
-# FX data should have no weekend observations. Any weekend data points indicate
-# timezone misalignment or thin holiday-session prints that should be filtered.
+# FX trades continuously from the Sunday 17:00 EST reopen to the Friday close, so
+# Sunday bars at or after 21:00 UTC are expected market data. Saturday bars and
+# Sunday-daytime bars fall outside the trading week and are the genuine anomalies
+# to filter.
 
 # %% [markdown]
 # ### 3.7 Firm Characteristics
@@ -1239,7 +1292,9 @@ if "etfs" in diagnostic_results:
 # **Require active preprocessing** (see `02_preprocessing_pipeline`):
 # 1. **US Equities** — penny-stock filter (1.4% of rows below $1), extreme-return
 #    handling (837 rows above 100% daily moves), and 2,739 price-spike bars.
-# 2. **FX Pairs** — 57,178 weekend timestamps need to be filtered before the
+# 2. **FX Pairs** — of 11,344 weekend timestamps, 11,339 are legitimate Sunday
+#    reopen bars (at or after 21:00 UTC) that belong in the panel; only 5
+#    Saturday or Sunday-daytime bars are anomalies to filter before the
 #    spot-vs-forward analytics in §7.2.
 #
 # The next notebook applies these cleaning steps and demonstrates split-aware

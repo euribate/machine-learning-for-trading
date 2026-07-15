@@ -46,10 +46,12 @@
 # %%
 """Crypto Perps EDA — hourly OHLCV and premium index exploration."""
 
+import plotly.graph_objects as go
 import polars as pl
 
 from data import load_crypto_perps, load_crypto_premium
 from utils.data_quality import check_ohlc_invariants, per_asset_stats
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 MAX_SYMBOLS = 0  # 0 = all symbols
@@ -110,6 +112,41 @@ print("\nSymbol Statistics (top 5 by volume):")
 symbol_stats.sort("avg_volume", descending=True).head(5)
 
 # %% [markdown]
+# ### Contracts list at different dates
+#
+# The universe is not fixed: BTC and a handful of majors are present from 2020,
+# and newer contracts (SUI lists in 2023) switch on later. Counting distinct
+# symbols per month makes the staggered onboarding explicit — coverage that any
+# cross-sectional signal has to account for.
+
+# %%
+active_by_month = (
+    ohlcv.with_columns(pl.col("timestamp").dt.truncate("1mo").alias("month"))
+    .group_by("month")
+    .agg(pl.col("symbol").n_unique().alias("contracts"))
+    .sort("month")
+)
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=active_by_month["month"].to_list(),
+        y=active_by_month["contracts"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["blue"], width=2, shape="hv"),
+        name="Contracts with data",
+    )
+)
+fig.update_layout(
+    title="Perpetual contracts with data, by month (staggered listings)",
+    xaxis_title="Month",
+    yaxis_title="Contracts",
+    yaxis_range=[0, 20],
+    height=420,
+)
+fig.show()
+
+# %% [markdown]
 # ## 3. Premium Index Data
 #
 # The premium index measures the spread between perpetual futures and spot prices:
@@ -146,6 +183,47 @@ print(f"  Mean: {premium_range['mean'][0]:.6f} ({premium_range['mean'][0] * 100:
 print(f"  Std:  {premium_range['std'][0]:.6f} ({premium_range['std'][0] * 100:.4f}%)")
 print(f"  Min:  {premium_range['min'][0]:.6f} ({premium_range['min'][0] * 100:.4f}%)")
 print(f"  Max:  {premium_range['max'][0]:.6f} ({premium_range['max'][0] * 100:.4f}%)")
+
+# %% [markdown]
+# ### The basis is small — until it isn't
+#
+# The premium sits within a fraction of a percent almost all the time, but the
+# distribution has a fat negative tail: the minimum reaches roughly −19% during
+# a dislocation. That asymmetry is the whole reason the funding strategy exists,
+# so it is worth *seeing*, not just tabulating. (Axis clipped to ±2% so the
+# central mass is legible; the tail runs far past the left edge.)
+
+# %%
+premium_pct = (premium["premium_index_close"] * 100).to_list()
+
+fig = go.Figure()
+fig.add_trace(
+    go.Histogram(
+        x=premium_pct,
+        xbins=dict(start=-2, end=2, size=0.05),
+        marker_color=COLORS["slate"],
+        name="Premium (%)",
+    )
+)
+fig.add_vline(x=0, line_color=COLORS["amber"], line_width=1)
+fig.add_annotation(
+    x=-2,
+    y=1,
+    xref="x",
+    yref="paper",
+    text=f"tail reaches {min(premium_pct):.1f}%",
+    showarrow=False,
+    xanchor="left",
+    yanchor="top",
+    font=dict(color=COLORS["copper"]),
+)
+fig.update_layout(
+    title="Premium-index distribution (8-hourly, % — axis clipped to ±2%)",
+    xaxis_title="Premium (%)",
+    yaxis_title="8-hour observations",
+    height=420,
+)
+fig.show()
 
 # %% [markdown]
 # ## 4. Data Quality

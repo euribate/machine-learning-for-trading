@@ -55,7 +55,7 @@
 # ---
 
 # %% [markdown]
-# ## Setup
+# ## 1. Setup
 
 # %%
 """Microstructure Stylized Facts — bid-ask bounce, order flow dynamics, and the liquidity spectrum."""
@@ -103,7 +103,7 @@ if not MESSAGE_DIR.exists():
     print("   Run 01_itch_parser first.")
 
 # %% [markdown]
-# ## Load Trade Data
+# ## 2. Load Trade Data
 #
 # Load outputs from `05_itch_trading_activity`:
 # - `trade_summary.parquet`: Aggregated stats by ticker (for symbol selection)
@@ -215,12 +215,14 @@ def intraday_resample(trades_df: pl.DataFrame, ticker: str, freq: str = "5m") ->
 
 
 # %% [markdown]
-# ## 6. Order Arrivals & Cancellations
+# ## 3. Order Arrivals and Order Sizes
 #
-# We analyze the **Add** and **Cancel** message types to understand:
-# - How many orders are submitted vs. canceled
-# - Typical order sizes
-# - The cancellation rate (key microstructure metric)
+# We use the **Add** messages (`A`/`F`) to characterize order arrivals over the
+# session and the distribution of submitted order sizes, and we report the volume
+# removed by **partial-cancel** (`X`) messages as a share of submitted volume.
+# That share is deliberately small: full order removal happens through **Delete**
+# (`D`) messages, which drive the ~96% first-event termination rate quantified in
+# `04_itch_order_lifecycle_analysis`. This notebook does not re-derive that rate.
 
 
 # %%
@@ -344,8 +346,9 @@ def analyze_order_flow_for_ticker(base_dir: Path, ticker: str) -> tuple[dict, pl
         total_canceled = 0
 
     total_shares = add_df.select(pl.col("shares").sum()).item() if "shares" in add_df.columns else 0
-    # PROXY for cancellation rate: canceled_shares / submitted_shares
-    # Can exceed 1.0 due to replaces (U) or multiple partial cancels on same shares
+    # Partial-cancel (X) shares as a fraction of submitted shares. This is NOT the
+    # total cancellation rate: full order removal uses D/Delete messages, handled
+    # in 04_itch_order_lifecycle_analysis. Reported here only to size the X flow.
     cancel_rate_proxy = total_canceled / total_shares if total_shares > 0 else 0
 
     results["total_orders"] = len(add_df)
@@ -385,21 +388,17 @@ def print_order_flow_summary(results: dict, add_df: pl.DataFrame) -> None:
     print(f"Total Orders:       {results['total_orders']:>12,}")
     print(f"Shares Submitted:   {results['total_shares_submitted']:>12,.0f}")
     if results.get("cancel_data_available", True):
-        print(f"Shares Canceled:    {results['total_shares_canceled']:>12,.0f}")
-        print(f"Cancel Rate (proxy):{results['cancel_rate_proxy']:>12.1%}")
-        if results["cancel_rate_proxy"] > 1.0:
-            print("  (>100% can occur due to replaces or multiple partial cancels)")
+        print(f"Partial-cancel (X) shares:{results['total_shares_canceled']:>12,.0f}")
+        print(f"  as % of submitted:      {results['cancel_rate_proxy']:>10.1%}")
+        print("  (X = partial cancels only; full order removal uses D/Delete;")
+        print("   see 04_itch_order_lifecycle_analysis for the ~96% termination rate)")
     else:
-        # The cancel proxy needs the enriched X file produced by notebook 01.
-        # When it is missing, raw X parquet lacks a 'stock' column so the
-        # filtered cancel_df is empty and total_canceled trivially equals 0.
-        # Print this loudly so the reader does not mistake the zero for a
-        # microstructure finding.
-        print(f"Shares Canceled:    {'N/A':>12}")
-        print(f"Cancel Rate (proxy):{'N/A':>12}")
-        print(
-            "  (enriched/X.parquet not found — re-run notebook 01 to enable the cancel-rate proxy)"
-        )
+        # The partial-cancel figure needs the enriched X file produced by
+        # notebook 01. When it is missing, raw X parquet lacks a 'stock' column
+        # so the filtered cancel_df is empty and the total trivially equals 0.
+        # Print this loudly so the reader does not mistake the zero for a finding.
+        print(f"Partial-cancel (X) shares:{'N/A':>12}")
+        print("  (enriched/X.parquet not found; re-run notebook 01 to enable this figure)")
 
     if "avg_order_size" in results:
         print("\nOrder Size Statistics:")
@@ -469,10 +468,7 @@ if MESSAGE_DIR.exists() and data_available:
     plot_order_flow(flow_add_df, mid_sym)
 
 # %% [markdown]
-#
-
-# %% [markdown]
-# ### 7.2 The Bid-Ask Bounce
+# ## 4. The Bid-Ask Bounce
 #
 # A fundamental microstructure phenomenon: trade prices bounce between bid and ask,
 # creating **negative autocorrelation** in tick-level returns. This is why:
@@ -578,7 +574,7 @@ if data_available and all_trades is not None:
 
 
 # %% [markdown]
-# ### 7.3 The Liquidity Spectrum: From Blue Chips to Small Caps
+# ## 5. The Liquidity Spectrum: From Blue Chips to Small Caps
 #
 # One of the most important microstructure insights: **liquidity varies enormously**
 # across stocks. A 1000-share order has near-zero impact on AAPL but can move
@@ -750,22 +746,22 @@ if data_available and all_trades is not None and len(liquidity_comparison) >= 2:
     print("  → Execution-cost magnitudes motivate the price impact analysis in Chapter 19.")
 
 # %% [markdown]
-#
-# ## 8. Key Takeaways
+# ## 6. Key Takeaways
 #
 # ### Market Microstructure Insights
 #
 # 1. **Volume Concentration**: A small number of tickers account for most trading activity.
 #    The top 50 stocks account for ~46% of total dollar volume (see `05_itch_trading_activity`).
 #
-# 2. **Intraday U-Shape**: Volume and trading activity follow a characteristic pattern—high
-#    at open/close, low at midday. This affects optimal execution timing.
+# 2. **Intraday U-Shape**: Volume and trading activity follow a characteristic
+#    pattern: high at the open and close, low at midday. This affects optimal
+#    execution timing.
 #
 # 3. **Bid-Ask Bounce**: Trade prices bounce between bid and ask, creating negative
 #    autocorrelation at tick level. Use mid-price returns for ML features.
 #
 # 4. **Liquidity Spectrum**: Turnover spans orders of magnitude across the tiers in
-#    this sample — dollar value runs into the thousands-fold range from the most to
+#    this sample; dollar value runs into the thousands-fold range from the most to
 #    least active name (see the comparison above). Intraday return volatility, by
 #    contrast, does not track liquidity monotonically: the most active name is more
 #    volatile than the mid-tier, and only the micro-cap extreme stands out. Volatility
@@ -773,8 +769,10 @@ if data_available and all_trades is not None and len(liquidity_comparison) >= 2:
 #    across liquidity tiers are not estimated here; price-impact modelling is the
 #    subject of Chapter 19.
 #
-# 5. **Cancellation Rates**: High cancellation rates (>90%) are normal for modern markets,
-#    reflecting continuous quote adjustment by market makers.
+# 5. **Order removal**: Partial-cancel (`X`) messages account for only a small
+#    share of submitted volume (0.3% for the most active name in this sample).
+#    Full order removal happens through Delete (`D`) messages, which drive the
+#    ~96% first-event termination rate quantified in `04_itch_order_lifecycle_analysis`.
 #
 # ### Bridge to Later Chapters
 #
@@ -783,7 +781,6 @@ if data_available and all_trades is not None and len(liquidity_comparison) >= 2:
 # | **Intraday U-shape** | Time-of-day features | Execution timing |
 # | **Bid-ask bounce** | Mid-price return targets | Transaction cost models |
 # | **Liquidity spectrum** | Liquidity features | Price impact estimation |
-# | **Order flow imbalance** | OFI features | - |
 #
 # ### Next Steps
 #

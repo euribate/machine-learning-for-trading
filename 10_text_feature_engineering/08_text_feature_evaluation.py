@@ -14,7 +14,7 @@
 #     name: python3
 # ---
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # # Text Feature Signal Evaluation
 #
 # **Chapter 10: Text Feature Engineering**
@@ -58,7 +58,7 @@
 # | sentiment_momentum | Change in sentiment vs baseline | Positive (improving sentiment) |
 # | coverage_count | Article frequency | Ambiguous (attention effect) |
 
-# %%
+# %% tags=[]
 """Text Feature Signal Evaluation - Evaluate NLP-derived alpha signals."""
 
 import json
@@ -80,7 +80,7 @@ from utils.reproducibility import set_global_seeds
 SEED = 42
 MIN_ASSETS_PER_DAY = 5
 
-# %%
+# %% tags=[]
 # Reproducibility — set_global_seeds covers Python random / NumPy / Torch.
 set_global_seeds(SEED)
 
@@ -90,7 +90,7 @@ class EvalConfig:
     """Configuration for text signal evaluation."""
 
     horizons: tuple[int, ...] = (1, 5, 20)
-    min_assets_per_day: int = 20
+    min_assets_per_day: int = 5
     quantiles: int = 5
 
 
@@ -99,7 +99,7 @@ TEXT_INPUT_DIR = get_output_dir(8, "fnspid")
 OUTPUT_DIR = get_output_dir(8, "text_evaluation")
 CONFIG = EvalConfig(min_assets_per_day=MIN_ASSETS_PER_DAY)
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 1. Load Text Features from Notebook 07
 #
 # Notebook 07 produces a complete dataset with:
@@ -109,7 +109,7 @@ CONFIG = EvalConfig(min_assets_per_day=MIN_ASSETS_PER_DAY)
 #
 # We do NOT recompute labels here—we use the dataset contract from notebook 07.
 
-# %%
+# %% tags=[]
 # Load text-derived features
 text_features_path = TEXT_INPUT_DIR / "news_features.parquet"
 
@@ -131,7 +131,7 @@ print(f"Loaded {len(text_features):,} observations")
 print(f"Columns: {text_features.columns}")
 
 
-# %%
+# %% tags=[]
 # Normalize schema from notebook 07
 
 
@@ -180,7 +180,7 @@ print(f"Date range: {text_features['timestamp'].min()} to {text_features['timest
 print(f"Unique assets: {text_features['symbol'].n_unique()}")
 text_features.head(10)
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 2. Define Signal Evaluation Functions
 #
 # We compute:
@@ -190,7 +190,7 @@ text_features.head(10)
 # - **Quintile returns**: Average return by signal quintile
 # - **Long-short spread**: Q5 - Q1 return
 
-# %%
+# %% tags=[]
 # Signal evaluation utilities
 
 TEXT_SIGNALS = [
@@ -210,24 +210,24 @@ print(f"Signals to evaluate: {AVAILABLE_SIGNALS}")
 
 RET_COL_BY_HORIZON = {1: "fwd_ret_1d", 5: "fwd_ret_5d", 20: "fwd_ret_20d"}
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### Date Grouping Utility
 # Helper to iterate over per-date cross-sections for IC computation.
 
 
-# %%
+# %% tags=[]
 def iter_date_groups(df: pl.DataFrame) -> Iterator[pl.DataFrame]:
     """Yield per-date groups for cross-sectional calculations."""
     for _, g in df.partition_by("timestamp", as_dict=True).items():
         yield g
 
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### Daily Information Coefficient
 # Compute daily cross-sectional Spearman IC for signal vs forward return.
 
 
-# %%
+# %% tags=[]
 def daily_ic(
     df: pl.DataFrame,
     signal_col: str,
@@ -246,12 +246,12 @@ def daily_ic(
     return pl.DataFrame(records).sort("timestamp")
 
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### IC Summary Statistics
 # Compute mean, std, ICIR, and t-stat from a daily IC series.
 
 
-# %%
+# %% tags=[]
 def summarize_ic(ic_df: pl.DataFrame) -> dict[str, float]:
     """Summarize IC series with mean, std, ICIR, and t-stat."""
     if len(ic_df) == 0:
@@ -264,12 +264,12 @@ def summarize_ic(ic_df: pl.DataFrame) -> dict[str, float]:
     return {"ic_mean": ic_mean, "ic_std": ic_std, "icir": icir, "t_stat": t_stat, "n": len(values)}
 
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### Quintile Long-Short Returns
 # Compute daily long-short returns (top minus bottom quantile) for a signal.
 
 
-# %%
+# %% tags=[]
 def quintile_long_short(
     df: pl.DataFrame,
     signal_col: str,
@@ -318,10 +318,10 @@ def quintile_long_short(
     )
 
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 3. Evaluate Signals Against Forward Returns
 
-# %%
+# %% tags=[]
 # Run evaluation for all signals and horizons
 summary_rows: list[dict[str, object]] = []
 daily_ic_rows: list[pl.DataFrame] = []
@@ -357,10 +357,10 @@ print("TEXT SIGNAL EVALUATION SUMMARY")
 print("=" * 80)
 print(summary_df)
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 4. Visualization: IC and Long-Short Analysis
 
-# %%
+# %% tags=[]
 # IC time series for the key signal (weighted_surprise, 1-day horizon)
 key_signal = "weighted_surprise"
 key_horizon = 1
@@ -407,7 +407,7 @@ if key_signal in AVAILABLE_SIGNALS:
         plt.tight_layout()
         plt.show()
 
-# %%
+# %% tags=[]
 # Quintile returns for key signal
 if key_signal in AVAILABLE_SIGNALS:
     # Compute quintile returns
@@ -449,7 +449,7 @@ if key_signal in AVAILABLE_SIGNALS:
     print(f"\nQuintile Returns ({key_signal}, {key_horizon}d forward return):")
     print(quintile_returns)
 
-# %%
+# %% tags=[]
 # Plot quintile returns
 if key_signal in AVAILABLE_SIGNALS:
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -479,10 +479,10 @@ if key_signal in AVAILABLE_SIGNALS:
     plt.tight_layout()
     plt.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 5. Save Results
 
-# %%
+# %% tags=[]
 # Create output directory
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -505,7 +505,7 @@ if daily_ls_rows:
     daily_ls_df.write_parquet(daily_ls_path)
     print(f"Saved daily long-short to: {daily_ls_path}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## Key Takeaways
 #
 # ### Measured signal performance on this evaluation set
@@ -517,7 +517,7 @@ if daily_ls_rows:
 #    support a ranking claim — none of the four signals is statistically
 #    distinguishable from zero on this sample.
 # 2. The weighted_surprise quintile sort on 1-day forward returns is
-#    non-monotonic and Q5 < Q1 (Q1 0.000998, Q2 0.000417, Q3 0.000604,
+#    non-monotonic and Q5 < Q1 (Q1 0.001008, Q2 0.000409, Q3 0.000604,
 #    Q4 0.000786, Q5 0.000221). The predicted bullish quintile (Q5) earns
 #    less than the predicted bearish quintile (Q1) — the bullish/bearish
 #    framing in NB07 is **not** confirmed.
@@ -540,7 +540,7 @@ if daily_ls_rows:
 # - Chapter 12: Train ML models on combined feature set (text + price features)
 # - Chapter 17: Backtest text-enhanced strategies
 
-# %%
+# %% tags=[]
 # Save run metadata for reproducibility
 run_metadata = {
     "horizons": list(CONFIG.horizons),

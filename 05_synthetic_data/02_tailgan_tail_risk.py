@@ -49,8 +49,9 @@
 #
 # ## Prerequisites
 #
-# Requires ETF data. The generator clamps outputs to [-1, 1], so returns
-# are scaled using 99th-percentile normalization with headroom for tails.
+# Requires ETF data. The generator clamps outputs to [-1, 1], so returns are
+# scaled by their maximum magnitude (mapped to 0.95) to keep the full tail
+# inside the clamp without saturation.
 
 # %%
 """Tail-GAN: Tail-risk preserving scenario generation (Cont et al., 2022)."""
@@ -82,7 +83,7 @@ N_COLS = 100  # Time steps per scenario
 N_STRATEGIES = 32  # Number of portfolio strategies
 N_SCENARIO_MULTIPLIER = 10  # Multiplier for number of scenarios (batch_size * this)
 RETRAIN = False  # Set True to force retraining even if checkpoint exists
-SEED = 1  # Seed pinned to preserve §5.4 prose numbers (VaR 13.1% / ES 11.3%)
+SEED = 1  # Seed pinned to preserve §5.4 prose numbers (VaR 22.5% / ES 21.0%)
 
 # %%
 set_global_seeds(SEED)
@@ -185,11 +186,15 @@ def load_etf_returns() -> tuple[np.ndarray, float]:
     n_assets = CONFIG["n_rows"]
     data = pivot.select(pivot.columns[:n_assets]).to_numpy()
 
-    # Scale returns to fit generator's [-1, 1] output range
-    # Use 99th percentile of absolute returns as scale factor
-    # This keeps ~99% of returns in [-0.5, 0.5], with headroom for tails
-    abs_returns = np.abs(data)
-    scale_factor = np.percentile(abs_returns, 99) * 2  # *2 to target [-0.5, 0.5]
+    # Scale returns into the generator's [-1, 1] output range WITHOUT saturation.
+    # The generator clamps its output to [-1, 1], so any scaled input beyond that
+    # range can never be reproduced -- fatal for a *tail* model whose whole purpose
+    # is to match the extremes. Map the largest-magnitude return to 0.95 (small
+    # margin), which keeps the full empirical support -- including the tail -- inside
+    # the clamp. The bulk of returns then sits well within [-1, 1] (the 99th
+    # percentile of |return| lands around 0.23 here), leaving the outer range for the
+    # tail the model is built to learn.
+    scale_factor = np.abs(data).max() / 0.95
     scaled_data = data / scale_factor
 
     print(f"Loaded returns: {data.shape} (days x assets)")
@@ -791,6 +796,13 @@ def generate_synthetic(
     return synthetic.cpu().numpy()
 
 
+# Re-seed immediately before sampling so the synthetic scenarios (and the VaR/ES
+# numbers below) are identical whether the model was just trained or loaded from a
+# checkpoint. Training consumes the global RNG, so without this the evaluation would
+# depend on which path ran -- a reader training from scratch and one reloading a
+# saved model would otherwise see different tail-risk errors.
+set_global_seeds(SEED)
+
 n_synthetic = len(scenarios)
 synthetic_scenarios = generate_synthetic(
     generator, n_synthetic, CONFIG["latent_dim"], CONFIG["noise_name"]
@@ -904,11 +916,15 @@ print(f"  Synthetic mean: {synth_es_mean:.6f}")
 print(f"  Relative error: {es_re:.1f}%")
 
 # %% [markdown]
-# **Interpretation**: VaR relative error of ~13% and ES error of ~11% show the
-# generator captures the tail structure reasonably, though not perfectly.
-# ES error is typically comparable to VaR error because Expected Shortfall
-# depends on the conditional mean below VaR. Points near the 45-degree line
-# in the scatter plots below confirm per-strategy accuracy, not just average accuracy.
+# **Interpretation**: VaR relative error of ~22% and ES error of ~21% show the
+# generator captures the broad tail structure but over-states it by roughly a
+# fifth - reasonable for a compact pedagogical model, not production-grade.
+# Because returns are now scaled by their maximum magnitude (§ data loading), the
+# full empirical tail sits inside the generator's [-1, 1] range, so this residual
+# error is a genuine distributional mismatch rather than the clamp truncating the
+# tail. ES error tracks VaR error because Expected Shortfall depends on the
+# conditional mean below VaR. Points near the 45-degree line in the scatter plots
+# below show the gap is systematic across strategies, not a single outlier.
 
 # %% [markdown]
 # ## 15. Visualization

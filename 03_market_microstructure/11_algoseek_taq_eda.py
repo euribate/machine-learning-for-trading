@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -61,14 +61,14 @@ import polars as pl
 from plotly.subplots import make_subplots
 
 from data import load_nasdaq100_taq
+from utils.style import COLORS
 
-# ML4T Blue Period palette
-COLORS = {
-    "blue": "#1E3A5F",
-    "accent": "#4A90A4",
-    "warm": "#8B4513",
-    "neutral": "#5D5D5D",
-}
+
+def rgba(color: str, alpha: float) -> str:
+    """Translucent fill from an ML4T palette color (hex -> rgba string)."""
+    h = COLORS[color].lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
 
 
 # %% tags=["parameters"]
@@ -105,6 +105,10 @@ print(f"Regular hours: {len(taq):,} ({len(taq) / len(taq_raw) * 100:.1f}%)")
 # Most activity occurs during regular hours, but the pre/post-market events
 # we filtered out would create misleading outliers in our spread analysis.
 
+# %% [markdown]
+# The TAQ stream mixes trade prints with NBBO bid/ask updates. Counting each
+# event type shows where the information actually flows.
+
 # %%
 # Event type composition
 event_counts = (
@@ -114,9 +118,38 @@ event_counts = (
     .sort("len", descending=True)
 )
 
-print("\nEvent composition:")
-for row in event_counts.iter_rows(named=True):
-    print(f"  {row['event_type']:15} {row['len']:>10,} ({row['pct']:5.1f}%)")
+# %%
+# Highlight the single busiest event type; keep the rest neutral.
+top_event = event_counts["event_type"][0]
+bar_colors = [
+    COLORS["blue"] if e == top_event else COLORS["neutral"]
+    for e in event_counts["event_type"].to_list()
+]
+
+fig = go.Figure(
+    go.Bar(
+        x=event_counts["len"].to_list(),
+        y=event_counts["event_type"].to_list(),
+        orientation="h",
+        marker_color=bar_colors,
+        text=[f"{p:.1f}%" for p in event_counts["pct"].to_list()],
+        textposition="outside",
+        cliponaxis=False,
+    )
+)
+fig.update_layout(
+    title=dict(
+        text="Quote updates outnumber trades roughly 10 to 1"
+        "<br><sub>AAPL TAQ event composition, regular hours, March 16, 2020</sub>"
+    ),
+    xaxis_title="Number of events (regular hours)",
+    xaxis=dict(range=[0, event_counts["len"].max() * 1.12]),
+    yaxis=dict(categoryorder="total ascending"),
+    height=400,
+    margin=dict(l=150, r=40),
+    showlegend=False,
+)
+fig.show()
 
 # %% [markdown]
 # **Key observation**: Quote updates outnumber trades by ~10:1. This reflects
@@ -170,7 +203,7 @@ fig.add_trace(
         name="Trades/min",
         line=dict(color=COLORS["blue"], width=1),
         fill="tozeroy",
-        fillcolor="rgba(30, 58, 95, 0.3)",
+        fillcolor=rgba("blue", 0.3),
     ),
     row=1,
     col=1,
@@ -181,7 +214,7 @@ fig.add_trace(
         x=minute_activity["minute"].to_list(),
         y=minute_activity["volume"].to_list(),
         name="Volume",
-        marker_color=COLORS["warm"],
+        marker_color=COLORS["copper"],
         opacity=0.7,
     ),
     row=2,
@@ -189,7 +222,10 @@ fig.add_trace(
 )
 
 fig.update_layout(
-    title=f"Intraday Trading Activity - {SYMBOL} (March 16, 2020)",
+    title=dict(
+        text=f"Trading floods in at the open, then drains through the day"
+        f"<br><sub>{SYMBOL} trade activity per minute, March 16, 2020 (ET)</sub>"
+    ),
     height=500,
     showlegend=False,
 )
@@ -295,7 +331,6 @@ fig = make_subplots(
     row_heights=[0.6, 0.4],
     shared_xaxes=True,
     vertical_spacing=0.08,
-    subplot_titles=("Bid-Ask Spread", "Midpoint Price"),
 )
 
 spread_cap = nbbo["spread_bps"].quantile(0.99)
@@ -305,9 +340,9 @@ fig.add_trace(
         x=nbbo["timestamp"].to_list(),
         y=nbbo["spread_bps"].clip(upper_bound=spread_cap).to_list(),
         name="Spread",
-        line=dict(color=COLORS["warm"], width=1),
+        line=dict(color=COLORS["copper"], width=1),
         fill="tozeroy",
-        fillcolor="rgba(139, 69, 19, 0.2)",
+        fillcolor=rgba("copper", 0.2),
     ),
     row=1,
     col=1,
@@ -325,7 +360,10 @@ fig.add_trace(
 )
 
 fig.update_layout(
-    title=f"Spread Dynamics During Market Stress - {SYMBOL} (March 16, 2020)",
+    title=dict(
+        text=f"Panic widens the spread at the open, then it heals into the close"
+        f"<br><sub>{SYMBOL} NBBO spread (bps) and midpoint, 1-second samples, March 16, 2020 (ET)</sub>"
+    ),
     height=500,
     showlegend=False,
 )
@@ -365,11 +403,6 @@ exchange_dist = (
     .sort("volume", descending=True)
 )
 
-# Show top venues
-print("=== Exchange Market Share (by volume) ===")
-for row in exchange_dist.head(10).iter_rows(named=True):
-    print(f"  {row['exchange']:4} {row['share']:5.1f}%  ({row['trades']:,} trades)")
-
 # %%
 # Visualize top 10 exchanges
 top_exchanges = exchange_dist.head(10)
@@ -383,14 +416,19 @@ fig = px.bar(
     color_discrete_sequence=[COLORS["blue"]],
 )
 
-fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside", cliponaxis=False)
 
 fig.update_layout(
-    title=f"Exchange Market Share - {SYMBOL} (March 16, 2020)",
-    xaxis_title="Volume Share (%)",
+    title=dict(
+        text=f"Even under stress, {SYMBOL} volume stays split across many venues"
+        f"<br><sub>Top-10 exchange share of executed volume, March 16, 2020</sub>"
+    ),
+    xaxis_title="Volume share (%)",
+    xaxis=dict(range=[0, top_exchanges["share"].max() * 1.1]),
     yaxis_title="Exchange",
     yaxis=dict(categoryorder="total ascending"),
     height=400,
+    margin=dict(l=90, r=40),
     showlegend=False,
 )
 
@@ -444,19 +482,13 @@ size_categories = size_categories.with_columns(pl.col("category").cast(pl.Enum(o
     "category"
 )
 
-print("=== Trade Size Distribution ===")
-print(f"{'Category':<20} {'Trades':>10} {'Volume':>10}")
-print("-" * 42)
-for row in size_categories.iter_rows(named=True):
-    print(f"{row['category']:<20} {row['count_pct']:>9.1f}% {row['volume_pct']:>9.1f}%")
-
 # %%
 # Visualize the disconnect between trade count and volume
 fig = go.Figure()
 
 fig.add_trace(
     go.Bar(
-        name="% of Trades",
+        name="% of trades",
         x=order,
         y=[size_categories.filter(pl.col("category") == c)["count_pct"][0] for c in order],
         marker_color=COLORS["blue"],
@@ -465,17 +497,20 @@ fig.add_trace(
 
 fig.add_trace(
     go.Bar(
-        name="% of Volume",
+        name="% of volume",
         x=order,
         y=[size_categories.filter(pl.col("category") == c)["volume_pct"][0] for c in order],
-        marker_color=COLORS["warm"],
+        marker_color=COLORS["copper"],
     )
 )
 
 fig.update_layout(
-    title=f"Trade Size Distribution - {SYMBOL} (March 16, 2020)",
-    xaxis_title="Trade Size Category",
-    yaxis_title="Percentage",
+    title=dict(
+        text=f"Odd lots dominate the tape while a few blocks carry the volume"
+        f"<br><sub>{SYMBOL} trade-size mix, share of trade count vs share of volume, March 16, 2020</sub>"
+    ),
+    xaxis_title="Trade-size category (shares)",
+    yaxis_title="Share (%)",
     barmode="group",
     height=400,
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
@@ -538,9 +573,7 @@ print(
 print(f"  Daily return:   {(day_close / day_open - 1) * 100:+.1f}%")
 
 # %%
-# Candlestick chart with volume
-# Build the candlestick + volume figure in a SINGLE cell so the inline
-# backend doesn't flush an intermediate (candle-only, no labels) render.
+# Candlestick + volume built in one cell so both panels render together.
 fig = make_subplots(
     rows=2,
     cols=1,
@@ -556,8 +589,8 @@ fig.add_trace(
         high=ohlcv["high"].to_list(),
         low=ohlcv["low"].to_list(),
         close=ohlcv["close"].to_list(),
-        increasing_line_color=COLORS["accent"],
-        decreasing_line_color=COLORS["warm"],
+        increasing_line_color=COLORS["positive"],
+        decreasing_line_color=COLORS["negative"],
         name="OHLC",
     ),
     row=1,
@@ -565,7 +598,7 @@ fig.add_trace(
 )
 
 colors = [
-    COLORS["accent"] if c >= o else COLORS["warm"]
+    COLORS["positive"] if c >= o else COLORS["negative"]
     for o, c in zip(ohlcv["open"].to_list(), ohlcv["close"].to_list(), strict=False)
 ]
 
@@ -582,7 +615,10 @@ fig.add_trace(
 )
 
 fig.update_layout(
-    title=f"Intraday Price Action - {SYMBOL} (March 16, 2020)",
+    title=dict(
+        text=f"{SYMBOL} swings ~10% intraday and closes back near its open"
+        f"<br><sub>5-minute OHLC bars (pre-split prices) and volume, March 16, 2020 (ET)</sub>"
+    ),
     xaxis_rangeslider_visible=False,
     height=550,
     showlegend=False,

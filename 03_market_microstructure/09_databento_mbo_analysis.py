@@ -269,10 +269,11 @@ def compute_book_pressure(
 # separate cells leaves the second panel empty in the rendered .ipynb.
 pressure_df = None
 if sample_df is not None and len(sample_df) > 0:
-    # One hour of data (10:00-11:00 is typically liquid)
-    sample_hour = sample_df.filter(
-        (pl.col("timestamp").dt.hour() >= 10) & (pl.col("timestamp").dt.hour() < 11)
-    )
+    # One liquid mid-morning hour (10:00-11:00 America/New_York). The stored
+    # timestamp is naive UTC, so convert before filtering — a raw 10:00-11:00 UTC
+    # window would land on 05:00-06:00 ET, i.e. thin pre-market.
+    _et = pl.col("timestamp").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York")
+    sample_hour = sample_df.filter((_et.dt.hour() >= 10) & (_et.dt.hour() < 11))
 
     if len(sample_hour) > 1000:
         pressure_df = compute_book_pressure(sample_hour)
@@ -304,7 +305,7 @@ if sample_df is not None and len(sample_df) > 0:
         )
         axes[1].axhline(0, color="black", linestyle="--", linewidth=0.5)
         axes[1].set_ylabel("Book Pressure (clipped at 1%/99%)")
-        axes[1].set_xlabel("Time (ET)")
+        axes[1].set_xlabel("Time (UTC)")
         axes[1].fill_between(
             pressure_pd["timestamp"],
             pressure_clipped,
@@ -337,15 +338,18 @@ if sample_df is not None and len(sample_df) > 0:
 # %% [markdown]
 # **What the chart reveals**:
 #
-# The book pressure oscillates around zero, with occasional sustained moves
-# that often precede price changes. Notice how:
+# Plotted at message resolution the pressure is dense and oscillates tightly
+# around zero: green (net buying) and red (net selling) alternate almost
+# continuously, with only occasional sustained excursions to one side. The
+# intuition is that positive pressure precedes upticks and negative pressure
+# precedes drops, but the visual signal-to-noise ratio is clearly low — no
+# stable "buy zone / sell zone" structure jumps out of the raw trace.
 #
-# - **Green zones** (positive pressure) tend to occur before price upticks
-# - **Red zones** (negative pressure) tend to precede price drops
-# - The signal is noisy—individual spikes aren't reliable, but trends are
-#
-# This is the fundamental insight: order flow contains information about
-# short-term price direction, but the signal-to-noise ratio is low.
+# That is exactly why the rest of the notebook stops eyeballing tick pressure
+# and instead aggregates to minute bars and measures the order-flow imbalance
+# against forward returns directly: whether any of this apparent information is
+# real has to be settled by the correlation and markout analysis below, not by
+# reading the chart.
 
 # %% [markdown]
 # ## 3. Building Minute Bars with Microstructure Features
@@ -471,13 +475,14 @@ def process_day_to_bars(
     # open carry into the session), then restrict bars to regular trading hours.
     bbo_bars = reconstruct_bbo_bars(df, bar_freq=bar_freq)
 
-    # Regular trading hours (UTC: 13:30-21:00 covers both EST and EDT)
+    # Regular trading hours (09:30-16:00 America/New_York). Convert the naive-UTC
+    # instant to exchange-local time so the window is correct in both EDT and EST;
+    # a fixed UTC window (e.g. 13:30-21:00) admits an hour of pre-market on the
+    # EST sample here (November 2024, post-DST).
+    _et = pl.col("timestamp").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York")
     df = df.filter(
-        (
-            (pl.col("timestamp").dt.hour() > 13)
-            | ((pl.col("timestamp").dt.hour() == 13) & (pl.col("timestamp").dt.minute() >= 30))
-        )
-        & (pl.col("timestamp").dt.hour() < 21)
+        ((_et.dt.hour() > 9) | ((_et.dt.hour() == 9) & (_et.dt.minute() >= 30)))
+        & (_et.dt.hour() < 16)
     )
 
     if len(df) == 0:
@@ -496,11 +501,16 @@ def process_day_to_bars(
             pl.col("price").last().alias("close"),
             pl.col("size").sum().alias("volume"),
             pl.len().alias("trade_count"),
+            # Cast to a signed dtype: ``size`` is unsigned, and buy_volume -
+            # sell_volume (below, for OFI) underflows to a huge positive value on
+            # net-selling bars if these stay unsigned. Polars wraps silently.
             (pl.when(pl.col("side") == "B").then(pl.col("size")).otherwise(0))
             .sum()
+            .cast(pl.Int64)
             .alias("buy_volume"),
             (pl.when(pl.col("side") == "A").then(pl.col("size")).otherwise(0))
             .sum()
+            .cast(pl.Int64)
             .alias("sell_volume"),
             (pl.col("price") * pl.col("size")).sum().alias("notional"),
         ]
@@ -644,16 +654,19 @@ if multi_day is not None and len(multi_day) > 0:
             print(f"{h:>3} min      {corr:>12.4f}   {interp}")
 
 # %% [markdown]
-# Pearson correlation between OFI(t-1) and forward markouts is ≈ 0.002–0.004
-# at 1–5 minute horizons and ≈ 0.02 at 30 minutes. These correlations are
-# computed on the **minute-bar** panel printed above (rows in the low thousands
-# across the slice run here), not on the underlying tick stream. At that bar
-# count $1/\sqrt{n}$ is of order $10^{-2}$, so the 1–5 minute estimates sit
-# inside one SE of zero — they are within sampling noise — and the 30-minute
-# point estimate is roughly one to two SE above zero, i.e. marginal rather than
-# decisive. Statistical detectability is therefore part of the question; the
-# economic question — whether the implied magnitude survives transaction costs —
-# is the binding one, and the next panel addresses it directly.
+# Pearson correlation between OFI(t-1) and forward markouts is small and mixed
+# in sign on this slice: about +0.004 at 1 minute, +0.001 at 5 minutes, −0.009
+# at 10 minutes, and −0.010 at 30 minutes. These correlations are computed on
+# the **minute-bar** panel printed above (a few thousand regular-trading-hours
+# bars across the ten days run here), not on the underlying tick stream. At that
+# bar count $1/\sqrt{n}$ is of order $10^{-2}$, and the forward-return windows
+# overlap and are serially correlated within a session, so the effective sample
+# is smaller still — every one of these estimates sits within about one standard
+# error of zero. The sign flips across horizons and should not be
+# over-interpreted: the read is no reliable linear relationship at these
+# horizons, neither momentum nor reversal. The economic question — whether any
+# implied magnitude could survive transaction costs — is the binding one, and
+# the next panel addresses it directly.
 
 # %%
 # Single cell so both panels (raw scatter + binned decile bars) render in
@@ -713,18 +726,19 @@ if multi_day is not None and len(multi_day) > 0:
 # %% [markdown]
 # **The binned analysis shows no usable directional structure**:
 #
-# - The decile means alternate sign, and the largest-magnitude bins are interior
-#   rather than at the extremes — there is no monotone ramp and no clean tail signal.
-# - The bottom (heavy-selling) decile mean is positive and the top (heavy-buying)
-#   decile mean is negative — the opposite of a momentum read.
-# - The top-minus-bottom spread is about −0.7 bps: slightly negative and, like the
+# - The decile means alternate sign with no monotone ramp and no clean tail
+#   signal — the interior bins are as large as the extreme ones.
+# - The bottom (heavy-selling) decile mean is slightly positive and the top
+#   (heavy-buying) decile mean is among the most negative — the opposite of a
+#   momentum read.
+# - The top-minus-bottom spread is about −1.9 bps: negative and, like the
 #   near-zero correlations above, within sampling noise of zero.
 #
 # A decile spread that is within noise and on the order of round-trip execution
 # costs (~1–2 bps for liquid US equities) is the realistic baseline for a raw
 # microstructure signal at this horizon: there is no edge to harvest before costs,
 # let alone after them. The next panel makes the cost frictions explicit and shows
-# why even a marginally positive correlation would not convert to tradable P&L.
+# why even a marginally non-zero correlation would not convert to tradable P&L.
 
 # %% [markdown]
 # ## 5. From Price Response to Tradable P&L: Three Markout Types
@@ -845,28 +859,34 @@ if multi_day is not None and len(multi_day) > 0:
 #
 # ### 1. OFI ↔ Forward-Return Correlation
 #
-# OFI has a positive correlation with forward returns ranging from ~0.002 at
-# the 1-minute horizon to ~0.02 at the 30-minute horizon. The sign is the
-# expected one — aggressive buying co-moves with subsequent positive returns
-# — but the per-observation magnitudes are small relative to the dispersion
-# of returns at the same horizons.
+# On this ten-day, regular-trading-hours slice the correlation of OFI(t-1) with
+# forward returns is small and mixed in sign (about +0.004 at 1 minute, +0.001
+# at 5 minutes, −0.009 at 10 minutes, −0.010 at 30 minutes). The per-observation
+# magnitudes are tiny relative to the dispersion of returns, and the estimates
+# sit within about one standard error of zero, so the sign is not something to
+# trade on — the reading is no reliable linear relationship, neither momentum
+# nor reversal.
 #
 # ### 2. Horizon Dependence
 #
-# The 1-5 minute correlations sit around 0.002-0.004 and the 30-minute
-# correlation around 0.02. This notebook does not separate that horizon
-# dependence into a permanent vs transient component; it reports the
-# unconditional correlation at each horizon.
+# The correlations flip from marginally positive at 1-5 minutes to marginally
+# negative at 10-30 minutes, but every value is within one standard error of
+# zero. This notebook does not separate any horizon dependence into a permanent
+# vs transient component; it reports the unconditional correlation at each
+# horizon, all within sampling noise here.
 #
-# ### 3. Latency Matters
+# ### 3. Three Markout Types, Not Latency Alpha
 #
-# The difference between standard and latency-adjusted markouts shows that
-# execution speed is critical. Traders who can't act within 1 minute lose
-# a meaningful fraction of the available alpha.
+# The midpoint, latency-adjusted, and executable markouts are a *framework* for
+# locating where a signal's return would leak away — the one-bar delay and the
+# spread — not evidence of alpha on this slice. Here the midpoint markout is
+# already small and negative, so there is no positive edge for latency to erode;
+# the point is methodological, and on a genuine signal these three columns are how
+# you would quantify the loss from delay and from crossing the spread.
 #
 # ### 4. Practical Alpha Is Limited
 #
-# The top-minus-bottom OFI decile spread is about −0.7 bps on this slice — within
+# The top-minus-bottom OFI decile spread is about −1.9 bps on this slice — within
 # noise and on the order of round-trip transaction costs. There is no standalone
 # edge here: the decile means alternate sign with no tail structure, matching the
 # near-zero correlations. OFI is more useful as a **filter** (avoid trading against

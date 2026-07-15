@@ -465,39 +465,57 @@ print(
 # meaning the effective hypothesis count is lower than the nominal count.
 
 # %%
-# Apply RAS adjustment
-adjusted_ics = ras_ic_adjustment(
+# Apply the RAS adjustment.
+# The observed ICs are all noise: max |IC| = 0.022. We set kappa=0.05 (Paleologo's
+# "high-conviction" band), which bounds the largest observed |IC| while staying far
+# below the overly conservative kappa=1.0. The library returns a conservative lower
+# bound on each true IC and flags significance as adjusted_ic > 0.
+ras = ras_ic_adjustment(
     observed_ic=observed_ics,
     complexity=R_hat,
     n_samples=n_periods,
     delta=0.05,
-    kappa=0.5,
+    kappa=0.05,
+    return_result=True,
 )
+adjusted_ics = ras.adjusted_values
 
-# Compare
-n_significant_raw = np.sum(np.abs(observed_ics) > 0.01)
-n_significant_ras = np.sum(np.abs(adjusted_ics) > 0.01)
+# The RAS penalty is an absolute deduction (2*R_hat plus a small estimation term),
+# not a proportional shrinkage, so we report the penalty components and the resulting
+# lower bound. Significance uses the library's own convention: adjusted_ic > 0.
+n_positive_raw = int(np.sum(observed_ics > 0))
 
 print(
     pl.DataFrame(
         {
             "metric": [
-                "|IC| > 0.01 before RAS",
-                "|IC| > 0.01 after RAS",
+                "Positive IC before RAS",
+                "Significant after RAS (adj IC > 0)",
                 "Best observed IC",
-                "Best adjusted IC",
-                "Shrinkage",
+                "Data-snooping penalty (2 R-hat)",
+                "Estimation error",
+                "Best adjusted IC (lower bound)",
             ],
             "value": [
-                f"{n_significant_raw}/{n_factors}",
-                f"{n_significant_ras}/{n_factors}",
+                f"{n_positive_raw}/{n_factors}",
+                f"{ras.n_significant}/{n_factors}",
                 f"{best_ic:.4f}",
+                f"{ras.data_snooping_penalty:.4f}",
+                f"{ras.estimation_error:.4f}",
                 f"{adjusted_ics[best_idx]:.4f}",
-                f"{(best_ic - adjusted_ics[best_idx]) / best_ic:.0%}",
             ],
         }
     )
 )
+
+# %% [markdown]
+# All 100 factors are pure noise, and the RAS lower bound reflects that. The
+# data-snooping penalty of 2 R-hat is roughly 0.31, which dwarfs the largest
+# observed IC of about 0.02, so no factor's conservative lower bound clears zero.
+# Where 42 factors show a positive raw IC by chance, none survives the correction.
+# The penalty is an absolute deduction driven almost entirely by the Rademacher
+# complexity of the candidate set, not a percentage haircut on each IC. A stricter
+# correction therefore makes significance harder to claim, exactly as intended.
 
 # %% [markdown]
 # ## 4. Harvey et al. (2016) Thresholds

@@ -83,6 +83,7 @@ from sklearn.preprocessing import StandardScaler
 
 from data import load_etfs, load_macro
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -462,7 +463,7 @@ fig, axes = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
 
 # Price with regime coloring
 ax = axes[0]
-colors = ["#1f77b4", "#d62728"]  # Blue/vermillion (colorblind-safe)
+colors = [COLORS["blue"], COLORS["copper"]]  # Low vol (calm) vs high vol (stress)
 regime_names = ["Low Vol", "High Vol"]
 for regime in range(2):
     mask = test_df["regime"] == regime
@@ -474,25 +475,44 @@ for regime in range(2):
         alpha=0.5,
         label=regime_names[regime],
     )
-ax.set_ylabel("S&P 500")
-ax.set_title("S&P 500 Colored by Regime")
+ax.set_ylabel("S&P 500 (index level)")
+ax.set_title("Test-Period S&P 500 Colored by Detected Regime")
 ax.legend(loc="upper left")
 
 # Regime probabilities
 ax = axes[1]
 ax.fill_between(
-    test_df.index, 0, test_df["prob_high_vol"], alpha=0.7, color="red", label="P(High Vol)"
+    test_df.index,
+    0,
+    test_df["prob_high_vol"],
+    alpha=0.7,
+    color=COLORS["copper"],
+    label="P(High Vol)",
 )
 ax.set_ylabel("Probability")
-ax.set_title("High-Volatility Regime Probability")
+ax.set_title("Filtered High-Volatility Regime Probability")
 
 # Predictions vs Actual
 ax = axes[2]
-ax.plot(test_df.index, test_df["actual"], label="Actual", linewidth=0.8, alpha=0.7)
-ax.plot(test_df.index, test_df["predicted"], label="Predicted", linewidth=0.8, alpha=0.7)
-ax.axhline(0, color="black", linestyle="--", linewidth=0.5)
+ax.plot(
+    test_df.index,
+    test_df["actual"],
+    label="Actual",
+    linewidth=0.8,
+    alpha=0.7,
+    color=COLORS["neutral"],
+)
+ax.plot(
+    test_df.index,
+    test_df["predicted"],
+    label="Predicted",
+    linewidth=0.8,
+    alpha=0.9,
+    color=COLORS["blue"],
+)
+ax.axhline(0, color=COLORS["neutral"], linestyle="--", linewidth=0.5)
 ax.set_ylabel("5-Day Return (%)")
-ax.set_title("Regime-Aware Model: Predicted vs Actual Returns")
+ax.set_title("Regime-Aware Model: Predicted vs Actual 5-Day Returns")
 ax.legend()
 
 # Prediction error by regime
@@ -508,9 +528,9 @@ for regime in range(2):
         alpha=0.5,
         label=f"{regime_names[regime]} error",
     )
-ax.axhline(0, color="black", linestyle="--", linewidth=0.5)
+ax.axhline(0, color=COLORS["neutral"], linestyle="--", linewidth=0.5)
 ax.set_ylabel("Prediction Error (%)")
-ax.set_title("Prediction Errors by Regime")
+ax.set_title("Prediction Errors Are Larger in the High-Vol Regime")
 ax.legend()
 
 plt.tight_layout()
@@ -526,9 +546,9 @@ feature_importance = pd.DataFrame(
 ).sort_values("Importance", ascending=True)
 
 fig, ax = plt.subplots(figsize=(10, 5))
-ax.barh(feature_importance["Feature"], feature_importance["Importance"], color="steelblue")
-ax.set_xlabel("Importance")
-ax.set_title("Feature Importance in Regime-Aware Model")
+ax.barh(feature_importance["Feature"], feature_importance["Importance"], color=COLORS["blue"])
+ax.set_xlabel("Impurity-based importance (Gradient Boosting)")
+ax.set_title("Regime Probability Contributes Little; Base Features Dominate")
 plt.tight_layout()
 plt.show()
 
@@ -658,7 +678,11 @@ for col_name in sorted(cond_features.keys()):
 # 2. **Mixture of Experts** trains a separate model per regime, which reduces
 #    the training sample per model and produces sharper transitions at
 #    regime boundaries
-# 3. **Regime probability matters** — often ranks high in feature importance
+# 3. **Regime probability importance varies with the base feature set** — on
+#    this single-symbol test `prob_high_vol` ranks low (~0.01 impurity-based
+#    importance) because the base features (notably `volatility`) already encode
+#    most of the regime signal; it can rank higher when the base features are
+#    less regime-informative
 # 4. **Error patterns differ by regime** — high-vol periods harder to predict
 # 5. **Watch for pitfalls** — EM sensitivity, label switching, overfitting
 # 6. **Cross-validate properly** — always use time-series CV for financial data

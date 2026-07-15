@@ -51,7 +51,7 @@
 # ---
 
 # %% [markdown]
-# ## 2. Setup and Configuration
+# ## 1. Setup and Configuration
 
 # %%
 """Trading Activity Overview — high-level view of NASDAQ trading activity using TotalView-ITCH data."""
@@ -116,7 +116,7 @@ if not HAS_MESSAGE_DATA:
 
 
 # %% [markdown]
-# ## 3. Counting Messages by Type
+# ## 2. Counting Messages by Type
 #
 # Each message type is stored in its own Parquet subdirectory. Let's see how many messages
 # of each type exist in our dataset.
@@ -156,9 +156,13 @@ if HAS_MESSAGE_DATA:
     import pandas as pd
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    pd.Series(message_summary).sort_values().plot.barh(ax=ax)
-    ax.set_title("Message Counts by Type")
+    pd.Series(message_summary).sort_values().plot.barh(ax=ax, color="steelblue")
+    # Counts span nine orders of magnitude (adds ~185M vs. rare admin types in
+    # single digits) — a log axis keeps every message type legible.
+    ax.set_xscale("log")
+    ax.set_title("Message Frequency by Type (Log Scale)")
     ax.set_xlabel("Number of Messages")
+    sns.despine()
     plt.tight_layout()
     plt.show()
 
@@ -182,7 +186,7 @@ if HAS_MESSAGE_DATA:
 # | **Q** | Cross Trade | Opening/closing cross |
 
 # %% [markdown]
-# ## 4. Execution Attribution: Enriching E/C Messages
+# ## 3. Execution Attribution: Enriching E/C Messages
 #
 # E (Order Executed) and C (Order Executed with Price) messages contain `stock_locate`
 # but not the stock symbol. We enrich them by joining to:
@@ -463,7 +467,7 @@ if HAS_MESSAGE_DATA and (MESSAGE_DIR / "R").exists():
         print("  Delete the directory and re-run to regenerate.")
 
 # %% [markdown]
-# ## 5. Trade Volume and Value by Ticker
+# ## 4. Trade Volume and Value by Ticker
 #
 # We analyze **executions** (trades) from message types that reflect actual trades:
 # - `'C'`: Order Executed with Price
@@ -754,9 +758,12 @@ if HAS_MESSAGE_DATA and len(trade_df) > 0:
 # %% [markdown]
 # ## Key Takeaways
 #
-# 1. **Message volume**: ITCH generates hundreds of millions of messages per day
-# 2. **Concentration**: A small number of stocks dominate trading activity
-# 3. **Top 50 stocks** account for nearly half of total dollar volume
+# 1. **Message volume**: this single NASDAQ session carries ~423M ITCH messages,
+#    dominated by adds (A, 184.7M) and deletes (D, 180.3M); executions (E, 8.4M)
+#    are a small slice - most orders are posted and then cancelled, not traded.
+# 2. **Concentration**: dollar volume is heavily concentrated - just 70 tickers
+#    reach 50% of traded value and 461 reach 80%.
+# 3. **Top 50 tickers** account for 45.6% of total dollar volume - nearly half.
 #
 # **Next**: See `06_itch_intraday_patterns` for time-of-day analysis.
 #

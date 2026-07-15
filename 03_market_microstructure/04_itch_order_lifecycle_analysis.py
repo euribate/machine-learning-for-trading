@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -1007,8 +1007,11 @@ if HAS_MESSAGE_DATA and orders_with_exec is not None:
 # %% [markdown]
 # ## 8. Execution Characteristics (Enriched Data)
 #
-# Using the enriched E/C messages (from notebook 01), we can analyze execution
-# characteristics at the order level: fill side, execution prices, and price improvement.
+# Using the enriched E/C messages (written by `05_itch_trading_activity`, which
+# joins executions back to their submitting orders), we can analyze execution
+# characteristics at the order level: fill side, execution prices, and price
+# improvement. Run that notebook first; this section degrades gracefully if the
+# enriched parquets are absent.
 
 # %%
 # Load enriched execution data if available
@@ -1038,7 +1041,7 @@ if ENRICHED_DIR.exists():
         print(f"Loaded {len(enriched_c):,} enriched C messages for {SYMBOL}")
 else:
     print(f"Enriched data not found at {ENRICHED_DIR}")
-    print("Run notebook 01 enrichment step to generate this data.")
+    print("Run 05_itch_trading_activity first to generate the enriched E/C/X parquets.")
     enriched_e = None
     enriched_c = None
 
@@ -1125,49 +1128,15 @@ if enriched_c is not None and "price_improvement_raw" in enriched_c.columns:
 # 1. **Side Balance**: Buy and sell executions are roughly balanced in count
 #    but may differ in volume (informed traders tend to be directional)
 #
-# 2. **Price Improvement (C messages)**: Most hidden order fills occur at
-#    or near the limit price, with small price improvements/disimprovements
+# 2. **Price Improvement (C messages)**: In this AAPL sample the C-message fills
+#    land a uniform one tick ($0.01) away from the order's limit - a small,
+#    consistent disimprovement rather than a mix of better- and worse-than-limit fills
 #
 # 3. **Order Attribution**: By joining executions back to their original orders,
 #    we can track the full order lifecycle and analyze execution quality
 
 # %% [markdown]
-# ## Key Takeaways
-#
-# ### Order Lifecycle Statistics
-#
-# | Metric | Typical Value | Implication |
-# |--------|---------------|-------------|
-# | **Cancellation Rate** | ~96% | Most visible liquidity is phantom |
-# | **Median Cancel Time** | <1 second | Quotes update continuously |
-# | **Execution Rate** | ~4% | Only a small fraction of orders trade |
-# | **Volume Concentration** | Top 25 dominate | Focus on liquid names |
-#
-# ### Implications for Trading
-#
-# 1. **Don't trust displayed liquidity**: Most of it will disappear before you can trade against it
-#
-# 2. **Speed matters**: Orders that execute do so quickly; stale orders are cancelled
-#
-# 3. **Market making is dynamic**: The ~96% cancellation rate reflects continuous quote updating
-#
-# 4. **Adverse selection**: Orders that *do* get filled may be picked off by informed traders
-#
-# ### Next Steps
-#
-# - **Notebook 05**: `trading_activity_overview` - Message counts and volume concentration
-# - **Notebook 06**: `intraday_patterns` - U-shape in volume and volatility
-# - **Chapter 8**: Build predictive features from order flow data
-#
-# ---
-#
-# **Reference**: Harris, L. (2003). *Trading and Exchanges: Market Microstructure for Practitioners*.
-# Oxford University Press.
-#
-# ---
-
-# %% [markdown]
-# ## 5. Market-Wide Lifecycle Statistics
+# ## 9. Market-Wide Lifecycle Statistics
 #
 # The single-stock analysis above characterizes AAPL order dynamics.
 # This section computes the same timing metrics across **all** ~186.6M orders
@@ -1277,11 +1246,41 @@ if HAS_MESSAGE_DATA:
 # (sub-second) with relatively slower execution for resting orders that do fill.
 
 # %% [markdown]
+# ## Key Takeaways
+#
+# ### Order Lifecycle Statistics (AAPL sample)
+#
+# | Metric | Value | Implication |
+# |--------|-------|-------------|
+# | **Termination rate** | ~96% | Most visible liquidity is withdrawn before it trades |
+# | **Median time to cancel** | <1 second | Quotes update continuously |
+# | **Execution rate** | ~4% | Only a small fraction of orders ever fill |
+# | **Cancellation speed (market-wide)** | 50% <1s, 80% <10s | Fleeting liquidity is the norm |
+#
+# ### Implications for Trading
+#
+# 1. **Don't trust displayed liquidity**: Most of it will disappear before you can trade against it
+#
+# 2. **Speed matters**: Orders that execute do so quickly; stale orders are cancelled
+#
+# 3. **Market making is dynamic**: The ~96% termination rate reflects continuous quote updating
+#
+# 4. **Adverse selection**: Orders that *do* get filled may be picked off by informed traders
+#
+# ### Next Steps
+#
+# - **Notebook 05**: `itch_trading_activity` - Message counts and volume concentration
+# - **Notebook 06**: `itch_intraday_patterns` - U-shape in volume and volatility
+# - **Chapter 8**: Build predictive features from order flow data
+
+# %% [markdown]
 # ---
 #
-# ## Reference
+# ## References
 #
-# Bouchaud, J.-P., Bonart, J., Donier, J., & Gould, M. (2018).
-# *Trades, Quotes and Prices: Financial Markets Under the Microscope*.
-# Cambridge University Press.
-# [https://doi.org/10.1017/9781009028943](https://doi.org/10.1017/9781009028943)
+# - Harris, L. (2003). *Trading and Exchanges: Market Microstructure for Practitioners*.
+#   Oxford University Press.
+# - Bouchaud, J.-P., Bonart, J., Donier, J., & Gould, M. (2018).
+#   *Trades, Quotes and Prices: Financial Markets Under the Microscope*.
+#   Cambridge University Press.
+#   [https://doi.org/10.1017/9781009028943](https://doi.org/10.1017/9781009028943)

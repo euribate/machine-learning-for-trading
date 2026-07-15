@@ -37,7 +37,7 @@
 # ## 1. Setup and Imports
 
 # %%
-"""ARIMA Feature Extraction — build ARIMA point forecasts and evaluate them as features (IC/RMSE)."""
+"""ARIMA Feature Extraction - build ARIMA point forecasts and evaluate them as features (IC/RMSE)."""
 
 import warnings
 
@@ -50,17 +50,30 @@ from ml4t.diagnostic.evaluation.autocorrelation import analyze_autocorrelation
 from ml4t.diagnostic.evaluation.stationarity import analyze_stationarity
 from ml4t.diagnostic.metrics import pooled_ic
 from plotly.subplots import make_subplots
+from scipy.stats import ConstantInputWarning
+from statsmodels.tools.sm_exceptions import (
+    ConvergenceWarning,
+    InterpolationWarning,
+    ValueWarning,
+)
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.stattools import acf, adfuller, pacf
 
+# Silence known-benign modeling noise (no-frequency date index, non-convergent grid
+# fits, constant-input IC, KPSS interpolation) so outputs stay clean.
 warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=ValueWarning)
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+warnings.filterwarnings("ignore", category=InterpolationWarning)
+warnings.filterwarnings("ignore", category=ConstantInputWarning)
 
 from data import load_etfs
 from utils.paths import get_case_study_dir
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # sets the ml4t Plotly template as the default
 
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Production defaults - Papermill injects overrides for CI
 MAX_SYMBOLS = 0  # 0 = all symbols
 START_DATE = "2015-01-01"
 END_DATE = "2024-12-01"
@@ -163,30 +176,44 @@ def plot_acf_pacf(series: pd.Series, title: str):
 
     # ACF
     fig.add_trace(
-        go.Bar(x=list(range(len(acf_vals))), y=acf_vals, name="ACF"),
+        go.Bar(x=list(range(len(acf_vals))), y=acf_vals, name="ACF", marker_color=COLORS["blue"]),
         row=1,
         col=1,
     )
 
     # PACF
     fig.add_trace(
-        go.Bar(x=list(range(len(pacf_vals))), y=pacf_vals, name="PACF"),
+        go.Bar(
+            x=list(range(len(pacf_vals))), y=pacf_vals, name="PACF", marker_color=COLORS["blue"]
+        ),
         row=1,
         col=2,
     )
 
-    # Significance bands
+    # 95% significance bands (±1.96/√n): coefficients inside are noise
     n = len(series)
     sig = 1.96 / np.sqrt(n)
     for col in [1, 2]:
-        fig.add_hline(y=sig, line_dash="dash", line_color="red", row=1, col=col)
-        fig.add_hline(y=-sig, line_dash="dash", line_color="red", row=1, col=col)
+        fig.add_hline(y=sig, line_dash="dash", line_color=COLORS["neutral"], row=1, col=col)
+        fig.add_hline(y=-sig, line_dash="dash", line_color=COLORS["neutral"], row=1, col=col)
 
-    fig.update_layout(height=300, title_text=title, showlegend=False)
+    fig.update_xaxes(title_text="Lag (trading days)", row=1, col=1)
+    fig.update_xaxes(title_text="Lag (trading days)", row=1, col=2)
+    fig.update_yaxes(title_text="Autocorrelation", row=1, col=1)
+    fig.update_yaxes(title_text="Partial autocorrelation", row=1, col=2)
+    fig.update_layout(
+        height=340,
+        title_text=title,
+        showlegend=False,
+    )
     return fig
 
 
-fig = plot_acf_pacf(df["returns"], f"{SYMBOL} Returns ACF/PACF")
+fig = plot_acf_pacf(
+    df["returns"],
+    f"Daily {SYMBOL} returns show negligible autocorrelation at every lag"
+    "<br><sup>Dashed lines mark the 95% band (±1.96/√n); bars inside are indistinguishable from zero</sup>",
+)
 fig.show()
 
 print("\nACF/PACF Interpretation:")
@@ -199,7 +226,7 @@ print("  - This is typical: returns are hard to predict from past returns")
 #
 # The manual ACF/PACF interpretation above requires visual inspection.
 # `analyze_autocorrelation()` examines significant lags programmatically
-# and suggests an ARIMA order — a useful sanity check before grid search.
+# and suggests an ARIMA order - a useful sanity check before grid search.
 
 # %%
 stat_check = analyze_stationarity(df["returns"].dropna().values)
@@ -211,7 +238,7 @@ print(f"Suggested ARIMA order: {acf_analysis.suggested_arima_order}")
 
 # %% [markdown]
 # The diagnostic confirms returns are stationary (no differencing needed, d=0)
-# and suggests a low-order ARIMA — consistent with the efficient market
+# and suggests a low-order ARIMA - consistent with the efficient market
 # expectation of minimal autocorrelation in returns.
 
 # %% [markdown]
@@ -373,7 +400,7 @@ for i in range(n_rolling):
     train_window = full_returns[: window_size + i]
 
     # Quick AR(1) fit; statsmodels can fail on rank-deficient or non-stationary
-    # windows — fall back to zero forecast in that rare case.
+    # windows - fall back to zero forecast in that rare case.
     try:
         model = ARIMA(train_window, order=(1, 0, 0))
         fit = model.fit()
@@ -401,7 +428,7 @@ summary_rows = [{"model": name, "ic": r["ic"], "rmse": r["rmse"]} for name, r in
 summary_df = pd.DataFrame(summary_rows)
 display(summary_df)
 
-# Best model by IC (skip NaN entries — constant predictions yield undefined IC)
+# Best model by IC (skip NaN entries - constant predictions yield undefined IC)
 finite = summary_df[summary_df["ic"].notna()]
 if not finite.empty:
     best_row = finite.loc[finite["ic"].idxmax()]
@@ -413,26 +440,32 @@ if not finite.empty:
 # ## 11. Visualization
 
 # %%
-# Plot comparison
+# Plot comparison (returns shown in %; static multi-step forecasts are out-of-sample)
 models_to_plot = ["Naive (0)", "AR(1)", f"ARIMA{best_order}" if best_order else "AR(1)"]
-colors = {"Naive (0)": "gray", "AR(1)": "steelblue", f"ARIMA{best_order}": "coral"}
+model_colors = {
+    "Naive (0)": COLORS["copper"],
+    "AR(1)": COLORS["blue"],
+    f"ARIMA{best_order}": COLORS["amber"],
+}
 
 fig = make_subplots(
     rows=2,
     cols=1,
-    subplot_titles=("Actual vs Predicted Returns (Sample)", "Prediction Distributions"),
+    subplot_titles=(
+        "Forecasts flatten within days; realized returns keep moving",
+        "The AR(1) forecast distribution is a spike next to the return distribution",
+    ),
 )
 
 # Sample of actual vs predicted
 n_plot = min(100, len(test))
-dates = test.index[:n_plot]
 
 fig.add_trace(
     go.Scatter(
         x=list(range(n_plot)),
-        y=test["returns"].values[:n_plot],
+        y=test["returns"].values[:n_plot] * 100,
         name="Actual",
-        line=dict(color="black"),
+        line=dict(color=COLORS["neutral"]),
     ),
     row=1,
     col=1,
@@ -443,9 +476,9 @@ for model_name in models_to_plot:
         fig.add_trace(
             go.Scatter(
                 x=list(range(n_plot)),
-                y=results[model_name]["predictions"][:n_plot],
+                y=results[model_name]["predictions"][:n_plot] * 100,
                 name=model_name,
-                line=dict(dash="dot"),
+                line=dict(color=model_colors.get(model_name, COLORS["copper"]), dash="dot"),
             ),
             row=1,
             col=1,
@@ -454,28 +487,48 @@ for model_name in models_to_plot:
 # %%
 # Histograms
 fig.add_trace(
-    go.Histogram(x=test["returns"].values, name="Actual", opacity=0.5, nbinsx=50),
+    go.Histogram(
+        x=test["returns"].values * 100,
+        name="Actual",
+        opacity=0.5,
+        nbinsx=50,
+        marker_color=COLORS["neutral"],
+    ),
     row=2,
     col=1,
 )
 fig.add_trace(
-    go.Histogram(x=results["AR(1)"]["predictions"], name="AR(1) Pred", opacity=0.5, nbinsx=50),
+    go.Histogram(
+        x=results["AR(1)"]["predictions"] * 100,
+        name="AR(1) Pred",
+        opacity=0.5,
+        nbinsx=50,
+        marker_color=COLORS["blue"],
+    ),
     row=2,
     col=1,
 )
 
-fig.update_layout(height=500, title_text="ARIMA Baseline: Predictions vs Actual", barmode="overlay")
+fig.update_xaxes(title_text="Test-period trading day", row=1, col=1)
+fig.update_yaxes(title_text="Daily return (%)", row=1, col=1)
+fig.update_xaxes(title_text="Daily return (%)", row=2, col=1)
+fig.update_yaxes(title_text="Count", row=2, col=1)
+fig.update_layout(
+    height=560,
+    title_text="ARIMA point forecasts collapse to the mean; realized returns do not",
+    barmode="overlay",
+)
 fig.show()
 
 # %% [markdown]
 # **Reading the table.** AR(1) on this train/test split lands a small positive
 # IC (≈ +0.07), which is the most that any single-asset ARIMA model produces
-# here. The AIC-best ARIMA — `ARIMA(3, 0, 2)` — flips sign and lands a small
+# here. The AIC-best ARIMA - `ARIMA(3, 0, 2)` - flips sign and lands a small
 # *negative* IC; AR(5) is also negative. This is a useful illustration of two
 # things at once: longer AR/MA orders overfit in-sample at the cost of OOS
 # rank correlation, and the AIC-best model is not the IC-best model. The
 # Naive (0) and Mean baselines have constant predictions, so their IC is
-# undefined (NaN) — they are RMSE benchmarks, not rank-correlation
+# undefined (NaN) - they are RMSE benchmarks, not rank-correlation
 # benchmarks.
 #
 # **Why ARIMA struggles with returns on this dataset**:
@@ -491,9 +544,14 @@ fig.show()
 # - Non-financial time series (weather, sales, etc.)
 
 # %% [markdown]
-# ## 13. Multi-Symbol ARIMA Forecasting
+# ## 12. Multi-Symbol ARIMA Forecasting
 #
-# Process all symbols in parallel and collect predictions for downstream chapters.
+# Apply the rolling 1-step-ahead walk-forward from Section 9 to every symbol and
+# collect the predictions as a standardized feature file for downstream chapters.
+# Each symbol fits AR(1) once on its training window, then rolls one day ahead
+# through the test period using the actual most recent return, so the saved feature
+# varies over time rather than collapsing to a per-symbol constant (which is what a
+# single static multi-step forecast would produce).
 
 # %%
 print("\n" + "=" * 60)
@@ -502,9 +560,22 @@ print("=" * 60)
 
 
 def run_arima_for_symbol(symbol: str) -> tuple[pl.DataFrame | None, dict]:
-    """Run ARIMA forecasting for a single symbol.
+    """Run a rolling 1-step-ahead AR(1) walk-forward for a single symbol.
 
-    Returns (predictions DataFrame or None, summary dict) — summary is always
+    We fit AR(1) once on the training window and then roll one step ahead through
+    the test period, each prediction using the actual most recent return:
+    ``y_hat_t = mu + phi * (y_{t-1} - mu)``. This is causal (every input precedes
+    its target) and genuinely time-varying, so it does not collapse the way a single
+    static multi-step forecast (``fit.forecast(steps=len(test))``) does - that
+    collapses to the unconditional mean within a few steps for an AR(1) on returns,
+    yielding a near-constant, degenerate feature.
+
+    This is the fixed-parameter form of the walk-forward demonstrated for a single
+    symbol in Section 9. For AR(1) it matches the expanding-window refit to within
+    ~0.03% (correlation > 0.999 on SPY) while scaling to the full universe without a
+    per-day refit, so it is what we use to build the saved multi-symbol feature.
+
+    Returns (predictions DataFrame or None, summary dict) - summary is always
     populated with the symbol and an `ic` (NaN if skipped).
     """
     summary = {"symbol": symbol, "n_predictions": 0, "ic": float("nan"), "status": "ok"}
@@ -522,16 +593,23 @@ def run_arima_for_symbol(symbol: str) -> tuple[pl.DataFrame | None, dict]:
         summary["status"] = "insufficient_split"
         return None, summary
 
+    # Fit AR(1) once on the training window, then roll 1-step-ahead over the test
+    # period using actual observed lagged returns (no refit, no look-ahead).
+    full_returns = symbol_df["returns"].values
+    n_train = len(train_data)
+    n_test = len(test_data)
     try:
-        model = ARIMA(train_data["returns"], order=(1, 0, 0))
-        fit = model.fit()
-        preds = fit.forecast(steps=len(test_data))
+        fit = ARIMA(train_data["returns"], order=(1, 0, 0)).fit()
+        mu, phi = fit.params[0], fit.params[1]
     except (ValueError, np.linalg.LinAlgError) as exc:
         summary["status"] = f"fit_failed: {type(exc).__name__}"
         return None, summary
 
-    ic = pooled_ic(test_data["returns"].values, preds.values)
-    summary["n_predictions"] = len(test_data)
+    y_prev = full_returns[n_train - 1 : n_train + n_test - 1]
+    preds = mu + phi * (y_prev - mu)
+
+    ic = pooled_ic(test_data["returns"].values, preds)
+    summary["n_predictions"] = n_test
     summary["ic"] = ic
 
     pred_df = pl.DataFrame(
@@ -539,8 +617,8 @@ def run_arima_for_symbol(symbol: str) -> tuple[pl.DataFrame | None, dict]:
             "timestamp": test_data.index.values,
             "symbol": symbol,
             "y_true": test_data["returns"].values,
-            "y_pred": preds.values,
-            "model_id": "arima_ar1",
+            "y_pred": preds,
+            "model_id": "arima_ar1_rolling",
             "fold_id": 0,
             "horizon": "1d",
             "dataset": "etf",
@@ -549,10 +627,10 @@ def run_arima_for_symbol(symbol: str) -> tuple[pl.DataFrame | None, dict]:
     return pred_df, summary
 
 
-# Process all symbols
+# Process all symbols (one AR(1) fit each, then a vectorized 1-step roll).
 all_predictions = []
 symbol_summaries = []
-print(f"Processing {len(SYMBOLS)} symbols...")
+print(f"Processing {len(SYMBOLS)} symbols (rolling 1-step walk-forward)...")
 
 for symbol in SYMBOLS:
     pred_df, summary = run_arima_for_symbol(symbol)
@@ -576,10 +654,10 @@ else:
     print("No predictions generated")
 
 # %% [markdown]
-# ## 14. Save Predictions for Downstream Chapters
+# ## 13. Save Predictions for Downstream Chapters
 #
 # Output standardized predictions file for cross-model comparison.
-# Schema: date, asset, y_true, y_pred, model_id, fold_id, horizon, dataset
+# Schema: timestamp, symbol, y_true, y_pred, model_id, fold_id, horizon, dataset
 
 # %%
 # Save ARIMA predictions
@@ -589,7 +667,10 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 if len(multi_symbol_df) > 0:
     output_path = MODEL_DIR / "arima_predictions.parquet"
     multi_symbol_df.write_parquet(output_path)
-    print(f"Saved multi-symbol predictions to {output_path}")
+    # Show a repo-root-relative path so the output carries no machine-specific prefix.
+    repo_root = get_case_study_dir("etfs").parents[1]
+    display_path = output_path.relative_to(repo_root)
+    print(f"Saved multi-symbol predictions to {display_path}")
     print(f"  Shape: {multi_symbol_df.shape}")
     print(f"  Assets: {multi_symbol_df['symbol'].n_unique()}")
     print(

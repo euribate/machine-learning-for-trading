@@ -32,7 +32,7 @@
 # **Prerequisites**: `01_visual_diagnostics` for stationarity testing concepts.
 
 # %%
-"""Fractional Differencing — achieve stationarity while preserving memory."""
+"""Fractional Differencing - achieve stationarity while preserving memory."""
 
 import warnings
 from typing import Any, cast
@@ -55,9 +55,14 @@ from ml4t.engineer.features.fdiff import (
 )
 
 from data import load_etfs
+from utils.style import COLORS
+
+# Weight-truncation threshold for FFD. A single source of truth so the demo
+# grid, the weight plots, and the validity mask all use the same window widths.
+FFD_THRESHOLD = 1e-4
 
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Production defaults - Papermill injects overrides for CI
 START_DATE = "2015-01-01"
 END_DATE = "2024-01-01"
 
@@ -114,8 +119,9 @@ ASSET_CLASS_D = {
     "fx": 0.35,
 }
 
-# For teaching: small fixed grid (not search)
-TEACHING_D_GRID = [0.3, 0.4, 0.5, 0.6]
+# For teaching: small fixed grid (not search). The grid brackets the
+# stationarity crossing so the memory-vs-stationarity tradeoff is visible.
+TEACHING_D_GRID = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
 
 print("Asset Class d Recommendations:")
 for asset, d in ASSET_CLASS_D.items():
@@ -124,18 +130,33 @@ for asset, d in ASSET_CLASS_D.items():
 # %% [markdown]
 # ## 3. FFD with Validity Mask and Sample Loss
 #
-# The standard output format includes:
-# - **transformed**: The FFD series
-# - **valid**: Boolean mask (True where FFD is computable)
-# - **sample_loss**: Number of observations lost to warmup
+# `ml4t.engineer.features.fdiff.ffdiff` is a **boundary-partial** implementation:
+# it applies whatever weights are available near the start of the sample, so it
+# never returns nulls and preserves the row count. The earliest observations are
+# therefore produced by a shorter effective filter than later ones. The
+# **full-window** convention (López de Prado) instead treats those warmup rows as
+# unavailable until the required lookback has accumulated.
+#
+# We impose the full-window convention explicitly with a **validity mask**: the
+# window width is the number of FFD weights, and the first `width - 1` rows -
+# which lack a full window of history - are marked invalid and excluded from every
+# diagnostic. The output format is:
+# - **transformed**: The FFD series, warmup rows set to null
+# - **valid**: Boolean mask (True where a full window of history is available)
+# - **sample_loss**: Number of warmup observations dropped (`width - 1`)
 
 
 # %%
 def ffd_with_diagnostics(
-    series: pl.Series, d: float, threshold: float = 1e-5
+    series: pl.Series, d: float, threshold: float = FFD_THRESHOLD
 ) -> dict[str, pl.Series | int | float]:
     """
     Apply FFD and return transformed series with validity mask and diagnostics.
+
+    The library ``ffdiff`` is boundary-partial (no nulls). We recover the
+    full-window convention by nulling the first ``width - 1`` observations, where
+    ``width`` is the number of FFD weights - those rows are the warmup where the
+    fixed-width filter does not yet have a full lookback.
 
     Parameters
     ----------
@@ -149,32 +170,35 @@ def ffd_with_diagnostics(
     Returns
     -------
     dict with:
-        - transformed: FFD series
-        - valid: Boolean mask
-        - sample_loss: Number of NaN observations
+        - transformed: FFD series with warmup rows set to null
+        - valid: Boolean mask (True on full-window rows)
+        - sample_loss: Number of warmup observations dropped (width - 1)
         - d: The d value used
-        - n_weights: Number of FFD weights
+        - n_weights: Number of FFD weights (the window width)
     """
-    # Get weights to determine warmup period
+    # Get weights to determine the fixed window width / warmup period
     weights = get_ffd_weights(d, threshold=threshold)
-    n_weights = len(weights)
+    width = len(weights)
 
-    # Apply FFD
-    ffd_series = ffdiff(series, d=d, threshold=threshold)
+    # Apply the (boundary-partial) library FFD, then impose the full-window mask:
+    # the first width - 1 rows lack a complete lookback and are warmup.
+    arr = ffdiff(series, d=d, threshold=threshold).to_numpy().copy()
+    valid = np.zeros(len(arr), dtype=bool)
+    valid[width - 1 :] = True
+    valid &= ~np.isnan(arr)
+    arr[~valid] = np.nan
 
-    # Create validity mask
-    arr = ffd_series.to_numpy()
-    valid = ~np.isnan(arr)
+    sample_loss = int((~valid).sum())
 
-    # Count sample loss
-    sample_loss = np.sum(~valid)
-
+    # fill_nan(None) turns the warmup NaNs into proper Polars nulls so drop_nulls()
+    # and downstream mask-based filtering behave as expected (Polars keeps NaN and
+    # null distinct - drop_nulls does not drop NaN).
     return {
-        "transformed": ffd_series,
+        "transformed": pl.Series(series.name, arr).fill_nan(None),
         "valid": pl.Series("valid", valid),
         "sample_loss": sample_loss,
         "d": d,
-        "n_weights": n_weights,
+        "n_weights": width,
     }
 
 
@@ -243,42 +267,68 @@ grid_df = pd.DataFrame(
 display(grid_df)
 
 # %% [markdown]
+# The table reads top to bottom as the memory-stationarity tradeoff. As $d$ rises,
+# `corr_with_orig` falls **monotonically** - the transform keeps less of the
+# original level's memory - while the ADF p-value collapses toward zero. On this
+# SPY sample the series first tests stationary around $d \approx 0.3$, and the
+# equities default $d = 0.4$ is comfortably stationary while still retaining
+# roughly 0.8 correlation with the original level. Note also that a lower $d$ needs
+# a **wider** window (`n_weights`), so honest full-window handling drops more
+# warmup rows (`sample_loss`): stationarity and memory are both bought with data.
+
+# %% [markdown]
 # ## 5. Visualize FFD Weights
 #
-# FFD weights determine how much memory is preserved. Lower d = longer memory.
+# FFD weights determine how much memory is preserved. Every weight sequence starts
+# at $w_0 = 1$; the memory difference lives in the **tail**. Plotting the weight
+# magnitude on a log scale (skipping $w_0$) makes the decay rate visible: a lower
+# $d$ keeps larger weights on more distant lags, and its window (where the weights
+# finally fall below the truncation threshold) extends further into the past.
+
 
 # %%
-# Visualize weights for different d values
+# Blue -> copper gradient ordered by d (dark = low d / long memory, warm = high d).
+def _hex_gradient(c0: str, c1: str, n: int) -> list[str]:
+    lo = np.array([int(c0[i : i + 2], 16) for i in (1, 3, 5)])
+    hi = np.array([int(c1[i : i + 2], 16) for i in (1, 3, 5)])
+    out = []
+    for t in np.linspace(0, 1, n):
+        r, g, b = (lo + (hi - lo) * t).astype(int)
+        out.append(f"#{r:02x}{g:02x}{b:02x}")
+    return out
+
+
+d_colors = _hex_gradient(COLORS["blue"], COLORS["copper"], len(TEACHING_D_GRID))
+
+# Visualize weight magnitude (log scale) for different d values
 fig = go.Figure()
 
-for d in TEACHING_D_GRID:
-    weights = get_ffd_weights(d, threshold=1e-5)
+for d, color in zip(TEACHING_D_GRID, d_colors):
+    weights = get_ffd_weights(d, threshold=FFD_THRESHOLD)
+    # Skip w_0 = 1 (identical for every d); the memory difference is in the tail.
     fig.add_trace(
         go.Scatter(
-            x=list(range(len(weights))),
-            y=weights,
-            mode="lines+markers",
+            x=list(range(1, len(weights))),
+            y=np.abs(weights[1:]),
+            mode="lines",
             name=f"d={d}",
-            marker=dict(size=4),
+            line=dict(color=color, width=2),
         )
     )
 
 fig.update_layout(
     height=400,
-    title="FFD Weights by d Value",
-    xaxis_title="Lag (k)",
-    yaxis_title="Weight (w_k)",
-    # Cap x-axis at the first 100 lags — beyond that, weights decay below the
-    # 1e-5 threshold and the curves crawl along zero, compressing the visible
-    # decay structure near k=0 where the differences across d live.
-    xaxis=dict(range=[0, 100]),
+    title="Lower d keeps larger weights on more distant lags - the source of long memory",
+    xaxis_title="Lag k (trading days into the past)",
+    yaxis_title="|FFD weight w_k| (log scale)",
+    yaxis=dict(type="log"),
 )
 fig.show()
 
 # Weight counts
-print("\nWeight Counts (threshold=1e-5):")
+print(f"\nWeight Counts (threshold={FFD_THRESHOLD:.0e}):")
 for d in TEACHING_D_GRID:
-    weights = get_ffd_weights(d, threshold=1e-5)
+    weights = get_ffd_weights(d, threshold=FFD_THRESHOLD)
     print(f"  d={d}: {len(weights)} weights")
 
 # %% [markdown]
@@ -317,7 +367,7 @@ print()
 
 # %% [markdown]
 # The feature table below shows the last 10 valid rows. Note the `ffd_valid`
-# column — downstream ML pipelines should filter on this mask to exclude the
+# column - downstream ML pipelines should filter on this mask to exclude the
 # warmup period where FFD weights require more history than is available.
 
 # %%
@@ -368,10 +418,17 @@ for symbol, asset_class in ETF_ASSETS.items():
 
 # %% [markdown]
 # When building a mixed-portfolio feature set, different asset classes will have
-# different optimal d values. This is acceptable — each security's FFD features
+# different optimal d values. This is acceptable - each security's FFD features
 # use its own d, and the ML model learns from the resulting feature distributions.
 # Consistency within each security over time matters more than uniformity across
 # securities.
+#
+# The fixed asset-class d is a **starting point, not a guarantee**: at the equities
+# default d = 0.4 most names test stationary, but a few (e.g. QQQ and GLD on this
+# sample) still fail the ADF test at the 0.05 level. That is the expected cost of a
+# no-search rule - it trades a little per-symbol stationarity for robustness and
+# no lookahead. Symbols that need more differencing can be bumped one grid step,
+# still without searching on the full sample.
 
 # %%
 multi_df = pd.DataFrame([{"symbol": sym, **res} for sym, res in etf_ffd_results.items()])
@@ -383,7 +440,7 @@ display(multi_df)
 # %%
 # Compare original, returns, and FFD
 d_plot = ASSET_CLASS_D["equities"]
-ffd_series = ffdiff(spy["close"].log(), d=d_plot)
+ffd_series = ffdiff(spy["close"].log(), d=d_plot, threshold=FFD_THRESHOLD)
 
 fig = make_subplots(
     rows=3,
@@ -405,7 +462,15 @@ fig.add_trace(go.Scatter(x=dates[-n:], y=log_prices_arr[-n:], name="Log Price"),
 fig.add_trace(go.Scatter(x=dates[-n:], y=returns_arr[-n:], name="Returns"), row=2, col=1)
 fig.add_trace(go.Scatter(x=dates[-n:], y=ffd_arr[-n:], name="FFD"), row=3, col=1)
 
-fig.update_layout(height=600, title="Comparing Differentiation Methods")
+fig.update_yaxes(title_text="Log price", row=1, col=1)
+fig.update_yaxes(title_text="Daily return", row=2, col=1)
+fig.update_yaxes(title_text="FFD value", row=3, col=1)
+fig.update_xaxes(title_text="Date", row=3, col=1)
+fig.update_layout(
+    height=600,
+    showlegend=False,
+    title="Fractional differencing is stationary like returns but keeps slow-moving structure",
+)
 fig.show()
 
 # %% [markdown]
@@ -429,7 +494,7 @@ def find_d_walk_forward(
 ) -> dict[str, Any]:
     """Find the smallest $d$ on the grid that makes the series stationary.
 
-    Estimated on training data only — no leakage from the held-out tail. The
+    Estimated on training data only - no leakage from the held-out tail. The
     smallest stationary $d$ is the López de Prado convention: keep as much
     long-run dependence as the stationarity diagnostic allows.
     """
@@ -440,25 +505,25 @@ def find_d_walk_forward(
     d_grid = sorted(d_grid)
 
     for d in d_grid:
-        ffd_train = ffdiff(train_series, d=d)
-        clean = ffd_train.drop_nulls().to_numpy()
+        # Full-window masked FFD, consistent with the rest of the notebook.
+        result = ffd_with_diagnostics(train_series, d=d)
+        valid = cast(pl.Series, result["valid"]).to_numpy()
+        ffd = cast(pl.Series, result["transformed"]).to_numpy()
+        clean = ffd[valid]
 
         if len(clean) < 50:
             continue
 
         _, adf_pval, _, _, _, _ = adfuller(clean, autolag="AIC")
         if adf_pval < adf_threshold:
-            valid = ~np.isnan(ffd_train.to_numpy())
-            orig = train_series.to_numpy()[valid]
-            ffd = ffd_train.to_numpy()[valid]
-            corr = np.corrcoef(orig, ffd)[0, 1]
+            corr = np.corrcoef(train_series.to_numpy()[valid], clean)[0, 1]
             return {
                 "optimal_d": d,
                 "train_adf_pval": adf_pval,
                 "train_correlation": corr,
             }
 
-    # No d on the grid produced a stationary series — fall back to first differences.
+    # No d on the grid produced a stationary series - fall back to first differences.
     return {"optimal_d": 1.0, "train_adf_pval": float("nan"), "train_correlation": 0.0}
 
 
@@ -481,9 +546,11 @@ print(f"  Train ADF p-value: {wf_result['train_adf_pval']:.4f}")
 print(f"  Train correlation with original: {wf_result['train_correlation']:.4f}")
 print()
 
-# Apply to test data (out-of-sample)
+# Apply to test data (out-of-sample), same full-window masking
 test_series = spy["close"].log().tail(len(spy) - train_end)
-ffd_test = ffdiff(test_series, d=wf_result["optimal_d"])
+ffd_test = cast(
+    pl.Series, ffd_with_diagnostics(test_series, d=wf_result["optimal_d"])["transformed"]
+)
 clean_test = ffd_test.drop_nulls().to_numpy()
 
 if len(clean_test) > 50:
@@ -496,9 +563,18 @@ if len(clean_test) > 50:
 # ### ml4t-engineer: Automated d Selection and Diagnostics
 #
 # The manual walk-forward search above builds intuition for the
-# memory-stationarity tradeoff. For production use, `find_optimal_d()`
-# automates the grid search and `fdiff_diagnostics()` provides a
-# comprehensive diagnostic summary.
+# memory-stationarity tradeoff. `find_optimal_d()` automates the grid search and
+# `fdiff_diagnostics()` provides a comprehensive diagnostic summary.
+#
+# **Read these numbers against the convention.** These helpers use the library's
+# **boundary-partial** FFD directly - no validity mask - so their ADF test
+# includes the warmup rows produced by a partial filter. That makes the series
+# test stationary at a much smaller $d$ than the full-window analysis above
+# (Section 4 needed $d \approx 0.3$; `find_optimal_d` reports far less). The
+# boundary-partial answer is not wrong, it answers a different question: "how much
+# differencing makes the row-count-preserving transform stationary," warmup rows
+# included. For features fed to a model that will *drop* the warmup, prefer the
+# full-window value.
 
 # %%
 # find_optimal_d: automated grid search
@@ -522,16 +598,19 @@ print(f"Weight sum: {diag['weight_sum']:.4f}")
 
 # %% [markdown]
 # **Note**: For the recommended workflow, use **fixed d by asset class** (Section 2).
-# `find_optimal_d()` is a convenience for exploratory analysis — it searches the
-# full sample, so wrap it in a walk-forward scheme to avoid lookahead bias.
+# `find_optimal_d()` is a convenience for exploratory analysis - it searches the
+# full sample (wrap it in a walk-forward scheme to avoid lookahead bias) and uses
+# the boundary-partial convention (mask the warmup before trusting its d).
 
 # %% [markdown]
 # ## 10. Distribution Comparison
 
 # %%
-# Compare distributions of different transformations
+# Compare distributions of different transformations. Use the validity-masked FFD
+# so the warmup rows - produced by a partial filter and orders of magnitude larger
+# than the differenced values - do not distort the histogram.
 d_compare = ASSET_CLASS_D["equities"]
-ffd_compare = ffdiff(spy["close"].log(), d=d_compare)
+ffd_compare = cast(pl.Series, ffd_with_diagnostics(spy["close"].log(), d=d_compare)["transformed"])
 
 fig = make_subplots(
     rows=1,
@@ -547,14 +626,29 @@ fig.add_trace(go.Histogram(x=log_vals, nbinsx=50, name="Log Price"), row=1, col=
 fig.add_trace(go.Histogram(x=ret_vals, nbinsx=50, name="Returns"), row=1, col=2)
 fig.add_trace(go.Histogram(x=ffd_vals, nbinsx=50, name="FFD"), row=1, col=3)
 
-fig.update_layout(height=350, title="Distribution Comparison", showlegend=False)
+# Zero reference on returns, the one mean-zero transform. FFD (d=0.4) is stationary
+# but not mean-zero: finite-width truncation leaves a small residual level, so the
+# series centers near 0.4 rather than 0 - a reference at 0 would sit off the data.
+fig.add_vline(x=0, line=dict(color=COLORS["neutral"], dash="dash", width=1), row=1, col=2)
+
+fig.update_xaxes(title_text="Log price", row=1, col=1)
+fig.update_xaxes(title_text="Daily return", row=1, col=2)
+fig.update_xaxes(title_text="FFD value", row=1, col=3)
+fig.update_yaxes(title_text="Count", row=1, col=1)
+fig.update_layout(
+    height=350,
+    title="Raising d collapses wandering levels toward a memoryless spike; FFD sits in between",
+    showlegend=False,
+)
 fig.show()
 
 # %% [markdown]
-# **Finding**: The log price distribution (left) is multimodal and non-stationary.
-# Returns (center) are approximately symmetric with fat tails. The FFD series (right)
-# preserves more of the original series' shape than returns while achieving
-# stationarity — the key benefit of fractional differencing.
+# **Finding**: The log price distribution (left) is multimodal and wanders over a
+# wide range - the signature of non-stationarity. First-differencing all the way to
+# returns (center) collapses this to a tight, near-symmetric spike at zero: stationary,
+# but memoryless. FFD at $d = 0.4$ (right) is the intermediate case - a much narrower
+# distribution than the levels, yet still offset from zero and carrying the level
+# information that returns discard, while passing the stationarity test.
 
 # %% [markdown]
 # ---
@@ -577,16 +671,20 @@ fig.show()
 # | Commodities | 0.4 |
 # | FX | 0.35 |
 #
-# ### Note on Sample Loss
+# ### Note on Sample Loss and the Boundary Convention
 #
-# `ml4t.engineer.features.fdiff.ffdiff` applies truncated weights at the start
-# of the series rather than NaN-padding a warmup region. The feature is
-# therefore non-null from observation 0 — the diagnostic tables above show
-# `Sample Loss = 0` for every ETF. Classical FFD as described in López de Prado
-# (2018) drops the warmup explicitly. Choose the convention deliberately when
-# building features: the truncated form keeps every observation but the
-# earliest values use only a partial weight set, while the warmup-dropping
-# form discards them.
+# `ml4t.engineer.features.fdiff.ffdiff` is **boundary-partial**: it applies
+# truncated weights at the start rather than NaN-padding, so the raw feature is
+# non-null from observation 0 but the earliest values use only a partial weight
+# set. This notebook layers the classical **full-window** convention (López de
+# Prado, 2018) on top with an explicit validity mask: the first `width - 1` rows,
+# where `width` is the number of FFD weights, are the warmup and are dropped
+# before every diagnostic - hence the non-zero `Sample Loss` in the tables above
+# (e.g. 281 rows / 12.4% at d=0.4 on the SPY sample). Choose the convention
+# deliberately: the partial form keeps every observation, the full-window form
+# discards the warmup so no row relies on a shorter filter. All diagnostics here
+# use the full-window convention; the `find_optimal_d` helper in Section 9 does
+# not, which is exactly why it reports a smaller d.
 #
 # ### ml4t-engineer Functions
 #

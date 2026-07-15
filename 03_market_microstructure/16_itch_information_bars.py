@@ -52,6 +52,7 @@
 # %%
 """Information-Driven Bars: Formulas and Parameter Study — verifying AFML imbalance bar formulas and exploring parameter sensitivity."""
 
+import re
 import warnings
 from pathlib import Path
 
@@ -92,30 +93,36 @@ def load_trades(data_dir: Path, max_days: int = 10) -> tuple[pl.DataFrame | None
     dates = []
 
     for file_path in data_files:
-        date_str = file_path.name.split("-")[2].split(".")[0]
+        # Derive the date from the trailing 8-digit token so both file layouts
+        # work: Download Center `xnas-itch-YYYYMMDD.mbo.dbn.parquet` and API
+        # (`mbo_download.py`) `YYYYMMDD.parquet`.
+        date_str = re.search(r"(\d{8})", file_path.stem).group(1)
         trade_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
         dates.append(trade_date)
 
         df = pl.read_parquet(file_path)
-        ts_col = "ts_event" if "ts_event" in df.columns else "ts_recv"
+        # Prefer exchange event time; fall back across the two file layouts.
+        ts_col = next(c for c in ("timestamp", "ts_event", "ts_recv") if c in df.columns)
         df = df.select([ts_col, "action", "side", "price", "size"])
         df = df.with_columns(pl.col(ts_col).cast(pl.Datetime("ns")).alias("timestamp"))
         df = df.filter(pl.col("action") == "T")
-        # Filter to trading hours (9:30-16:00 ET)
-        # Note: This uses 13:30-21:00 UTC which covers both EDT (summer) and EST (winter).
-        # The conservative filter may include 15-30 min of pre/post market data depending
-        # on season. A robust solution would convert to America/New_York first.
-        df = df.filter(
-            (
-                (pl.col("timestamp").dt.hour() > 13)
-                | ((pl.col("timestamp").dt.hour() == 13) & (pl.col("timestamp").dt.minute() >= 30))
-            )
-            & (pl.col("timestamp").dt.hour() < 21)
+        # Regular trading hours (09:30-16:00 America/New_York). Convert the UTC
+        # instant to exchange-local time so the window is correct in both EDT and
+        # EST rather than admitting an hour of pre-market (as a fixed UTC window does).
+        _et = (
+            pl.col("timestamp").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York")
         )
+        df = df.filter(
+            ((_et.dt.hour() > 9) | ((_et.dt.hour() == 9) & (_et.dt.minute() >= 30)))
+            & (_et.dt.hour() < 16)
+        )
+        # Aggressor side for Trade (T) records: DataBento sets `side` to the trade
+        # aggressor — B = buy-initiated (+1), A = sell-initiated (-1). (The
+        # resting-order interpretation applies to Fill `F` records, not `T`.)
         df = df.with_columns(
-            pl.when(pl.col("side") == "A")
+            pl.when(pl.col("side") == "B")
             .then(1)
-            .when(pl.col("side") == "B")
+            .when(pl.col("side") == "A")
             .then(-1)
             .otherwise(0)
             .alias("side_num")

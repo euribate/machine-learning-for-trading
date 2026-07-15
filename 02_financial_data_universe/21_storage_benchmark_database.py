@@ -1,18 +1,19 @@
 # ---
 # jupyter:
 #   jupytext:
+#     cell_metadata_filter: tags,-all
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
 #     name: python3
 # ---
 
-# %% [markdown] papermill={"duration": 0.002264, "end_time": "2026-04-05T18:47:14.348860+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.346596+00:00", "status": "completed"}
+# %% [markdown]
 # # Storage Benchmark: Database Engines
 #
 # **Docker image**: `benchmark`
@@ -54,10 +55,10 @@
 # BENCHMARK_SCALE=L uv run python storage_benchmark_databases.py
 # ```
 
-# %% [markdown] papermill={"duration": 0.001744, "end_time": "2026-04-05T18:47:14.352749+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.351005+00:00", "status": "completed"}
+# %% [markdown]
 # ## Setup
 
-# %% papermill={"duration": 0.387845, "end_time": "2026-04-05T18:47:14.742264+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.354419+00:00", "status": "completed"}
+# %%
 """Storage Benchmark — Database engine comparison for financial time-series."""
 
 import contextlib
@@ -111,10 +112,10 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
 
-# %% [markdown] papermill={"duration": 0.001656, "end_time": "2026-04-05T18:47:14.745786+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.744130+00:00", "status": "completed"}
+# %% [markdown]
 # ## Check Available Databases
 
-# %% papermill={"duration": 0.229543, "end_time": "2026-04-05T18:47:14.976949+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.747406+00:00", "status": "completed"}
+# %%
 # Track benchmark status
 benchmark_status = {
     # Embedded (always available if package installed)
@@ -163,7 +164,7 @@ except ImportError:
     HAS_ARCTICDB = False
     print("○ ArcticDB: Not installed (x86-only — use the benchmark-full image)")
 
-# %% papermill={"duration": 0.1, "end_time": "2026-04-05T18:47:14.850000+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.750000+00:00", "status": "completed"}
+# %%
 # === Check Server Databases ===
 print("\n### Server Databases (Docker required)")
 
@@ -253,7 +254,7 @@ except Exception:
     HAS_POSTGRES = False
     print("[FAIL] PostgreSQL: Not available (start Docker)")
 
-# %% papermill={"duration": 0.01, "end_time": "2026-04-05T18:47:14.960000+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.950000+00:00", "status": "completed"}
+# %%
 # PyKX/kdb+ (IPC mode with external q process)
 HAS_PYKX = False
 Q_BINARY: Path | None = None
@@ -306,10 +307,10 @@ if n_servers == 0:
         "   docker compose --profile benchmark up -d timescaledb clickhouse questdb influxdb postgres"
     )
 
-# %% [markdown] papermill={"duration": 0.001799, "end_time": "2026-04-05T18:47:14.980817+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.979018+00:00", "status": "completed"}
+# %% [markdown]
 # ## Generate Test Data
 
-# %% papermill={"duration": 0.042695, "end_time": "2026-04-05T18:47:15.025187+00:00", "exception": false, "start_time": "2026-04-05T18:47:14.982492+00:00", "status": "completed"}
+# %%
 scale_cfg = get_scale_config(ACTIVE_SCALE)
 print(f"\nTarget: {scale_cfg['target_memory']} in-memory")
 print(f"OHLCV: {N_SYMBOLS} symbols × {N_ROWS_PER_SYMBOL:,} rows/symbol")
@@ -337,12 +338,12 @@ quotes_pandas = quotes_df.to_pandas()
 # Results collection
 results: list[BenchmarkResult] = []
 
-# %% [markdown] papermill={"duration": 0.00154, "end_time": "2026-04-05T18:47:15.029228+00:00", "exception": false, "start_time": "2026-04-05T18:47:15.027688+00:00", "status": "completed"}
+# %% [markdown]
 # ---
 # # Part 1: Embedded Databases
 # ---
 
-# %% [markdown] papermill={"duration": 0.001632, "end_time": "2026-04-05T18:47:15.032364+00:00", "exception": false, "start_time": "2026-04-05T18:47:15.030732+00:00", "status": "completed"}
+# %% [markdown]
 # ## SQLite (Embedded RDBMS)
 #
 # SQLite is an embedded relational database:
@@ -351,7 +352,7 @@ results: list[BenchmarkResult] = []
 # - Limited analytical query optimization
 # - No native ASOF join
 
-# %% papermill={"duration": 0.615305, "end_time": "2026-04-05T18:47:15.649225+00:00", "exception": false, "start_time": "2026-04-05T18:47:15.033920+00:00", "status": "completed"}
+# %%
 print("\n" + "=" * 70)
 print("SQLITE BENCHMARK")
 print("=" * 70)
@@ -416,7 +417,7 @@ print(f"  Read:  {read_time:.3f}s ({total_rows / read_time / 1e6:.2f}M rows/s)")
 print(f"  Aggregation: {agg_time:.3f}s ({len(agg_result):,} daily bars)")
 print("  Note: No native ASOF join")
 
-# %% [markdown] papermill={"duration": 0.002293, "end_time": "2026-04-05T18:47:15.653422+00:00", "exception": false, "start_time": "2026-04-05T18:47:15.651129+00:00", "status": "completed"}
+# %% [markdown]
 # ## DuckDB (Embedded Analytics)
 #
 # DuckDB is designed for analytical workloads (OLAP):
@@ -514,7 +515,7 @@ print(f"  Read:  {read_time:.3f}s ({total_rows / read_time / 1e6:.2f}M rows/s)")
 print(f"  Aggregation: {agg_time:.3f}s ({len(agg_result):,} daily bars)")
 print(f"  ASOF Join: {asof_time:.3f}s ({N_TICKS_TRADES / asof_time / 1e6:.2f}M trades/s)")
 
-# %% [markdown] papermill={"duration": 0.001821, "end_time": "2026-04-05T18:47:16.218340+00:00", "exception": false, "start_time": "2026-04-05T18:47:16.216519+00:00", "status": "completed"}
+# %% [markdown]
 # ## ArcticDB (Versioned DataFrames)
 #
 # ArcticDB is designed for versioned time-series storage:
@@ -582,12 +583,12 @@ if HAS_ARCTICDB:
 else:
     print("\nArcticDB benchmark skipped — install via the benchmark-full image (x86 only).")
 
-# %% [markdown] papermill={"duration": 0.001673, "end_time": "2026-04-05T18:47:16.231854+00:00", "exception": false, "start_time": "2026-04-05T18:47:16.230181+00:00", "status": "completed"}
+# %% [markdown]
 # ---
 # # Part 2: Server Databases (Docker Required)
 # ---
 
-# %% [markdown] papermill={"duration": 0.002357, "end_time": "2026-04-05T18:47:16.235952+00:00", "exception": false, "start_time": "2026-04-05T18:47:16.233595+00:00", "status": "completed"}
+# %% [markdown]
 # ## ClickHouse (OLAP Analytics)
 #
 # ClickHouse excels at:
@@ -699,7 +700,7 @@ if HAS_CLICKHOUSE:
 else:
     print("\n⊘ ClickHouse benchmark skipped")
 
-# %% [markdown] papermill={"duration": 0.001865, "end_time": "2026-04-05T18:47:16.522944+00:00", "exception": false, "start_time": "2026-04-05T18:47:16.521079+00:00", "status": "completed"}
+# %% [markdown]
 # ## QuestDB (High-Throughput Time-Series)
 #
 # QuestDB is optimized for:
@@ -777,7 +778,7 @@ if HAS_QUESTDB:
 else:
     print("\n⊘ QuestDB benchmark skipped")
 
-# %% [markdown] papermill={"duration": 0.003248, "end_time": "2026-04-05T18:47:19.949112+00:00", "exception": false, "start_time": "2026-04-05T18:47:19.945864+00:00", "status": "completed"}
+# %% [markdown]
 # ## TimescaleDB (PostgreSQL + Time-Series)
 #
 # TimescaleDB combines PostgreSQL with time-series optimizations:
@@ -1011,8 +1012,10 @@ if HAS_INFLUXDB:
     influx_token = DB_CONFIG["influxdb"]["token"]
     influx_bucket = DB_CONFIG["influxdb"]["bucket"]
 
+    # Read timeout in ms: the L-scale (1M-row) Flux read + aggregate/pivot queries
+    # take well over the client default, so allow several minutes before giving up.
     influx_client = InfluxDBClient(
-        url=influx_url, token=influx_token, org=influx_org, timeout=60_000
+        url=influx_url, token=influx_token, org=influx_org, timeout=600_000
     )
 
     # Recreate the bucket for a clean run
@@ -1131,7 +1134,7 @@ if HAS_INFLUXDB and benchmark_status["InfluxDB"]["tested"]:
 else:
     print("\n⊘ InfluxDB benchmark skipped")
 
-# %% [markdown] papermill={"duration": 0.004298, "end_time": "2026-04-05T18:47:21.061717+00:00", "exception": false, "start_time": "2026-04-05T18:47:21.057419+00:00", "status": "completed"}
+# %% [markdown]
 # ## kdb+/PyKX (HFT Industry Standard)
 #
 # kdb+ is the industry standard for high-frequency trading:
@@ -1253,7 +1256,7 @@ if HAS_PYKX and benchmark_status["kdb+/PyKX"]["tested"]:
 else:
     print("\n⊘ kdb+/PyKX benchmark skipped")
 
-# %% [markdown] papermill={"duration": 0.001927, "end_time": "2026-04-05T18:47:21.081995+00:00", "exception": false, "start_time": "2026-04-05T18:47:21.080068+00:00", "status": "completed"}
+# %% [markdown]
 # ---
 # # Results Summary
 # ---

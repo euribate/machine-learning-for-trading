@@ -45,6 +45,7 @@ import polars as pl
 
 # ARCH library
 from arch import arch_model
+from arch.univariate.base import DataScaleWarning
 from IPython.display import display
 
 # ml4t libraries
@@ -65,6 +66,11 @@ from statsmodels.graphics.tsaplots import plot_acf
 from statsmodels.stats.diagnostic import het_arch
 
 warnings.filterwarnings("ignore", category=FutureWarning)
+# A handful of low-volatility symbols in the multi-symbol GARCH loop sit below
+# arch's preferred scale even after the ×100 return scaling in
+# load_symbol_returns; the fits still converge, so silence the advisory rescale
+# warning to keep committed output clean (fitted parameters are unaffected).
+warnings.filterwarnings("ignore", category=DataScaleWarning)
 
 from data import load_etfs
 from utils.paths import get_case_study_dir
@@ -539,9 +545,10 @@ ax.legend()
 
 ax = axes[2]
 ax.fill_between(vf_pd.index, 0, vf_pd["vol_pctile"], alpha=0.4, label="Vol Percentile Rank")
-ax.axhline(0.8, color="red", linestyle="--", linewidth=0.5, label="80th percentile")
+ax.axhline(80, color="red", linestyle="--", linewidth=0.5, label="80th percentile")
+ax.set_ylim(0, 100)
 ax.set_title("Volatility Percentile Rank (60-Day Window)")
-ax.set_ylabel("Percentile")
+ax.set_ylabel("Percentile (0-100)")
 ax.legend()
 
 plt.tight_layout()
@@ -552,7 +559,7 @@ plt.show()
 # Realized vol is noisy but unbiased; EWMA provides smooth exponential decay;
 # GARCH adapts to the persistence structure. Vol-of-vol spikes during regime
 # transitions (COVID, 2022 rate hikes), while the percentile rank maps volatility
-# to a stationary [0, 1] scale useful as a direct ML feature.
+# to a stationary 0-100 scale useful as a direct ML feature.
 
 # %% [markdown]
 # ## Save Volatility Forecasts for Downstream Chapters

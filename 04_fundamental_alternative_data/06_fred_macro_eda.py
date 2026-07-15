@@ -368,9 +368,9 @@ macro_filled = macro.with_columns(
 # A combined view of key macro indicators helps identify regime changes.
 
 # %%
-# Build the three-panel macro dashboard in a SINGLE cell so the inline
-# backend does not capture progressive-render intermediates with only the
-# first panel populated (feedback_split_cell_figure_bug).
+# Build the three-panel macro dashboard in a single cell so the inline
+# renderer captures the fully populated figure rather than a partial,
+# first-panel-only intermediate.
 fig = make_subplots(
     rows=3,
     cols=1,
@@ -468,7 +468,7 @@ print("  - Use together for regime detection in Chapter 8")
 # 1. **Mixed frequencies**: Economic data releases daily, weekly, or monthly
 # 2. **Forward-fill for PIT**: Prevents lookahead bias in feature construction
 # 3. **Pre-computed spreads**: Yield curve slopes ready for regime detection
-# 4. **21 series**: Treasury, credit, volatility, labor market indicators
+# 4. **25 series**: Treasury, credit, volatility, labor market indicators
 #
 # ### Next Steps
 #

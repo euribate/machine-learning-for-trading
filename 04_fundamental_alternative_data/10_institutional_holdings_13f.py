@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -66,6 +66,7 @@ import polars as pl
 
 from data import load_13f_bulk_holdings
 from utils.paths import get_output_dir
+from utils.style import COLORS  # importing utils.style activates the ml4t Plotly template
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -208,19 +209,23 @@ widely_held.sort("total_value", descending=True).head(20).select(
 
 # %%
 fig = px.bar(
-    widely_held.head(15).to_pandas(),
+    # Cast the manager count to a signed int so Plotly renders a continuous
+    # color axis (a uint column is treated as categorical → off-palette hues).
+    widely_held.head(15).with_columns(pl.col("num_managers").cast(pl.Int64)).to_pandas(),
     x="issuer",
     y="total_value",
     color="num_managers",
-    title=f"Top 15 Holdings Across {TOP_N} Largest Institutional Managers",
+    title="Institutional ownership concentrates in a handful of megacaps",
     labels={
-        "total_value": "Total Value ($)",
+        "total_value": "Aggregate reported 13F value (USD)",
         "issuer": "Company",
-        "num_managers": "# Managers",
+        "num_managers": "Managers holding",
     },
-    color_continuous_scale="Blues",
+    color_continuous_scale=[COLORS["silver_muted"], COLORS["blue"]],
 )
-fig.update_layout(xaxis_tickangle=45, template="plotly_white")
+# The rotated ticks are the company names, so the axis title is redundant;
+# extra bottom/right margin keeps the longest label from clipping.
+fig.update_layout(xaxis_tickangle=45, xaxis_title=None, margin=dict(b=150, r=120))
 fig.show()
 
 # %% [markdown]

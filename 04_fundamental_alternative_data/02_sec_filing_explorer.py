@@ -18,7 +18,7 @@
 #
 # **Chapter 4: Fundamental and Alternative Data**
 # **Docker image**: `ml4t`
-# **Section Reference**: Section 4.2 (Entity Resolution and Mapping)
+# **Section Reference**: Section 4.1 (The EDGAR Sourcing Pipeline)
 #
 # ## Purpose
 #
@@ -66,12 +66,17 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
+import plotly.graph_objects as go
 import polars as pl
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
 # %%
 from edgar import Company, find, get_filings, set_identity
+
+# Importing utils.style registers and activates the ML4T Plotly template
+# (house palette, fonts, gridlines) so figures inherit the book style.
+from utils.style import COLORS
 
 # SEC requires a real User-Agent (name + email) for every request and blocks
 # placeholder addresses. Set `EDGAR_IDENTITY` in your environment, e.g.
@@ -327,12 +332,57 @@ holdings_df = holdings.holdings
 top_holdings = holdings_df.nlargest(20, "Value")[["Issuer", "Class", "Value", "SharesPrnAmount"]]
 top_holdings
 
+# %% [markdown]
+# ### 5.1 Portfolio Concentration
+#
+# Expressing each position as a share of total reported value shows how much of the
+# portfolio the largest holdings command. A 13F is a natural starting point for
+# concentration and crowding analysis, and Berkshire's is famously top-heavy.
+
 # %%
-# Express each position as a share of total portfolio value.
-holdings_pl = pl.from_pandas(holdings_df).with_columns(
-    (pl.col("Value") / pl.col("Value").sum() * 100).alias("pct_portfolio")
+# Share of total reported 13F value held by each of the ten largest positions.
+# Aggregate by issuer first so multiple share classes of one name combine.
+concentration = (
+    pl.from_pandas(holdings_df)
+    .group_by("Issuer")
+    .agg(pl.col("Value").sum())
+    .with_columns((pl.col("Value") / pl.col("Value").sum() * 100).alias("pct_portfolio"))
+    .sort("pct_portfolio", descending=True)
+    .head(10)
 )
-holdings_pl.select(["Issuer", "Value", "pct_portfolio"]).head(10)
+
+pct = concentration["pct_portfolio"].to_list()
+issuers = [name.title() for name in concentration["Issuer"].to_list()]
+top3, top4 = sum(pct[:3]), sum(pct[:4])
+
+# Emphasise the three largest positions in amber; the rest provide context in blue.
+bar_colors = [COLORS["amber"] if i < 3 else COLORS["blue"] for i in range(len(issuers))]
+
+fig = go.Figure(
+    go.Bar(
+        x=pct,
+        y=issuers,
+        orientation="h",
+        marker_color=bar_colors,
+        text=[f"{p:.1f}%" for p in pct],
+        textposition="outside",
+        cliponaxis=False,  # keep the outside label on the largest bar from clipping
+    )
+)
+fig.update_layout(
+    title=dict(
+        text="Berkshire's Top Three Positions Dominate Its 13F Portfolio"
+        f"<br><sup>As of {holdings.report_period}: top 3 = {top3:.0f}%, "
+        f"top 4 = {top4:.0f}% of reported value</sup>",
+    ),
+    xaxis_title="Share of Reported 13F Value (%)",
+    xaxis=dict(range=[0, max(pct) * 1.12]),  # headroom for the outside data labels
+    yaxis_title="",
+    yaxis=dict(autorange="reversed"),  # largest position at the top
+    margin=dict(l=160, r=40, t=70, b=55),  # room for long issuer names
+    height=430,
+)
+fig.show()
 
 # %% [markdown]
 # ---

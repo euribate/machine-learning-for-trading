@@ -120,10 +120,14 @@ print(f"Loaded {len(filings):,} MD&A sections from {filings['symbol'].n_unique()
 print(f"Date range: {filings['filing_date'].min()} to {filings['filing_date'].max()}")
 
 if MAX_SYMBOLS > 0:
+    # Break ties on filing count by symbol so the selected universe is stable
+    # across runs — group_by returns rows in a nondeterministic order, so a
+    # sort on `len` alone would pick different symbols at the 50-symbol cutoff
+    # each run, shifting every downstream statistic.
     top_symbols = (
         filings.group_by("symbol")
         .len()
-        .sort("len", descending=True)
+        .sort(["len", "symbol"], descending=[True, False])
         .head(MAX_SYMBOLS)["symbol"]
         .to_list()
     )
@@ -133,6 +137,21 @@ if MAX_SYMBOLS > 0:
 if MAX_FILINGS > 0 and len(filings) > MAX_FILINGS:
     filings = filings.sort(["filing_date", "symbol"]).head(MAX_FILINGS)
     print(f"Reduced to first {MAX_FILINGS} filings for test run")
+
+# One MD&A signal per (symbol, filing_date). A few firms file multiple quarters'
+# 10-Qs on the same date (late/catch-up filers, e.g. KHC on 2017-11-07 filed three).
+# The investable event is the filing date, so keep the current quarter (latest
+# period_end). Without this, both the sentiment and narrative-change tables carry
+# duplicate keys and the section-4 join fans out on both sides, double-counting
+# those firms in the reported information coefficients.
+n_before = len(filings)
+filings = filings.sort(["symbol", "filing_date", "period_end"]).unique(
+    subset=["symbol", "filing_date"], keep="last", maintain_order=True
+)
+if len(filings) < n_before:
+    print(
+        f"Collapsed {n_before - len(filings)} same-date multi-quarter filings -> {len(filings):,}"
+    )
 
 # Compute MD&A word count from the canonical `text` column.
 filings = filings.with_columns(pl.col("text").str.split(" ").list.len().alias("word_count"))
@@ -177,7 +196,7 @@ fig.show()
 # ## 2. FinBERT Sentiment Scoring
 #
 # FinBERT processes text at the sentence level (max 512 tokens). For long MD&A sections
-# (median ~6,000 words), we use a chunking strategy:
+# (median ~7,800 words), we use a chunking strategy:
 #
 # 1. Split MD&A into sentences
 # 2. Score each sentence with FinBERT (positive/negative/neutral probabilities)
@@ -212,7 +231,7 @@ print("FinBERT loaded")
 # %% [markdown]
 # ### Chunking Strategy
 #
-# MD&A sections average ~6,000 words but FinBERT accepts only 512 tokens (~380 words).
+# MD&A sections average ~9,500 words but FinBERT accepts only 512 tokens (~380 words).
 # We split into paragraphs and score each one, then aggregate.
 
 
@@ -633,6 +652,36 @@ if ic_results:
     )
 else:
     print("Insufficient data for IC computation (need more symbols/filings)")
+
+# %% [markdown]
+# The point estimates with their 95% cluster-bootstrap confidence intervals,
+# charted so the signal-horizon pairs whose intervals exclude zero stand out at a
+# glance rather than having to be read off the table above.
+
+# %%
+if len(ic_summary) > 0:
+    signals = ic_summary["signal"].unique(maintain_order=True).to_list()
+    horizons = ic_summary["horizon"].unique(maintain_order=True).to_list()
+    x = np.arange(len(signals))
+    width = 0.8 / max(len(horizons), 1)
+    fig, ax = plt.subplots(figsize=(max(8.0, 1.6 * len(signals)), 5))
+    for i, h in enumerate(horizons):
+        by_sig = {
+            r["signal"]: r for r in ic_summary.filter(pl.col("horizon") == h).iter_rows(named=True)
+        }
+        ic = np.array([by_sig.get(s, {}).get("ic", np.nan) for s in signals], dtype=float)
+        lo = np.array([by_sig.get(s, {}).get("ci95_lo", np.nan) for s in signals], dtype=float)
+        hi = np.array([by_sig.get(s, {}).get("ci95_hi", np.nan) for s in signals], dtype=float)
+        yerr = np.nan_to_num(np.vstack([ic - lo, hi - ic]), nan=0.0)
+        ax.bar(x + i * width, np.nan_to_num(ic), width, yerr=yerr, capsize=3, label=h)
+    ax.axhline(0, color="black", linewidth=0.8)
+    ax.set_xticks(x + width * (len(horizons) - 1) / 2)
+    ax.set_xticklabels(signals, rotation=30, ha="right")
+    ax.set_ylabel("Rank IC (pooled Spearman)")
+    ax.set_title("Filing-text signal ICs with 95% cluster-bootstrap CIs")
+    ax.legend(title="Horizon")
+    fig.tight_layout()
+    fig.show()
     ic_summary = pl.DataFrame()
 
 # %% [markdown]
@@ -732,7 +781,7 @@ if len(ic_summary) > 0:
 # ## Key Takeaways
 #
 # 1. **SEC filings provide dense, structured text** with natural PIT anchoring via filing dates.
-#    MD&A sections average ~6,000 words per quarter — far richer than news headlines.
+#    MD&A sections average ~9,500 words per quarter — far richer than news headlines.
 #
 # 2. **Chunking is essential for transformer models** that have 512-token limits.
 #    Mean-pooled paragraph-level scores approximate full-document analysis.

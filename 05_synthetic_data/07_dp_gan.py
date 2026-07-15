@@ -636,7 +636,7 @@ def evaluate_quality(real: np.ndarray, synthetic: np.ndarray) -> dict:
 quality = evaluate_quality(real_data[:N_GENERATE], synthetic_data)
 
 # %% [markdown]
-# ## 8. Visualize Training and Results
+# ## 9. Visualize Training and Results
 
 # %%
 # Training curves with privacy tracking
@@ -753,7 +753,7 @@ fig.show()
 # volatility), which require more training signal than the privacy budget allows.
 
 # %% [markdown]
-# ## 9. Privacy-Utility Trade-off Analysis
+# ## 10. Privacy-Utility Trade-off Analysis
 #
 # Let's see how different privacy budgets affect synthetic data quality.
 
@@ -839,23 +839,37 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# **Interpretation**: The trade-off curves quantify the fundamental tension in differential
-# privacy: stronger guarantees (lower epsilon) require more noise per gradient step, which
-# degrades the generator's ability to learn distributional structure. The log-scale x-axis
-# reveals that quality improvements are roughly logarithmic in epsilon -- doubling the privacy
-# budget from 5 to 10 yields far less improvement than doubling from 1 to 2. For financial
-# applications, this means practitioners must decide: is the marginal quality gain from
-# epsilon=50 vs. epsilon=10 worth the weaker privacy guarantee? In regulated settings
-# (e.g., sharing client trading data), epsilon <= 10 is typically the ceiling.
+# **Interpretation**: The trade-off reflects the fundamental tension in differential privacy:
+# stronger guarantees (lower epsilon) require more noise per gradient step, which degrades the
+# generator's ability to learn distributional structure. That tension shows up here as one
+# large, robust effect and a great deal of noise around it. The robust effect is the very tight
+# budget: at epsilon=1 the mean absolute difference is 7.5, roughly five times the value at any
+# looser budget, so a strict privacy requirement clearly and severely degrades marginal fidelity.
+# Among the moderate-to-weak budgets, however, the mean absolute difference collapses into a
+# narrow band -- 1.46 at epsilon=5, 1.55 at epsilon=10, and 1.35 at epsilon=50 -- with no clean
+# ordering (epsilon=10 is marginally the worst of the three) and the correlation distance stays
+# essentially flat (0.12-0.15) across the whole sweep. Differences that small are within the
+# run-to-run variance of a single 10-epoch training run per budget: the sweep is too short and
+# unreplicated to resolve a monotonic curve, and reading a smooth "quality improves with epsilon"
+# trend into this nearly flat, slightly jagged line would over-interpret the noise. The honest
+# lesson is that the dominant, reproducible cost lands in the strict-privacy regime (epsilon
+# around 1); the moderate budgets are effectively indistinguishable at this training scale, and
+# separating them would require averaging several independent runs per epsilon, not a single
+# pass. In regulated settings (e.g., sharing client trading data), epsilon <= 10 is a common
+# ceiling on the privacy budget regardless of where the utility optimum sits.
 
 # %% [markdown]
 # ## Key Takeaways
 #
-# 1. **Privacy-utility tradeoff is fundamental**: Stronger privacy guarantees (lower
-#    epsilon) inject more noise into gradients, degrading synthetic data quality. The
-#    tradeoff is roughly logarithmic -- quality improves rapidly from epsilon=1 to 10
-#    but plateaus beyond that. For financial applications, epsilon in the 5-10 range
-#    typically offers a practical balance.
+# 1. **Privacy-utility tradeoff is real but dominated by the strict-privacy regime**:
+#    Stronger privacy guarantees (lower epsilon) inject more noise into gradients,
+#    degrading synthetic data quality. In this sweep the effect is large and clear at
+#    epsilon=1 (mean absolute difference 7.5, roughly five times any looser budget) but
+#    the moderate budgets collapse into a narrow band (1.46, 1.55, 1.35 at epsilon=5, 10,
+#    50) with no clean ordering, and the correlation distance stays flat across the sweep.
+#    A single 10-epoch run per budget is too noisy to resolve a monotonic curve; the robust
+#    takeaway is that a very tight budget is costly, while separating moderate budgets would
+#    require averaging several runs each.
 #
 # 2. **Per-sample gradients via Opacus are essential**: Standard PyTorch clips the
 #    *batch* gradient, which does not bound any individual sample's contribution.

@@ -48,25 +48,37 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
+import plotly.graph_objects as go
 import polars as pl
+from plotly.subplots import make_subplots
 
 from data import load_cme_futures
 from utils import ML4T_DATA_PATH
-from utils.paths import get_chapter_dir
+from utils.paths import REPO_ROOT, get_chapter_dir
+from utils.style import COLORS, ml4t_palette
 
-# Output path for session-aggregated daily data. Default writes to a
-# chapter-local directory; set WRITE_TO_DATA=1 to materialize the canonical
-# daily parquet under ML4T_DATA_PATH for downstream notebooks.
+
+def _rel(path):
+    """Repo-relative display path (keeps absolute machine paths out of outputs)."""
+    try:
+        return path.relative_to(REPO_ROOT)
+    except ValueError:
+        return path
+
+
+# %% tags=["parameters"]
+# WRITE_TO_DATA=1 materializes the canonical daily parquet under ML4T_DATA_PATH
+# for the downstream chapters and case studies; the default (0) writes to a
+# chapter-local output dir so a demo run never overwrites production data.
 WRITE_TO_DATA = os.environ.get("WRITE_TO_DATA", "0") == "1"
+
+# %%
+# Output path for the session-aggregated daily data, selected by WRITE_TO_DATA.
 OUTPUT_DIR = (
     ML4T_DATA_PATH / "futures" / "market" / "continuous" / "daily"
     if WRITE_TO_DATA
     else get_chapter_dir(2) / "output" / "futures_daily"
 )
-
-
-# %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
 
 # %% [markdown]
 # ## 1. CME Session Boundaries
@@ -229,6 +241,50 @@ hourly_with_sessions.filter(pl.col("product") == "ES").select(
 )
 
 # %% [markdown]
+# The same point is clearer on the tape. Below, four days of ES front-month
+# hourly closes are colored by the session each bar belongs to, in Central Time.
+# The Friday session ends at 16:00 CT; there is no Saturday session; trading
+# reopens Sunday 17:00 CT — and those Sunday-evening bars carry **Monday's**
+# color, not Sunday's. Calendar day and session date part ways every weekend.
+
+# %%
+_boundary_window = (
+    hourly_with_sessions.filter(
+        (pl.col("product") == "ES")
+        & (pl.col("tenor") == 0)
+        & (pl.col("timestamp").dt.date() >= pl.lit("2024-01-05").str.to_date())
+        & (pl.col("timestamp").dt.date() <= pl.lit("2024-01-09").str.to_date())
+    )
+    .with_columns(pl.col("timestamp").dt.convert_time_zone("America/Chicago").alias("ts_ct"))
+    .sort("timestamp")
+)
+
+_sessions = _boundary_window["session_date"].unique().sort().to_list()
+_session_colors = dict(zip(_sessions, ml4t_palette(len(_sessions), categorical=True)))
+
+fig = go.Figure()
+for sess in _sessions:
+    seg = _boundary_window.filter(pl.col("session_date") == sess)
+    fig.add_trace(
+        go.Scatter(
+            x=seg["ts_ct"].to_list(),
+            y=seg["close"].to_list(),
+            mode="lines+markers",
+            line=dict(color=_session_colors[sess], width=1.5),
+            marker=dict(size=5),
+            name=str(sess),
+        )
+    )
+fig.update_layout(
+    title="One color per CME session: Sunday-evening bars belong to Monday",
+    xaxis_title="Timestamp (Central Time)",
+    yaxis_title="ES front-month close",
+    height=420,
+    legend_title="Session date",
+)
+fig.show()
+
+# %% [markdown]
 # ## 3b. Ratio Back-Adjustment
 #
 # Databento's continuous contracts are **unadjusted** — price gaps at roll transitions
@@ -273,8 +329,14 @@ roll_ratios = rolls.select(
 print(f"Roll transitions detected: {len(roll_ratios)}")
 print(f"Products with rolls: {roll_ratios['product'].n_unique()}")
 
-es_rolls = roll_ratios.filter(pl.col("product") == "ES").sort("timestamp")
-print(f"ES roll ratios ({len(es_rolls)} rolls):")
+# Front month (tenor 0) only — its ~quarterly rolls are what the adjusted
+# front-month series below is built from. Deferred tenors roll far more often
+# (thin volume flips leadership back and forth), so mixing tenors here would
+# overstate the front-month roll count.
+es_rolls = roll_ratios.filter((pl.col("product") == "ES") & (pl.col("tenor") == 0)).sort(
+    "timestamp"
+)
+print(f"ES front-month roll ratios ({len(es_rolls)} rolls):")
 es_rolls.select("timestamp", "ratio").head(10)
 
 # %% [markdown]
@@ -333,13 +395,28 @@ for i, row in enumerate(products_tenors.iter_rows(named=True)):
 
 hourly_adjusted = pl.concat(adjusted_groups)
 
-# Apply ratio adjustment to OHLC (multiply, not add)
+# Emit two explicit price series and NO bare OHLC. Ratio adjustment preserves
+# within-tenor *returns* but distorts price *levels*: differencing adjusted
+# tenor-0/tenor-1 levels reads accumulated roll history, not the curve. Every
+# downstream consumer must name which series it wants:
+#   - adj_* (returns / momentum / volatility / labels — roll-continuous)
+#   - raw_* (carry / term structure / roll yield / notional / costs — contemporaneous)
+# cum_ratio is carried through so the two are reconcilable (adj_close == raw_close * cum_ratio).
+# Dropping bare open/high/low/close makes the adjusted-vs-raw choice impossible to skip.
 hourly_adjusted = hourly_adjusted.with_columns(
-    (pl.col("open") * pl.col("_cumulative_ratio")).alias("open"),
-    (pl.col("high") * pl.col("_cumulative_ratio")).alias("high"),
-    (pl.col("low") * pl.col("_cumulative_ratio")).alias("low"),
-    (pl.col("close") * pl.col("_cumulative_ratio")).alias("close"),
+    pl.col("open").alias("raw_open"),
+    pl.col("high").alias("raw_high"),
+    pl.col("low").alias("raw_low"),
+    pl.col("close").alias("raw_close"),
 )
+
+# Adjusted OHLC (multiply by cumulative ratio, not add).
+hourly_adjusted = hourly_adjusted.with_columns(
+    (pl.col("open") * pl.col("_cumulative_ratio")).alias("adj_open"),
+    (pl.col("high") * pl.col("_cumulative_ratio")).alias("adj_high"),
+    (pl.col("low") * pl.col("_cumulative_ratio")).alias("adj_low"),
+    (pl.col("close") * pl.col("_cumulative_ratio")).alias("adj_close"),
+).drop("open", "high", "low", "close")
 
 print(f"\nRatio adjustment applied to {len(hourly_adjusted):,} hourly bars")
 
@@ -352,19 +429,95 @@ print(
     f"{es_adj['_cumulative_ratio'].min():.4f} to {es_adj['_cumulative_ratio'].max():.4f}"
 )
 
-# Replace hourly_with_sessions with adjusted data for downstream aggregation
-hourly_with_sessions = hourly_adjusted.drop(
-    "_prev_instrument_id", "_prev_close", "_cumulative_ratio"
+# %% [markdown]
+# The adjustment is easiest to see side by side. The top panel plots the raw
+# (unadjusted) ES front-month close against the ratio-adjusted series; the two
+# coincide at the right edge (recent prices are the anchor) and separate going
+# back in time as each roll's ratio compounds. The bottom panel is that
+# cumulative multiplier — every downward step is a roll where the new contract
+# opened below the old one's close. Raw prices carry those roll gaps as spurious
+# returns; the adjusted series does not.
+
+# %%
+es_adj_daily = (
+    es_adj.group_by("session_date")
+    .agg(
+        pl.col("raw_close").last(),
+        pl.col("adj_close").last(),
+        pl.col("_cumulative_ratio").last().alias("cum_ratio"),
+    )
+    .sort("session_date")
+)
+_x = es_adj_daily["session_date"].to_list()
+
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    row_heights=[0.68, 0.32],
+    vertical_spacing=0.06,
+)
+fig.add_trace(
+    go.Scatter(
+        x=_x,
+        y=es_adj_daily["raw_close"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["copper"], width=1),
+        name="Raw (unadjusted)",
+    ),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(
+        x=_x,
+        y=es_adj_daily["adj_close"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["blue"], width=1),
+        name="Ratio-adjusted",
+    ),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(
+        x=_x,
+        y=es_adj_daily["cum_ratio"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["slate"], width=1),
+        name="Cumulative ratio",
+        showlegend=False,
+    ),
+    row=2,
+    col=1,
+)
+fig.add_hline(y=1.0, line=dict(color=COLORS["neutral"], width=1, dash="dot"), row=2, col=1)
+fig.update_layout(
+    title="ES front month: ratio back-adjustment removes roll gaps",
+    height=560,
+    legend_title="Price series",
+)
+fig.update_yaxes(title_text="Price", row=1, col=1)
+fig.update_yaxes(title_text="Cumulative ratio", row=2, col=1)
+fig.update_xaxes(title_text="Session date", row=2, col=1)
+fig.show()
+
+# %%
+# Replace hourly_with_sessions with adjusted data for downstream aggregation.
+# Keep the cumulative ratio (as cum_ratio) so raw and adjusted stay reconcilable.
+hourly_with_sessions = hourly_adjusted.drop("_prev_instrument_id", "_prev_close").rename(
+    {"_cumulative_ratio": "cum_ratio"}
 )
 
 # %% [markdown]
 # ## 4. Aggregate to Daily OHLCV
 #
-# Aggregate hourly bars to daily using session boundaries:
-# - **Open**: First bar's open (ratio-adjusted)
-# - **High**: Maximum high (ratio-adjusted)
-# - **Low**: Minimum low (ratio-adjusted)
-# - **Close**: Last bar's close (ratio-adjusted)
+# Aggregate hourly bars to daily using session boundaries. Both the adjusted
+# (`adj_*`) and raw (`raw_*`) series are aggregated the same way:
+# - **Open**: First bar's open
+# - **High**: Maximum high
+# - **Low**: Minimum low
+# - **Close**: Last bar's close
 # - **Volume**: Sum of all volumes
 
 # %%
@@ -374,10 +527,15 @@ daily = (
     .group_by(["session_date", "product", "tenor"])
     .agg(
         [
-            pl.col("open").first(),
-            pl.col("high").max(),
-            pl.col("low").min(),
-            pl.col("close").last(),
+            pl.col("adj_open").first(),
+            pl.col("adj_high").max(),
+            pl.col("adj_low").min(),
+            pl.col("adj_close").last(),
+            pl.col("raw_open").first(),
+            pl.col("raw_high").max(),
+            pl.col("raw_low").min(),
+            pl.col("raw_close").last(),
+            pl.col("cum_ratio").last(),
             pl.col("volume").sum(),
             pl.len().alias("bar_count"),
             pl.col("timestamp").min().alias("session_start"),
@@ -394,7 +552,9 @@ print(f"Session date range: {daily['session_date'].min()} to {daily['session_dat
 # %%
 es_daily = daily.filter((pl.col("product") == "ES") & (pl.col("tenor") == 0))
 print("ES front month daily bars (first 20 sessions):")
-es_daily.select("session_date", "open", "high", "low", "close", "volume", "bar_count").head(20)
+es_daily.select(
+    "session_date", "adj_open", "adj_high", "adj_low", "adj_close", "volume", "bar_count"
+).head(20)
 
 # %% [markdown]
 # ## 5. Validate Aggregation
@@ -407,17 +567,45 @@ es_daily.select("session_date", "open", "high", "low", "close", "volume", "bar_c
 bar_counts = daily.group_by("bar_count").len().sort("bar_count")
 typical_sessions = daily.filter(pl.col("bar_count").is_between(20, 24))
 print(f"Typical sessions (20-24 bars): {len(typical_sessions):,} / {len(daily):,}")
-print("Bar counts per session:")
-bar_counts
+
+# Highlight the modal (most common) bucket; a full 23-hour session dominates.
+_modal_bars = bar_counts.sort("len", descending=True)["bar_count"][0]
+fig = go.Figure(
+    go.Bar(
+        x=bar_counts["bar_count"].to_list(),
+        y=bar_counts["len"].to_list(),
+        marker_color=[
+            COLORS["amber"] if bc == _modal_bars else COLORS["slate"]
+            for bc in bar_counts["bar_count"].to_list()
+        ],
+    )
+)
+fig.add_annotation(
+    x=_modal_bars,
+    y=bar_counts.filter(pl.col("bar_count") == _modal_bars)["len"][0],
+    text=f"{_modal_bars}-hour session",
+    showarrow=True,
+    arrowhead=2,
+    yshift=6,
+)
+fig.update_layout(
+    title="Hourly bars per session: the full 23-hour day dominates",
+    xaxis_title="Hourly bars in the session",
+    yaxis_title="Number of daily bars",
+    height=420,
+    showlegend=False,
+    xaxis=dict(dtick=2),
+)
+fig.show()
 
 # %%
 # OHLC invariant check
 ohlc_check = daily.with_columns(
     [
-        (pl.col("low") <= pl.col("open")).alias("low_le_open"),
-        (pl.col("low") <= pl.col("close")).alias("low_le_close"),
-        (pl.col("high") >= pl.col("open")).alias("high_ge_open"),
-        (pl.col("high") >= pl.col("close")).alias("high_ge_close"),
+        (pl.col("adj_low") <= pl.col("adj_open")).alias("low_le_open"),
+        (pl.col("adj_low") <= pl.col("adj_close")).alias("low_le_close"),
+        (pl.col("adj_high") >= pl.col("adj_open")).alias("high_ge_open"),
+        (pl.col("adj_high") >= pl.col("adj_close")).alias("high_ge_close"),
     ]
 )
 
@@ -474,7 +662,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # Save combined daily file
 output_path = OUTPUT_DIR / "continuous_daily.parquet"
 daily.write_parquet(output_path)
-print(f"Saved: {output_path}")
+print(f"Saved: {_rel(output_path)}")
 print(f"Size: {output_path.stat().st_size / 1e6:.1f} MB")
 
 # %%
@@ -487,7 +675,7 @@ for product in products:
     product_path = per_product_dir / f"{product}.parquet"
     product_df.write_parquet(product_path)
 
-print(f"\nSaved per-product files to: {per_product_dir}/")
+print(f"\nSaved per-product files to: {_rel(per_product_dir)}/")
 print(f"Products: {len(products)}")
 
 # %% [markdown]
@@ -520,7 +708,8 @@ es_nq_2024.head(10)
 #    aggregating to 312,859 daily bars over 2011-01-03 through 2025-12-31.
 # 3. **Ratio back-adjustment** is applied per (product, tenor) before
 #    aggregation — for ES front month the cumulative ratio ranges 0.87–1.16
-#    over 427 rolls, preserving percentage returns across roll boundaries.
+#    over its 62 (roughly quarterly) rolls, preserving percentage returns
+#    across roll boundaries.
 # 4. **Full sessions have 23 hourly bars** (23-hour trading day): the 23-bar
 #    bucket is by far the largest in the bar-count distribution. Shorter
 #    sessions arise from holidays, deferred tenors with thin trading, and

@@ -155,7 +155,13 @@ chain_data.tail(5)
 # (python data/crypto/onchain/download.py --dataset coingecko).
 # Free-tier window is the trailing 365 days — re-run the downloader to
 # refresh. For longer history, use a provider with a paid tier.
-eth_prices = load_coingecko_ohlcv("ethereum")
+# CoinGecko's free tier appends a live intraday snapshot for the current
+# day on top of that day's 00:00 daily bar, so the final calendar day can
+# arrive twice. Collapse to one row per day (keep the most recent snapshot)
+# before anything downstream joins or computes on it.
+eth_prices = load_coingecko_ohlcv("ethereum").unique(
+    subset="timestamp", keep="last", maintain_order=True
+)
 print(f"ETH prices: {eth_prices.shape}")
 print(f"Window: {eth_prices['timestamp'].min()} → {eth_prices['timestamp'].max()}")
 
@@ -268,7 +274,11 @@ def create_tvl_features(df: pl.DataFrame) -> pl.DataFrame:
     ).with_columns(
         (pl.col("tvl_bn") / pl.col("eth_price")).alias("tvl_price_ratio"),
         (pl.col("tvl_growth_30d") - pl.col("eth_return_30d")).alias("tvl_eth_spread"),
-        pl.when(pl.col("tvl_zscore") > 1.0)
+        # Warm-up rows without a valid 90-day z-score stay null (unclassified),
+        # never fall through to "neutral"; the regime aggregation excludes them.
+        pl.when(pl.col("tvl_zscore").is_null())
+        .then(pl.lit(None, dtype=pl.String))
+        .when(pl.col("tvl_zscore") > 1.0)
         .then(pl.lit("expansion"))
         .when(pl.col("tvl_zscore") < -1.0)
         .then(pl.lit("contraction"))
@@ -336,7 +346,7 @@ fig = go.Figure(
 )
 
 fig.update_layout(
-    title="Forward ETH Returns Reverse the Naive Bullish-Expansion Story",
+    title="Depressed-TVL (Contraction) Regime Precedes the Best Forward ETH Return",
     xaxis_title="TVL Regime (90-day z-score)",
     yaxis_title="Average Forward 30-Day Return",
     yaxis_tickformat=".1%",
@@ -345,19 +355,24 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# The empirical regime ranking inverts the naive narrative in Section 1.
-# Over the trailing year on disk, the **expansion** regime — TVL more than
-# one standard deviation above its 90-day mean — produces the *worst*
-# average forward 30-day ETH return; the **neutral** band produces the
-# best. Two readings are consistent with this:
+# The empirical regime ranking cuts against the naive narrative in
+# Section 1. Only rows with a valid 90-day z-score enter the table, so the
+# first ~90 warm-up days (no z-score yet) are excluded rather than pooled
+# into the neutral band. Over the trailing year on disk, the **contraction**
+# regime, TVL more than one standard deviation *below* its 90-day mean,
+# precedes the best average forward 30-day ETH return; the stretched
+# **expansion** regime (more than one standard deviation above the mean)
+# precedes a negative return; and the **neutral** middle band trails both.
+# Two readings are consistent with this:
 #
-# 1. **Mean-reversion in TVL.** A z-score above +1 marks a stretched
-#    reading that is more likely to revert than to extend, dragging
-#    forward returns with it.
-# 2. **Sample-window dependence.** The CoinGecko free-tier window covers
-#    a single 365-day slice that includes both a TVL peak and a
-#    drawdown; longer histories with paid feeds are needed before this
-#    pattern can be treated as a stable signal.
+# 1. **Mean-reversion in TVL.** A depressed z-score marks capital that has
+#    already left DeFi and tends to rebuild, so it precedes recovery,
+#    whereas a stretched z-score above +1 is more likely to revert than to
+#    extend and drags forward returns with it.
+# 2. **Sample-window dependence.** The CoinGecko free-tier window covers a
+#    single 365-day slice with overlapping 30-day forward horizons, so the
+#    regime buckets are far from independent; longer histories with paid
+#    feeds are needed before this pattern can be treated as a stable signal.
 #
 # Either way, the qualitative table in Section 1 ("TVL growth → bullish")
 # is a starting hypothesis, not a verified result, and the IC analysis in
@@ -415,9 +430,11 @@ features.tail(1).select(
 # 3. **Ethereum still dominates trailing-30-day chain TVL share**, with
 #    Solana, BSC, and Arbitrum sharing the remainder.
 # 4. **Naive "expansion = bullish" framing is empirically backwards over
-#    this window.** The +1σ TVL regime delivers the worst forward 30-day
-#    ETH return; the linear IC of TVL growth vs forward returns is small
-#    and positive. Treat the regime table in Section 1 as a hypothesis
+#    this window.** Among rows with a valid 90-day z-score, the depressed
+#    -1σ contraction regime precedes the best forward 30-day ETH return
+#    while the stretched +1σ expansion regime precedes a negative one; the
+#    linear IC of TVL growth vs forward returns is small and positive
+#    (about +0.07). Treat the regime table in Section 1 as a hypothesis
 #    template, not a verified rule.
 # 5. **TVL belongs in the feature set, not the conclusion.** It is one
 #    cross-asset signal — combine with price-based momentum, funding,

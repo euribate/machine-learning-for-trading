@@ -59,8 +59,18 @@ from sklearn.model_selection import KFold
 
 from utils.modeling import get_cv_config
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS, apply_ml4t_style
 
 warnings.filterwarnings("ignore")
+
+# %%
+apply_ml4t_style("light")
+
+# ML4T palette roles for the CV schematics: training is the main series, the
+# validation fold is the amber highlight, and buffers are a light neutral.
+TRAIN_C, TRAIN_EDGE = COLORS["slate"], COLORS["blue"]
+VAL_C, VAL_EDGE = COLORS["amber"], COLORS["copper"]
+BUFFER_C, BUFFER_EDGE = COLORS["silver_muted"], COLORS["neutral"]
 
 # %% tags=["parameters"]
 N_VIZ = 504
@@ -104,8 +114,10 @@ def plot_splits(splits, dates, *, title="", figsize=(12, 3.5)):
         # Detect purge gap (more than 1 index between train end and val start)
         gap = va[0] - tr[-1]
 
-        ax.barh(y, tr_end - tr_start, left=tr_start, height=0.6, color="0.75", edgecolor="0.5")
-        ax.barh(y, va_end - va_start, left=va_start, height=0.6, color="0.35", edgecolor="0.2")
+        ax.barh(
+            y, tr_end - tr_start, left=tr_start, height=0.6, color=TRAIN_C, edgecolor=TRAIN_EDGE
+        )
+        ax.barh(y, va_end - va_start, left=va_start, height=0.6, color=VAL_C, edgecolor=VAL_EDGE)
 
         if gap > 2:
             ax.barh(
@@ -113,8 +125,8 @@ def plot_splits(splits, dates, *, title="", figsize=(12, 3.5)):
                 va_start - tr_end,
                 left=tr_end,
                 height=0.6,
-                color="0.9",
-                edgecolor="0.7",
+                color=BUFFER_C,
+                edgecolor=BUFFER_EDGE,
                 hatch="//",
                 linewidth=0.5,
             )
@@ -126,11 +138,13 @@ def plot_splits(splits, dates, *, title="", figsize=(12, 3.5)):
     ax.set_title(title)
 
     handles = [
-        Patch(facecolor="0.75", label="Training"),
-        Patch(facecolor="0.35", label="Validation"),
+        Patch(facecolor=TRAIN_C, label="Training"),
+        Patch(facecolor=VAL_C, label="Validation"),
     ]
     if any(va[0] - tr[-1] > 2 for tr, va in splits):
-        handles.insert(1, Patch(facecolor="0.9", edgecolor="0.7", hatch="//", label="Label buffer"))
+        handles.insert(
+            1, Patch(facecolor=BUFFER_C, edgecolor=BUFFER_EDGE, hatch="//", label="Label buffer")
+        )
     ax.legend(handles=handles, loc="upper right")
     fig.tight_layout()
     return fig
@@ -227,7 +241,7 @@ for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(sample_indices)):
     colors[val_idx] = 1
 
     for i in range(n_samples):
-        color = "0.3" if colors[i] == 1 else "0.8"
+        color = VAL_C if colors[i] == 1 else TRAIN_C
         ax.bar(i, 1, width=1, color=color, edgecolor="none")
 
     ax.set_ylabel(f"Fold {fold_idx + 1}", rotation=0, labelpad=30, va="center")
@@ -238,9 +252,16 @@ for fold_idx, (train_idx, val_idx) in enumerate(kfold.split(sample_indices)):
 axes[-1].set_xlabel("Sample Index (Time)")
 axes[0].set_title("K-Fold CV: Random Train/Validation Distribution")
 axes[0].legend(
-    handles=[Patch(facecolor="0.8", label="Training"), Patch(facecolor="0.3", label="Validation")],
+    handles=[
+        Patch(facecolor=TRAIN_C, label="Training"),
+        Patch(facecolor=VAL_C, label="Validation"),
+    ],
     loc="upper right",
     fontsize=8,
+    frameon=True,
+    facecolor="white",
+    framealpha=0.9,
+    edgecolor=COLORS["silver_muted"],
 )
 fig.tight_layout()
 fig.show()
@@ -316,7 +337,7 @@ fig.add_trace(
         x=[52],
         y=[0.5],
         mode="markers",
-        marker=dict(size=20, color="steelblue"),
+        marker=dict(size=20, color=COLORS["slate"]),
         name="Training sample",
     )
 )
@@ -325,28 +346,27 @@ fig.add_trace(
         x=[52, 57],
         y=[0.4, 0.4],
         mode="lines+markers",
-        line=dict(color="steelblue", width=3),
+        line=dict(color=COLORS["slate"], width=3),
         marker=dict(size=10),
         name="Label horizon (5 days)",
     )
 )
-fig.add_vrect(x0=53, x1=60, fillcolor="coral", opacity=0.2, line_width=0)
+fig.add_vrect(x0=53, x1=60, fillcolor=COLORS["amber"], opacity=0.2, line_width=0)
 fig.add_annotation(x=56.5, y=0.7, text="Validation Set", showarrow=False, font=dict(size=12))
 
-fig.add_vrect(x0=53, x1=55, fillcolor="yellow", opacity=0.5, line_width=0)
+fig.add_vrect(x0=53, x1=57, fillcolor=COLORS["negative"], opacity=0.25, line_width=0)
 fig.add_annotation(
-    x=54,
+    x=55,
     y=0.25,
     text="LEAKAGE!",
     showarrow=False,
-    font=dict(color="red", size=16, family="Arial Black"),
+    font=dict(color=COLORS["negative"], size=16, family="Arial Black"),
 )
 
 fig.update_layout(
     title="Label Overlap Creates Information Leakage",
     xaxis_title="Day",
     yaxis_visible=False,
-    template="plotly_white",
     height=300,
     showlegend=True,
 )
@@ -363,19 +383,23 @@ fig.show()
 # %%
 fig = go.Figure()
 
-fig.add_vrect(x0=30, x1=47, fillcolor="steelblue", opacity=0.3, line_width=0)
+fig.add_vrect(x0=30, x1=47, fillcolor=COLORS["slate"], opacity=0.3, line_width=0)
 fig.add_annotation(
-    x=38.5, y=0.8, text="Training", showarrow=False, font=dict(size=12, color="steelblue")
+    x=38.5, y=0.8, text="Training", showarrow=False, font=dict(size=12, color=COLORS["slate"])
 )
 
-fig.add_vrect(x0=48, x1=52, fillcolor="gray", opacity=0.2, line_width=0)
+fig.add_vrect(x0=48, x1=52, fillcolor=COLORS["neutral"], opacity=0.2, line_width=0)
 fig.add_annotation(
-    x=50, y=0.5, text="Label Buffer\n(5 days)", showarrow=False, font=dict(size=10, color="gray")
+    x=50,
+    y=0.5,
+    text="Label Buffer\n(5 days)",
+    showarrow=False,
+    font=dict(size=10, color=COLORS["neutral"]),
 )
 
-fig.add_vrect(x0=53, x1=70, fillcolor="coral", opacity=0.3, line_width=0)
+fig.add_vrect(x0=53, x1=70, fillcolor=COLORS["amber"], opacity=0.3, line_width=0)
 fig.add_annotation(
-    x=61.5, y=0.8, text="Validation", showarrow=False, font=dict(size=12, color="coral")
+    x=61.5, y=0.8, text="Validation", showarrow=False, font=dict(size=12, color=COLORS["copper"])
 )
 
 fig.add_trace(
@@ -383,7 +407,7 @@ fig.add_trace(
         x=[47],
         y=[0.3],
         mode="markers+text",
-        marker=dict(size=15, color="steelblue"),
+        marker=dict(size=15, color=COLORS["slate"]),
         text=["Last train sample"],
         textposition="middle left",
         name="Training",
@@ -395,7 +419,7 @@ fig.add_trace(
         x=[47, 52],
         y=[0.3, 0.3],
         mode="lines+markers",
-        line=dict(color="steelblue", width=2, dash="dot"),
+        line=dict(color=COLORS["slate"], width=2, dash="dot"),
         marker=dict(size=8),
         name="Label (safe)",
     )
@@ -405,7 +429,6 @@ fig.update_layout(
     title="Label Buffer Prevents Leakage",
     xaxis_title="Day",
     yaxis_visible=False,
-    template="plotly_white",
     height=300,
     showlegend=True,
 )
@@ -485,22 +508,27 @@ fig, axes = plt.subplots(1, 2, figsize=(13, 3.5))
 
 # Panel (a): Label buffer — forward-looking
 ax = axes[0]
-ax.barh(1, 5, left=0, height=0.6, color="0.75", edgecolor="0.5")
-ax.barh(1, 1.5, left=5, height=0.6, color="0.9", edgecolor="0.7", hatch="//", linewidth=0.5)
-ax.barh(1, 3, left=6.5, height=0.6, color="0.35", edgecolor="0.2")
-ax.annotate(
-    "", xy=(6.3, 0.55), xytext=(5.2, 0.55), arrowprops=dict(arrowstyle="->", color="0.4", lw=1.5)
+ax.barh(1, 5, left=0, height=0.6, color=TRAIN_C, edgecolor=TRAIN_EDGE)
+ax.barh(
+    1, 1.5, left=5, height=0.6, color=BUFFER_C, edgecolor=BUFFER_EDGE, hatch="//", linewidth=0.5
 )
-ax.text(5.75, 0.45, "label horizon", ha="center", va="center", fontsize=8, color="0.4")
+ax.barh(1, 3, left=6.5, height=0.6, color=VAL_C, edgecolor=VAL_EDGE)
+ax.annotate(
+    "",
+    xy=(6.3, 0.55),
+    xytext=(5.2, 0.55),
+    arrowprops=dict(arrowstyle="->", color=COLORS["neutral"], lw=1.5),
+)
+ax.text(5.75, 0.45, "label horizon", ha="center", va="center", fontsize=8, color=COLORS["neutral"])
 ax.set_xlim(-0.5, 10)
 ax.set_ylim(0.3, 1.7)
 ax.set_yticks([])
 ax.set_title("(a) Label Buffer (Purge)")
 ax.legend(
     handles=[
-        Patch(facecolor="0.75", label="Train"),
-        Patch(facecolor="0.9", hatch="//", label="Buffer"),
-        Patch(facecolor="0.35", label="Validation"),
+        Patch(facecolor=TRAIN_C, label="Train"),
+        Patch(facecolor=BUFFER_C, hatch="//", label="Buffer"),
+        Patch(facecolor=VAL_C, label="Validation"),
     ],
     fontsize=7,
     loc="upper right",
@@ -508,22 +536,29 @@ ax.legend(
 
 # Panel (b): Feature buffer — backward-looking (CPCV scenario)
 ax = axes[1]
-ax.barh(1, 3, left=0, height=0.6, color="0.35", edgecolor="0.2")
-ax.barh(1, 1.5, left=3, height=0.6, color="0.9", edgecolor="0.7", hatch="\\\\", linewidth=0.5)
-ax.barh(1, 5, left=4.5, height=0.6, color="0.75", edgecolor="0.5")
-ax.annotate(
-    "", xy=(3.2, 0.55), xytext=(4.3, 0.55), arrowprops=dict(arrowstyle="->", color="0.4", lw=1.5)
+ax.barh(1, 3, left=0, height=0.6, color=VAL_C, edgecolor=VAL_EDGE)
+ax.barh(
+    1, 1.5, left=3, height=0.6, color=BUFFER_C, edgecolor=BUFFER_EDGE, hatch="\\\\", linewidth=0.5
 )
-ax.text(3.75, 0.45, "feature lookback", ha="center", va="center", fontsize=8, color="0.4")
+ax.barh(1, 5, left=4.5, height=0.6, color=TRAIN_C, edgecolor=TRAIN_EDGE)
+ax.annotate(
+    "",
+    xy=(3.2, 0.55),
+    xytext=(4.3, 0.55),
+    arrowprops=dict(arrowstyle="->", color=COLORS["neutral"], lw=1.5),
+)
+ax.text(
+    3.75, 0.45, "feature lookback", ha="center", va="center", fontsize=8, color=COLORS["neutral"]
+)
 ax.set_xlim(-0.5, 10)
 ax.set_ylim(0.3, 1.7)
 ax.set_yticks([])
 ax.set_title("(b) Feature Buffer (Embargo)")
 ax.legend(
     handles=[
-        Patch(facecolor="0.35", label="Validation"),
-        Patch(facecolor="0.9", hatch="\\\\", label="Buffer"),
-        Patch(facecolor="0.75", label="Train"),
+        Patch(facecolor=VAL_C, label="Validation"),
+        Patch(facecolor=BUFFER_C, hatch="\\\\", label="Buffer"),
+        Patch(facecolor=TRAIN_C, label="Train"),
     ],
     fontsize=7,
     loc="upper right",
@@ -553,8 +588,8 @@ fig.show()
 # ### The Problem: Naive Calendar-Day Purging
 #
 # January 2024 has 31 calendar days but only 21 NYSE trading days.
-# A naive 21-calendar-day purge before February 1 only removes 15 trading
-# days — allowing 6 trading days of leakage.
+# A naive 21-calendar-day purge before February 1 (Jan 11-31) only removes 14
+# trading days — allowing 7 trading days of leakage.
 
 # %%
 fig, ax = plt.subplots(figsize=(12, 4))
@@ -567,8 +602,8 @@ for i, d in enumerate(jan_dates):
     is_holiday = d in holidays
     is_non_trading = is_weekend or is_holiday
 
-    color = "0.9" if is_non_trading else "white"
-    edge = "0.7" if is_non_trading else "0.4"
+    color = BUFFER_C if is_non_trading else "white"
+    edge = BUFFER_EDGE if is_non_trading else COLORS["silver_muted"]
     rect = Rectangle((i, 0), 0.9, 0.9, facecolor=color, edgecolor=edge, linewidth=0.5)
     ax.add_patch(rect)
     ax.text(i + 0.45, 0.45, str(d.day), ha="center", va="center", fontsize=7)
@@ -579,8 +614,8 @@ for i in range(10, 31):
         (i, 0),
         0.9,
         0.9,
-        facecolor="0.55",
-        edgecolor="0.3",
+        facecolor=VAL_C,
+        edgecolor=VAL_EDGE,
         linewidth=1.2,
         alpha=0.6,
         zorder=2,
@@ -593,8 +628,8 @@ for i in range(1, 10):
         (i, 0),
         0.9,
         0.9,
-        facecolor="0.8",
-        edgecolor="0.5",
+        facecolor=TRAIN_C,
+        edgecolor=TRAIN_EDGE,
         linewidth=1.2,
         alpha=0.6,
         zorder=2,
@@ -604,7 +639,7 @@ for i in range(1, 10):
 ax.text(
     15.5,
     1.4,
-    "Naive: 21 calendar days (only 15 trading days!)",
+    "Naive: 21 calendar days (only 14 trading days!)",
     ha="center",
     fontsize=9,
     fontweight="bold",
@@ -618,9 +653,11 @@ ax.axis("off")
 ax.set_title("January 2024: Naive vs Trading-Day-Aware Purging", pad=14)
 ax.legend(
     handles=[
-        Rectangle((0, 0), 1, 1, facecolor="0.55", edgecolor="0.3", label="Naive purge only"),
-        Rectangle((0, 0), 1, 1, facecolor="0.8", edgecolor="0.5", label="Additional correct purge"),
-        Rectangle((0, 0), 1, 1, facecolor="0.9", edgecolor="0.7", label="Non-trading day"),
+        Rectangle((0, 0), 1, 1, facecolor=VAL_C, edgecolor=VAL_EDGE, label="Naive purge only"),
+        Rectangle(
+            (0, 0), 1, 1, facecolor=TRAIN_C, edgecolor=TRAIN_EDGE, label="Additional correct purge"
+        ),
+        Rectangle((0, 0), 1, 1, facecolor=BUFFER_C, edgecolor=BUFFER_EDGE, label="Non-trading day"),
     ],
     loc="lower right",
     bbox_to_anchor=(1.0, -0.05),
@@ -658,9 +695,9 @@ for i, (tr, va) in enumerate(splits_nyse):
 # %% [markdown]
 # Each fold's label buffer spans 22 trading sessions, which covers ~30 calendar
 # days due to weekends and holidays. A naive implementation that counts 21
-# *calendar* days would only purge ~15 trading days — leaving 6 days of label
-# leakage. The `calendar='XNYS'` parameter ensures the gap is measured in
-# actual trading days.
+# *calendar* days (e.g. Jan 11-31, 2024) would only purge 14 trading days —
+# leaving 7 days of label leakage. The `calendar='XNYS'` parameter ensures the
+# gap is measured in actual trading days.
 
 # %% [markdown]
 # ---
@@ -720,8 +757,8 @@ pd.DataFrame(nested_folds)
 fig, ax = plt.subplots(figsize=(13, 4.5))
 
 outer_folds = [
-    {"test_year": 2024, "val_years": list(range(2019, 2024)), "color_test": "0.2"},
-    {"test_year": 2025, "val_years": list(range(2020, 2025)), "color_test": "0.2"},
+    {"test_year": 2024, "val_years": list(range(2019, 2024))},
+    {"test_year": 2025, "val_years": list(range(2020, 2025))},
 ]
 
 y = 0
@@ -735,8 +772,8 @@ for oi, outer in enumerate(outer_folds):
         val_s = pd.Timestamp(f"{val_yr}-01-02", tz="UTC")
         val_e = pd.Timestamp(f"{val_yr}-12-31", tz="UTC")
 
-        ax.barh(y, train_e - train_s, left=train_s, height=0.5, color="0.8", edgecolor="0.6")
-        ax.barh(y, val_e - val_s, left=val_s, height=0.5, color="0.5", edgecolor="0.3")
+        ax.barh(y, train_e - train_s, left=train_s, height=0.5, color=TRAIN_C, edgecolor=TRAIN_EDGE)
+        ax.barh(y, val_e - val_s, left=val_s, height=0.5, color=VAL_C, edgecolor=VAL_EDGE)
 
     # Test bar (spans all inner folds visually)
     test_s = pd.Timestamp(f"{outer['test_year']}-01-02", tz="UTC")
@@ -747,8 +784,8 @@ for oi, outer in enumerate(outer_folds):
         test_e - test_s,
         left=test_s,
         height=len(outer["val_years"]) * 0.55,
-        color="0.2",
-        edgecolor="0.1",
+        color=COLORS["neutral"],
+        edgecolor=COLORS["blue"],
         alpha=0.3,
     )
     ax.text(
@@ -759,7 +796,7 @@ for oi, outer in enumerate(outer_folds):
         va="center",
         fontsize=9,
         fontweight="bold",
-        color="white",
+        color=COLORS["blue"],
     )
 
     # Outer-fold group label (left of training bars)
@@ -771,7 +808,7 @@ for oi, outer in enumerate(outer_folds):
         va="center",
         fontsize=8,
         fontweight="bold",
-        color="0.3",
+        color=COLORS["neutral"],
     )
 
     outer_boundaries.append(y + 0.5)
@@ -781,7 +818,7 @@ for oi, outer in enumerate(outer_folds):
 
 # Draw horizontal dividers between outer folds
 for boundary in outer_boundaries[:-1]:
-    ax.axhline(boundary + 0.5, color="0.5", linestyle="--", linewidth=0.8, alpha=0.7)
+    ax.axhline(boundary + 0.5, color=COLORS["neutral"], linestyle="--", linewidth=0.8, alpha=0.7)
 
 ax.set_yticks([])
 ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
@@ -789,11 +826,15 @@ ax.xaxis.set_major_locator(mdates.YearLocator(2))
 ax.set_title("Nested Walk-Forward: 2 Outer Folds × 5 Inner Folds")
 ax.legend(
     handles=[
-        Patch(facecolor="0.8", label="Train (inner)"),
-        Patch(facecolor="0.5", label="Validation (inner)"),
-        Patch(facecolor="0.2", alpha=0.3, label="Test (outer)"),
+        Patch(facecolor=TRAIN_C, label="Train (inner)"),
+        Patch(facecolor=VAL_C, label="Validation (inner)"),
+        Patch(facecolor=COLORS["neutral"], alpha=0.3, label="Test (outer)"),
     ],
     loc="upper left",
+    frameon=True,
+    facecolor="white",
+    framealpha=0.9,
+    edgecolor=COLORS["silver_muted"],
 )
 fig.tight_layout()
 fig.show()
@@ -846,7 +887,11 @@ for split_idx in range(min(4, len(splits_cpcv))):
     split_type[val_idx] = 2
 
     for stype, (color, label) in enumerate(
-        [("gray", "Purged"), ("steelblue", "Training"), ("coral", "Validation")]
+        [
+            (COLORS["neutral"], "Purged"),
+            (COLORS["slate"], "Training"),
+            (COLORS["amber"], "Validation"),
+        ]
     ):
         mask = split_type == stype
         if np.any(mask):
@@ -868,7 +913,6 @@ fig.update_layout(
     title=f"CPCV: First 4 of {n_splits} Splits (N={N}, k={K})",
     height=500,
     width=900,
-    template="plotly_white",
     showlegend=True,
     margin=dict(l=80),
 )

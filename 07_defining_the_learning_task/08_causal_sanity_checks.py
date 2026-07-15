@@ -310,7 +310,7 @@ for feat_col, feat_label in SCAN_FEATURES:
                 {"feature": feat_label, "horizon": hz_label, "ic": np.nan, "t_hac": np.nan}
             )
             continue
-        hac = compute_ic_hac_stats(ic_series)
+        hac = compute_ic_hac_stats(ic_series, label_horizon=int(hz_label[:-1]))
         scan_rows.append(
             {
                 "feature": feat_label,
@@ -376,12 +376,13 @@ fig.show()
 #    1-day reversal ($t = 3.0$) reach HAC $|t| > 2$ — 3 of 10 features. The two
 #    momentum terms persist across horizons; the reversal hit is a short-horizon
 #    effect that the mechanism checks below flag as unstable.
-# 2. **21-day horizon**: The same two features remain significant (12-1 at $t = 3.5$,
-#    252d at $t = 3.0$). Shorter momentum (21d, 63d) and all non-momentum features
+# 2. **21-day horizon**: The same two features remain significant (12-1 at $t = 2.6$,
+#    252d at $t = 2.3$). Shorter momentum (21d, 63d) and all non-momentum features
 #    remain noise.
-# 3. **63-day horizon**: Signal strengthens. 126d, 252d, 12-1, and distance from
-#    200d MA all reach significance. Risk-adjusted momentum becomes borderline
-#    significant.
+# 3. **63-day horizon**: Signal fades. Only distance from the 200-day MA ($t = 2.2$)
+#    clears $|t| > 2$; the momentum terms (12-1 at $t = 1.7$, 252d at $t = 1.7$,
+#    126d at $t = 1.5$) all slip below significance, consistent with momentum being
+#    strongest at the monthly horizon rather than the quarterly one.
 # 4. **Short-term features**: 5d reversal and the vol ratio show no signal at any
 #    horizon, and 1d reversal is significant only at the 5d horizon ($t = 3.0$)
 #    before failing the mechanism checks below — the microstructure reversal
@@ -397,7 +398,7 @@ fig.show()
 # We select two features for the mechanism plausibility checks, chosen to
 # illustrate contrasting triage outcomes:
 #
-# - **12-1 Momentum** (IC = 0.053, HAC $t$ = 3.5 at 21d): The strongest signal
+# - **12-1 Momentum** (IC = 0.053, HAC $t$ = 2.6 at 21d): The strongest signal
 #   in the scan. Follows the Jegadeesh–Titman convention of skipping the most
 #   recent month to separate momentum from short-term reversal. The question:
 #   does it survive mechanism checks, or is the signal driven by a confound?
@@ -472,7 +473,11 @@ baseline = {}
 for feat_col, feat_label in FEATURES.items():
     sub = analysis.drop_nulls(subset=[feat_col, "forward_return"])
     ic, t, series = compute_cross_sectional_ic(sub, feat_col, "forward_return")
-    hac = compute_ic_hac_stats(series) if series else {"t_stat": np.nan, "p_value": np.nan}
+    hac = (
+        compute_ic_hac_stats(series, label_horizon=LABEL_HORIZON)
+        if series
+        else {"t_stat": np.nan, "p_value": np.nan}
+    )
     baseline[feat_col] = {"ic": ic, "t": t, "series": series, "hac": hac}
 
 print(
@@ -488,9 +493,9 @@ print(
 )
 
 # %% [markdown]
-# 12-1 momentum shows IC = 0.053 (HAC $t$ = 3.5, $p < 0.001$) — a statistically
+# 12-1 momentum shows IC = 0.053 (HAC $t$ = 2.6, $p = 0.009$) - a statistically
 # significant cross-sectional signal. Reversal IC is indistinguishable from zero
-# (HAC $t$ = 0.2). The naive t-stat for momentum is higher because it ignores
+# (HAC $t$ = 0.4). The naive t-stat for momentum is higher because it ignores
 # autocorrelation in the IC series; the HAC correction is more conservative but
 # still significant.
 
@@ -525,7 +530,11 @@ def run_timing_placebo(
             pl.col(feature_col).shift(lag).over("symbol").alias(col_name)
         ).drop_nulls(subset=[col_name])
         ic, _, ic_series = compute_cross_sectional_ic(lagged, col_name, outcome_col)
-        hac = compute_ic_hac_stats(ic_series) if ic_series else {"t_stat": np.nan}
+        hac = (
+            compute_ic_hac_stats(ic_series, label_horizon=LABEL_HORIZON)
+            if ic_series
+            else {"t_stat": np.nan}
+        )
         lag_rows.append({"lag": lag, "ic": ic, "t_hac": hac["t_stat"]})
 
     lag_df = pl.DataFrame(lag_rows)
@@ -629,7 +638,7 @@ def run_shared_driver_check(
                 tsy_ic_series.append(rho)
 
     if tsy_ic_series:
-        hac_tsy = compute_ic_hac_stats(tsy_ic_series)
+        hac_tsy = compute_ic_hac_stats(tsy_ic_series, label_horizon=LABEL_HORIZON)
         ic_tsy = hac_tsy["mean_ic"]
         t_tsy = hac_tsy["t_stat"]
     else:
@@ -709,14 +718,22 @@ def run_regime_heterogeneity(
 
     # Unconditional IC with HAC
     ic_unc, _, ic_series_unc = compute_cross_sectional_ic(df, feature_col, outcome_col)
-    hac_unc = compute_ic_hac_stats(ic_series_unc) if ic_series_unc else {"t_stat": np.nan}
+    hac_unc = (
+        compute_ic_hac_stats(ic_series_unc, label_horizon=LABEL_HORIZON)
+        if ic_series_unc
+        else {"t_stat": np.nan}
+    )
     unc_sign = np.sign(ic_unc) if ic_unc != 0 else 0
     unc_sig = abs(hac_unc["t_stat"]) > 2.0 if not np.isnan(hac_unc["t_stat"]) else False
 
     regime_results = []
     for name, partition_df in partitions:
         ic, _, ic_series = compute_cross_sectional_ic(partition_df, feature_col, outcome_col)
-        hac = compute_ic_hac_stats(ic_series) if ic_series else {"t_stat": np.nan}
+        hac = (
+            compute_ic_hac_stats(ic_series, label_horizon=LABEL_HORIZON)
+            if ic_series
+            else {"t_stat": np.nan}
+        )
         regime_results.append(
             {"regime": name, "ic": ic, "t_hac": hac["t_stat"], "n": len(partition_df)}
         )
@@ -1002,8 +1019,8 @@ print(f"Wrote publication figure artifact: {figure_7_10_artifact}")
 
 # %% [markdown]
 # 12-1 momentum maintains positive IC across all VIX regimes, though the
-# magnitude varies roughly 5x — strongest in low VIX (IC = 0.086, HAC $t$ = 3.9)
-# and attenuated in high VIX (IC = 0.017, $t$ = 0.6). This is consistent with
+# magnitude varies roughly 5x - strongest in low VIX (IC = 0.086, HAC $t$ = 3.0)
+# and attenuated in high VIX (IC = 0.017, $t$ = 0.4). This is consistent with
 # the well-documented "momentum crash" phenomenon: momentum strategies suffer in
 # high-volatility environments (Daniel and Moskowitz 2016). The sign stability
 # across all regimes earns CAUTION (magnitude variation) rather than STOP.
@@ -1163,7 +1180,7 @@ for feat_col, feat_label in FEATURES.items():
 #    information at monthly horizons, while short-term features (1d, 5d) are mostly
 #    noise. A 5-day horizon yields 3/10 significant features (252d and 12-1
 #    momentum plus a 1d-reversal hit that the mechanism checks reject as
-#    regime-driven); at 21d, 12-1 momentum reaches HAC $t = 3.5$. Horizon selection
+#    regime-driven); at 21d, 12-1 momentum reaches HAC $t = 2.6$. Horizon selection
 #    is a modeling decision that changes which features appear informative.
 #
 # 2. **State the mechanism first**: Before testing, draw the assumed DAG and identify

@@ -37,10 +37,16 @@
 # %%
 """Structural Break Detection — classical tests and ML-based classification."""
 
+import logging
 import warnings
 from typing import Any
 
 warnings.filterwarnings("ignore")
+# ml4t-engineer decorates some feature functions with per-call INFO timing logs
+# (coefficient_of_variation sets log_data_quality=True), which otherwise leak
+# into committed cell outputs as library chatter. Disable INFO so the outputs
+# show only the feature values; WARNING and above still surface.
+logging.disable(logging.INFO)
 
 from datetime import datetime
 
@@ -952,8 +958,14 @@ spy_break = (
     .drop_nulls()
 )
 
+# Coefficient of variation (std / |mean|) is only well defined on a
+# strictly-positive series: raw daily returns have a near-zero mean, so the
+# denominator collapses and CV explodes into the thousands - meaningless as a
+# regime gate. Apply it to the *magnitude* of returns instead, where the mean
+# is safely positive; CV(|returns|) then reads as the relative variability of
+# move size, spiking when the volatility regime itself becomes unstable.
 spy_break = spy_break.with_columns(
-    cv=coefficient_of_variation("returns", window=50),
+    cv=coefficient_of_variation(pl.col("returns").abs(), window=50),
     kl_div=rolling_kl_divergence("returns", window=100),
     w_dist=rolling_wasserstein("returns", window=100),
     drift=rolling_drift("returns", window=100),

@@ -40,10 +40,12 @@
 # %%
 """CME Futures — Exploratory data analysis of the futures universe."""
 
+import plotly.graph_objects as go
 import polars as pl
 
 from data import list_cme_products, load_cme_futures
 from utils.data_quality import check_ohlc_invariants
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -105,8 +107,19 @@ ASSET_CLASS_MAP = {
     "GF": "Livestock",
 }
 
+# One on-brand color per asset-class bucket, reused by every chart below so a
+# bucket keeps the same color across the notebook.
+ASSET_CLASS_COLORS = {
+    "Equity Index": COLORS["blue"],
+    "Rates": COLORS["amber"],
+    "Energy": COLORS["copper"],
+    "Metals": COLORS["slate"],
+    "FX": COLORS["neutral"],
+    "Grains": COLORS["positive"],
+    "Livestock": COLORS["blue_light"],
+}
+
 # %%
-# Count products by asset class
 class_counts = (
     pl.DataFrame({"product": products})
     .with_columns(asset_class=pl.col("product").replace(ASSET_CLASS_MAP))
@@ -115,8 +128,23 @@ class_counts = (
     .sort(["len", "asset_class"], descending=[True, False])
 )
 
-print("Products by Asset Class:")
-class_counts
+fig = go.Figure(
+    go.Bar(
+        x=class_counts["asset_class"].to_list(),
+        y=class_counts["len"].to_list(),
+        marker_color=[ASSET_CLASS_COLORS[c] for c in class_counts["asset_class"].to_list()],
+        text=class_counts["len"].to_list(),
+        textposition="outside",
+    )
+)
+fig.update_layout(
+    title="CME universe: products per asset class",
+    xaxis_title="Asset class",
+    yaxis_title="Number of products",
+    height=420,
+    showlegend=False,
+)
+fig.show()
 
 # %% [markdown]
 # ## 2. Data Structure Example: E-mini S&P 500 (ES)
@@ -146,6 +174,35 @@ print(f"Shape: {es_continuous.shape}")
 print(f"Date range: {es_continuous['timestamp'].min()} to {es_continuous['timestamp'].max()}")
 
 # %% [markdown]
+# The front-month continuous series splices successive contracts into a single
+# price history. Plotted at daily resolution, it runs unbroken across the full
+# 2011–2025 window — the volume-roll splicing leaves no visible gaps.
+
+# %%
+es_daily = (
+    es_continuous.sort("timestamp")
+    .group_by(pl.col("timestamp").dt.date().alias("date"), maintain_order=True)
+    .agg(pl.col("close").last())
+)
+
+fig = go.Figure(
+    go.Scatter(
+        x=es_daily["date"].to_list(),
+        y=es_daily["close"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["blue"], width=1),
+        name="ES front month",
+    )
+)
+fig.update_layout(
+    title="ES E-mini S&P 500 — front-month continuous close (daily)",
+    xaxis_title="Date",
+    yaxis_title="Price",
+    height=420,
+)
+fig.show()
+
+# %% [markdown]
 # Each individual contract trades for a finite window before expiry. Aggregating
 # by `instrument_id` shows the rollover pattern — quarterly contracts overlap
 # during the roll period.
@@ -162,8 +219,32 @@ contract_stats = (
     .sort("first_trade")
 )
 print(f"Total ES contracts: {len(contract_stats)}")
-print("Most recent 5 contracts:")
-contract_stats.tail(5)
+
+# %%
+# Draw each of the most recent 24 contracts as a horizontal bar spanning its
+# trading window. The overlap between neighboring bars is the roll period, when
+# both the expiring and the next contract trade at once.
+recent = contract_stats.tail(24)
+
+fig = go.Figure()
+for row in recent.iter_rows(named=True):
+    fig.add_trace(
+        go.Scatter(
+            x=[row["first_trade"], row["last_trade"]],
+            y=[str(row["instrument_id"]), str(row["instrument_id"])],
+            mode="lines",
+            line=dict(color=COLORS["copper"], width=6),
+            showlegend=False,
+        )
+    )
+fig.update_layout(
+    title="ES contracts overlap at the roll (most recent 24 contracts)",
+    xaxis_title="Date",
+    yaxis_title="Contract (instrument_id)",
+    yaxis=dict(type="category"),
+    height=560,
+)
+fig.show()
 
 # %% [markdown]
 # ## 3. Coverage Summary
@@ -197,15 +278,42 @@ def get_product_coverage(product_list: list[str]) -> pl.DataFrame:
 # %%
 coverage = get_product_coverage(products)
 print(f"Products with data: {len(coverage)} / {len(products)}")
-print("Coverage by asset class:")
-coverage.group_by("asset_class").len().sort(["len", "asset_class"], descending=[True, False])
 
 # %% [markdown]
-# A handful of representative products from each asset-class bucket:
+# One horizontal bar per product spans its continuous front-month history, sorted
+# and colored by asset class. Most products cover the full 2011–2025 window; the
+# late-starting ones entered the dataset when Databento began capturing them.
 
 # %%
-key_products = ["ES", "NQ", "CL", "GC", "ZN", "6E", "ZC"]
-coverage.filter(pl.col("product").is_in(key_products))
+cov_timeline = coverage.with_columns(
+    pl.col("start_date").str.to_date(),
+    pl.col("end_date").str.to_date(),
+).sort(["asset_class", "start_date"])
+
+fig = go.Figure()
+seen: set[str] = set()
+for row in cov_timeline.iter_rows(named=True):
+    cls = row["asset_class"]
+    fig.add_trace(
+        go.Scatter(
+            x=[row["start_date"], row["end_date"]],
+            y=[row["product"], row["product"]],
+            mode="lines",
+            line=dict(color=ASSET_CLASS_COLORS[cls], width=7),
+            name=cls,
+            legendgroup=cls,
+            showlegend=cls not in seen,
+        )
+    )
+    seen.add(cls)
+fig.update_layout(
+    title="CME futures: per-product coverage of the front-month continuous series",
+    xaxis_title="Date",
+    yaxis_title="Product",
+    height=760,
+    legend_title="Asset class",
+)
+fig.show()
 
 # %% [markdown]
 # ## 4. Data Quality

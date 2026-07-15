@@ -1476,10 +1476,12 @@ plt.show()
 # We evaluate downstream utility via **extreme-move classification**: predict
 # whether the next-day absolute return exceeds the 90th percentile.
 #
-# **Important context**: This is a highly imbalanced task -- by definition only
-# 10% of samples are positive (extreme moves). A naive "always predict normal"
-# classifier achieves **90% accuracy** as baseline. The meaningful metric is
-# **TSTR Ratio** (synthetic/real), not raw accuracy.
+# **Important context**: This is a highly imbalanced task. The threshold is the
+# 90th percentile of absolute *training* returns, so 10% of the training window
+# is positive by construction. Applied out-of-sample to the calmer 2024-25
+# holdout, only ~4% of test days clear that bar, so the naive "always predict
+# normal" baseline is ~96%. The meaningful metric is the **TSTR Ratio**
+# (synthetic/real), not raw accuracy.
 
 
 # %%
@@ -1704,7 +1706,7 @@ regime_labels = hmm.predict(spy_returns)
 regime_means = hmm.means_.flatten()
 regime_vols = np.sqrt(hmm.covars_.flatten())
 
-# Sort regimes by volatility (0=low-vol, 1=normal, 2=crisis)
+# Sort regimes by volatility (0=low-vol, 1=high-vol)
 sort_idx = np.argsort(regime_vols)
 label_map = {old: new for new, old in enumerate(sort_idx)}
 regime_labels = np.array([label_map[r] for r in regime_labels])
@@ -2062,18 +2064,19 @@ for regime_id in range(n_active_regimes):
 # %% [markdown]
 # **Interpretation**: Classifier guidance produces regime separation. Key observations:
 #
-# 1. **Variance scaling**: The model generates ~66% of real variance in normalized space.
+# 1. **Variance scaling**: The model generates ~67% of real variance in normalized space.
 #    This is a known issue with diffusion models using trend+seasonal decomposition --
 #    the smooth components underestimate high-frequency variation. We apply post-hoc
 #    variance scaling to match training distribution.
 #
 # 2. **Low-Vol (majority, 88%)**: Unconditional samples are already Low-Vol-like, so
-#    gentle guidance suffices. With variance scaling, generated volatility matches
-#    historical (~1.0x ratio).
+#    gentle guidance suffices. Generated volatility is close to historical
+#    (~0.94x ratio).
 #
 # 3. **High-Vol (minority, 12%)**: Classifier gradients must push harder to shift
-#    samples toward this regime, which can add variance. Some inflation (~1.3-1.5x)
-#    is expected for minority regimes.
+#    samples toward this regime, which can add variance. Here the generated
+#    volatility tracks the historical level closely (~1.08x), with mild inflation
+#    expected for the minority regime.
 #
 # **Scale tuning**: Higher scale = more regime separation but more variance. Scale 0.75
 # balances accuracy for the majority class with reasonable minority-class separation.
@@ -2233,7 +2236,7 @@ print(f"Saved samples to: {samples_dir}/")
 #
 # 3. **Classifier guidance enables conditional generation**: By training a separate
 #    classifier on noised data, we can steer sampling toward specific regimes
-#    (low-volatility, normal, crisis) -- enabling regime-specific stress testing
+#    (low-volatility vs high-volatility) -- enabling regime-specific stress testing
 #    with synthetic data.
 #
 # 4. **DDIM fast sampling**: Reducing reverse steps from 500 to 50 provides ~10x
@@ -2242,7 +2245,8 @@ print(f"Saved samples to: {samples_dir}/")
 # **Limitations**:
 # - Classifier guidance quality depends on regime label accuracy (HMM is simple)
 # - The guidance scale requires tuning per application
-# - High-dimensional generation (50 assets) is computationally intensive
+# - High-dimensional generation (here 20 assets) is computationally intensive;
+#   scaling to broader universes raises cost further
 #
 # **Next**: Section 5.5 discusses the Fidelity-Utility-Privacy framework for
 # systematic evaluation of any synthetic generator.

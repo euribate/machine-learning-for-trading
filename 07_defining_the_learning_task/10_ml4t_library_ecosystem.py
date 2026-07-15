@@ -36,7 +36,9 @@
 # 2. Discover and compute features via the `ml4t-engineer` registry
 # 3. Configure features with lists, dicts, or YAML for reproducibility
 # 4. Validate library features against manual implementations
-# 5. Understand when to use the library vs manual code
+# 5. Preview feature evaluation with `ml4t-diagnostic` (full treatment in
+#    `05_signal_evaluation`)
+# 6. Understand when to use the library vs manual code
 #
 # ## Data Policy
 #
@@ -56,6 +58,7 @@ from datetime import datetime
 import numpy as np
 import polars as pl
 from IPython.display import display
+from ml4t.diagnostic.signal import analyze_signal
 from ml4t.engineer import compute_features
 from ml4t.engineer.core.registry import get_registry
 
@@ -116,9 +119,11 @@ for cat, feats in sorted(categories.items()):
 # %% [markdown]
 # ### 2.1 Feature Metadata
 #
-# Each registry entry carries its formula, default parameters, input
-# requirements, and a description — making features discoverable
-# without reading source code.
+# Each registry entry carries its default parameters, input requirements, and
+# a description, plus a closed-form formula where a standard one exists (about
+# a quarter of the catalog: momentum and price transforms tend to have one,
+# while estimator-based volatility and microstructure features do not). This
+# makes features discoverable without reading source code.
 
 # %%
 for feature_name in ["rsi", "atr", "garman_klass_volatility"]:
@@ -127,7 +132,7 @@ for feature_name in ["rsi", "atr", "garman_klass_volatility"]:
     print(f"Feature:     {meta.name}")
     print(f"Category:    {meta.category}")
     print(f"Description: {meta.description}")
-    print(f"Formula:     {meta.formula}")
+    print(f"Formula:     {meta.formula or '(not recorded)'}")
     print(f"Parameters:  {meta.parameters}")
     print(f"Input type:  {meta.input_type}")
 
@@ -153,22 +158,39 @@ display(result.select(["timestamp", "close"] + new_cols).tail(5))
 
 # %% [markdown]
 # ### 3.2 Parameterized Features
+#
+# A list of dicts sets explicit parameters per feature. Each feature name
+# resolves to one output column per call, so a single call holds one parameter
+# set per feature. To compute several horizons of the *same* indicator (a
+# common multi-timeframe setup), call `compute_features` once per parameter set
+# and suffix the columns before joining.
 
 # %%
+# Distinct features, each with an explicit (non-default) parameter set:
 parameterized = [
     {"name": "rsi", "params": {"period": 10}},
-    {"name": "rsi", "params": {"period": 21}},
-    {"name": "sma", "params": {"period": 20}},
-    {"name": "sma", "params": {"period": 50}},
+    {"name": "atr", "params": {"period": 20}},
     {"name": "bollinger_bands", "params": {"period": 20, "std_dev": 2.0}},
 ]
 
 result = compute_features(spy, parameterized)
 
 new_cols = [c for c in result.columns if c not in spy.columns]
-print(f"Parameterized features ({len(new_cols)} columns):")
-for col in new_cols:
-    print(f"  {col}")
+print(f"Parameterized features ({len(new_cols)} columns): {', '.join(new_cols)}")
+
+# %%
+# Multiple horizons of one indicator: one call per period, suffix, then join.
+rsi_multi = spy.select(["timestamp"])
+for period in (10, 21, 63):
+    horizon = compute_features(spy, [{"name": "rsi", "params": {"period": period}}])
+    rsi_multi = rsi_multi.join(
+        horizon.select(["timestamp", pl.col("rsi").alias(f"rsi_{period}")]),
+        on="timestamp",
+    )
+
+rsi_cols = [c for c in rsi_multi.columns if c != "timestamp"]
+print(f"Multi-horizon RSI columns: {rsi_cols}")
+display(rsi_multi.tail(5))
 
 # %% [markdown]
 # ### 3.3 YAML Configuration (Production)
@@ -255,14 +277,64 @@ print("Differences are due to smoothing method (EWM span vs Wilder's).")
 # | Cross-validation with TA-Lib | Non-standard variations |
 
 # %% [markdown]
-# ## 5. Key Polars Patterns for Feature Engineering
+# ## 5. ml4t-diagnostic: Feature Evaluation (Preview)
+#
+# The third library, `ml4t-diagnostic`, closes the loop: once a feature is
+# computed, `analyze_signal()` measures whether it predicts forward returns in
+# the cross-section, reporting the Information Coefficient (rank correlation of
+# factor to forward return), its t-statistic, and quantile spreads. Here we run
+# a single call to show the `ml4t-engineer` to `ml4t-diagnostic` handoff on the
+# full ETF panel. Notebook `05_signal_evaluation` develops the full workflow
+# (ICIR, quantile monotonicity, turnover, half-life).
+
+# %%
+# Compute one momentum factor across the whole ETF cross-section, then evaluate.
+panel = etfs.sort(["symbol", "timestamp"])
+factor = (
+    panel.group_by("symbol", maintain_order=True)
+    .map_groups(lambda g: compute_features(g, [{"name": "mom", "params": {"period": 21}}]))
+    .select(["timestamp", "symbol", pl.col("mom").alias("factor")])
+    .drop_nulls()
+)
+prices = panel.select(["timestamp", "symbol", pl.col("close").alias("price")])
+
+signal = analyze_signal(
+    factor,
+    prices,
+    periods=(1, 5, 21),
+    quantiles=5,
+    date_col="timestamp",
+    asset_col="symbol",
+    price_col="price",
+    factor_col="factor",
+)
+
+print(f"Evaluated on {signal.n_assets} assets over {signal.n_dates:,} dates")
+for horizon in ("1D", "5D", "21D"):
+    print(
+        f"  {horizon:>3s}  IC={signal.ic[horizon]:+.4f}  "
+        f"t-stat={signal.ic_t_stat[horizon]:+.2f}  "
+        f"quantile spread={signal.spread[horizon]:+.4f}"
+    )
+
+# %% [markdown]
+# The 21-day momentum factor carries near-zero cross-sectional IC on this ETF
+# universe, and the t-statistics do not clear conventional significance. A
+# single raw indicator rarely predicts returns on its own; the feature
+# engineering and model-based combination methods in Chapters 8 through 12 are
+# what turn raw features into usable signals. The point here is the interface:
+# `ml4t-engineer` produces the factor and `ml4t-diagnostic` scores it, with no
+# glue code in between.
+
+# %% [markdown]
+# ## 6. Key Polars Patterns for Feature Engineering
 #
 # These three patterns appear in 90% of feature engineering code.
 # The `09_pandas_polars_benchmark` notebook provides full performance
 # comparisons.
 
 # %% [markdown]
-# ### 5.1 GroupBy + Rolling via `.over()`
+# ### 6.1 GroupBy + Rolling via `.over()`
 #
 # Polars' `.over()` expression is the window function syntax — parallel
 # and significantly faster than pandas' `groupby().transform()`.
@@ -286,7 +358,7 @@ display(features.select(["symbol", "timestamp", "close", "ret_1d", "vol_21d"]).t
 # for parallel execution — never chain separate calls.
 
 # %% [markdown]
-# ### 5.2 ASOF Joins (Point-in-Time Matching)
+# ### 6.2 ASOF Joins (Point-in-Time Matching)
 #
 # ASOF joins match by the closest timestamp. Critical for:
 # - Trade-quote matching
@@ -317,7 +389,7 @@ display(matched.head(5))
 # `strategy="backward"` for point-in-time safety.
 
 # %% [markdown]
-# ### 5.3 Lazy Evaluation (Large File Processing)
+# ### 6.3 Lazy Evaluation (Large File Processing)
 #
 # For large files, `scan_parquet()` pushes filters to the storage layer.
 # Here we demonstrate this using a loader to first get the data, then
@@ -343,8 +415,10 @@ print(f"\nQuery plan:\n{spy_lazy.explain()}")
 # 1. **ml4t-data** provides unified loaders for all seven datasets
 # 2. **ml4t-engineer** offers 120+ validated features via a registry API
 # 3. **Config-driven** computation (list, dict, YAML) ensures reproducibility
-# 4. **Library for production**, manual code for teaching and custom factors
-# 5. **Polars patterns** — `.over()`, ASOF joins, lazy scans — power the pipelines
+# 4. **ml4t-diagnostic** scores features against forward returns via
+#    `analyze_signal`; notebook `05_signal_evaluation` covers the full workflow
+# 5. **Library for production**, manual code for teaching and custom factors
+# 6. **Polars patterns** (`.over()`, ASOF joins, lazy scans) power the pipelines
 #
 # **Next**: Chapter 8 notebooks build features manually to explain the
 # economics, then use the registry for case study pipelines.

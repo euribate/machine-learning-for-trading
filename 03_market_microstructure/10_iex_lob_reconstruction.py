@@ -633,6 +633,8 @@ else:
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from utils.style import COLORS
+
 if not snapshots.is_empty() and top_symbol:
     # Filter to rows with valid midpoint and spread (need both bid and ask for these)
     valid_snapshots = snapshots.filter(
@@ -684,7 +686,7 @@ if not snapshots.is_empty() and top_symbol and not snapshots_plot.is_empty():
             y=snapshots_plot["midpoint"].to_list(),
             mode="lines",
             name="Midpoint",
-            line=dict(color="#1a4b6e", width=1),
+            line=dict(color=COLORS["blue"], width=1.5),
         ),
         row=1,
         col=1,
@@ -697,9 +699,9 @@ if not snapshots.is_empty() and top_symbol and not snapshots_plot.is_empty():
             y=snapshots_plot["spread"].to_list(),
             mode="lines",
             name="Spread",
-            line=dict(color="#2d5a87", width=1),
+            line=dict(color=COLORS["amber"], width=1.5),
             fill="tozeroy",
-            fillcolor="rgba(45, 90, 135, 0.2)",
+            fillcolor="rgba(212, 168, 75, 0.2)",
         ),
         row=2,
         col=1,
@@ -711,7 +713,7 @@ if not snapshots.is_empty() and top_symbol and not snapshots_plot.is_empty():
         title=f"IEX LOB Evolution - {top_symbol}",
         height=500,
         showlegend=True,
-        template="plotly_white",
+        template="ml4t",
     )
 
     fig.update_yaxes(title_text="Price ($)", row=1, col=1)

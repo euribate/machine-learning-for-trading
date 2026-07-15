@@ -36,9 +36,6 @@
 """Visual Diagnostics and Stationarity Testing — the diagnostic workflow."""
 
 import warnings
-
-warnings.filterwarnings("ignore")
-
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -50,12 +47,19 @@ from ml4t.diagnostic.evaluation.autocorrelation import analyze_autocorrelation
 from ml4t.diagnostic.evaluation.distribution import analyze_distribution
 from ml4t.diagnostic.evaluation.stationarity import analyze_stationarity
 from ml4t.diagnostic.evaluation.volatility import arch_lm_test
+from ml4t.diagnostic.logging import LogLevel, configure_logging
 from scipy.stats import norm, probplot
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from statsmodels.tsa.stattools import adfuller, kpss
 
 from data import load_etfs, load_macro
+from utils.style import COLORS
+
+# Importing ml4t.diagnostic resets warning filters and installs INFO log
+# handlers; silence both so the reader sees results, not library chatter.
+warnings.filterwarnings("ignore")
+configure_logging(LogLevel.WARNING)
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -111,13 +115,13 @@ ax.set_ylabel("Index Value")
 
 ax = axes[0, 1]
 ax.plot(returns.index, returns.values, linewidth=0.5, alpha=0.8)
-ax.axhline(0, color="red", linestyle="--", linewidth=0.5)
+ax.axhline(0, color=COLORS["neutral"], linestyle="--", linewidth=0.5)
 ax.set_title("S&P 500 Daily Returns (%)")
 ax.set_ylabel("Return (%)")
 
 ax = axes[1, 0]
-ax.plot(vix_pd.index, vix_pd["value"].values, linewidth=0.8, color="orange")
-ax.axhline(20, color="red", linestyle="--", linewidth=0.5, label="VIX=20 threshold")
+ax.plot(vix_pd.index, vix_pd["value"].values, linewidth=0.8, color=COLORS["amber"])
+ax.axhline(20, color=COLORS["negative"], linestyle="--", linewidth=0.5, label="VIX=20 threshold")
 ax.set_title("VIX Index")
 ax.set_ylabel("VIX Level")
 ax.legend()
@@ -125,7 +129,13 @@ ax.legend()
 ax = axes[1, 1]
 ax.hist(returns.values, bins=100, density=True, alpha=0.7, edgecolor="white")
 x = np.linspace(returns.min(), returns.max(), 100)
-ax.plot(x, norm.pdf(x, returns.mean(), returns.std()), "r-", linewidth=2, label="Normal")
+ax.plot(
+    x,
+    norm.pdf(x, returns.mean(), returns.std()),
+    color=COLORS["copper"],
+    linewidth=2,
+    label="Normal",
+)
 ax.set_title("Return Distribution (Fat Tails)")
 ax.set_xlabel("Daily Return (%)")
 ax.set_ylabel("Density")
@@ -227,7 +237,9 @@ def plot_correlogram(series: pd.Series, title: str, lags: int = 40):
     ax = axes[0, 0]
     ax.plot(series.index, series.values, linewidth=0.5, alpha=0.7, label="Series")
     rolling_mean = series.rolling(21).mean()
-    ax.plot(series.index, rolling_mean.values, linewidth=1.5, color="red", label="21-day MA")
+    ax.plot(
+        series.index, rolling_mean.values, linewidth=1.5, color=COLORS["copper"], label="21-day MA"
+    )
     ax.set_title("Time Series with Rolling Mean")
     ax.legend()
 
@@ -247,6 +259,8 @@ def plot_correlogram(series: pd.Series, title: str, lags: int = 40):
 
     ax = axes[0, 1]
     probplot(series, dist="norm", plot=ax)
+    ax.get_lines()[0].set(color=COLORS["blue"], markerfacecolor=COLORS["blue"], markersize=3)
+    ax.get_lines()[1].set_color(COLORS["negative"])
     ax.set_title("Q-Q Plot (Normal)")
     skew_val = series.skew()
     kurt_val = series.kurtosis()
@@ -362,20 +376,22 @@ fig, axes = plt.subplots(3, 1, figsize=(14, 9), sharex=True)
 
 ax = axes[0]
 ax.plot(rolling_df.index, rolling_df["adf_statistic"], linewidth=0.8)
-ax.axhline(-2.86, color="red", linestyle="--", linewidth=0.5, label="5% critical")
+ax.axhline(-2.86, color=COLORS["negative"], linestyle="--", linewidth=0.5, label="5% critical")
 ax.set_title("Rolling ADF Statistic (252-Day Window)")
 ax.set_ylabel("ADF Statistic")
 ax.legend()
 
 ax = axes[1]
-ax.plot(rolling_df.index, rolling_df["kpss_statistic"], linewidth=0.8, color="orange")
-ax.axhline(0.463, color="red", linestyle="--", linewidth=0.5, label="5% critical")
+ax.plot(rolling_df.index, rolling_df["kpss_statistic"], linewidth=0.8, color=COLORS["amber"])
+ax.axhline(0.463, color=COLORS["negative"], linestyle="--", linewidth=0.5, label="5% critical")
 ax.set_title("Rolling KPSS Statistic (252-Day Window)")
 ax.set_ylabel("KPSS Statistic")
 ax.legend()
 
 ax = axes[2]
-ax.fill_between(rolling_df.index, 0, rolling_df["stationarity_regime"], alpha=0.5, color="green")
+ax.fill_between(
+    rolling_df.index, 0, rolling_df["stationarity_regime"], alpha=0.5, color=COLORS["positive"]
+)
 ax.set_title("Stationarity Regime (1 = Stationary by Both Tests)")
 ax.set_ylabel("Regime")
 

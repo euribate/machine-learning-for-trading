@@ -22,7 +22,7 @@
 # **Docker image**: `ml4t-gpu`
 #
 # > **GPU recommended**: ProsusAI/finbert is run as inference over ~8K headlines.
-# > A GPU brings the notebook to ~1 minute end-to-end; on CPU it takes 5–10×
+# > A GPU brings the notebook to ~1 minute end-to-end; on CPU it takes 5-10×
 # > longer. For GPU acceleration:
 # > ```bash
 # > docker compose run --rm ml4t-gpu python 10_text_feature_engineering/06_finbert_cross_dataset.py
@@ -50,11 +50,11 @@
 #   (~8K rows, downloaded on first run).
 #
 # ## Related Notebooks
-# - `03_sentiment_evolution.py` — in-domain comparison on Financial PhraseBank.
-# - `04_bert_finetuning.py` — the fine-tuned baseline used for the in-domain reference value.
+# - `03_sentiment_evolution.py` - in-domain comparison on Financial PhraseBank.
+# - `04_bert_finetuning.py` - the fine-tuned baseline used for the in-domain reference value.
 
 # %%
-"""FinBERT Cross-Dataset Evaluation — measure distribution shift between Financial PhraseBank and FinMarBa."""
+"""FinBERT Cross-Dataset Evaluation - measure distribution shift between Financial PhraseBank and FinMarBa."""
 
 # 1. Setup and Configuration
 import os
@@ -81,7 +81,7 @@ SEED = 42
 SAMPLE_SIZE = 10000
 
 # %%
-# Reproducibility — set_global_seeds covers Python random / NumPy / Torch.
+# Reproducibility - set_global_seeds covers Python random / NumPy / Torch.
 set_global_seeds(SEED)
 
 device = 0 if torch.cuda.is_available() else -1
@@ -91,13 +91,15 @@ print(f"Using device: {'GPU' if device == 0 else 'CPU'}")
 # %% [markdown]
 # ## 2. Load FinMarBa Dataset
 #
-# FinMarBa (Financial Market-Based) is a 2025 dataset with 61,252 financial
-# headlines labeled by actual market reactions, not human annotators. This
-# provides objective labels and true out-of-sample evaluation for FinBERT.
+# FinMarBa (Financial Market-Based) is a 2025 dataset of financial headlines
+# labeled by actual market reactions, not human annotators. This provides
+# objective labels and true out-of-sample evaluation for FinBERT. The split we
+# load here delivers 8,142 headlines (the upstream dataset has been resized since
+# first release; the loader caps at 10,000 and takes whatever is available).
 #
 # **Key differences from Financial PhraseBank:**
 # - Market-based labels (objective) vs human annotations (subjective)
-# - ~61K samples vs ~4.8K samples
+# - ~8K samples vs ~4.8K samples
 # - FinBERT (ProsusAI/finbert) was NOT trained on this data
 
 
@@ -237,13 +239,13 @@ print("=" * 60)
 #
 # This notebook measures **one** number: ProsusAI/finbert's zero-shot
 # accuracy / macro-F1 on FinMarBa. We report it as a cross-domain
-# generalization signal — the model was fine-tuned on Financial PhraseBank
+# generalization signal - the model was fine-tuned on Financial PhraseBank
 # (analyst reports) and is now evaluated on FinMarBa (Twitter/news headlines)
 # without further training.
 #
 # Araci (2019) reports ~87% accuracy / ~0.85 macro F1 for ProsusAI/finbert
 # on the held-out PhraseBank test split. This notebook does not reproduce
-# that in-domain measurement — running the same pipeline on PhraseBank
+# that in-domain measurement - running the same pipeline on PhraseBank
 # would require its own evaluation block. The cross-domain accuracy on
 # FinMarBa is the only measurement made here.
 
@@ -268,10 +270,19 @@ labels = ["negative", "neutral", "positive"]
 cm = confusion_matrix(true_labels, predictions)
 im = ax.imshow(cm, cmap="Blues")
 
-# Add annotations
+# Add annotations; use light text on the dark high-count cells for legibility.
+threshold = cm.max() / 2.0
 for i in range(3):
     for j in range(3):
-        ax.text(j, i, str(cm[i, j]), ha="center", va="center", fontsize=12)
+        ax.text(
+            j,
+            i,
+            str(cm[i, j]),
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="white" if cm[i, j] > threshold else "#0a1628",
+        )
 
 ax.set_xticks(range(3))
 ax.set_yticks(range(3))
@@ -297,7 +308,7 @@ plt.show()
 # 1. **Same labels ≠ same distribution**: Text style, length, and vocabulary differ
 # 2. **Domain adaptation limits**: Models trained on one corpus may not generalize
 # 3. **Market-based labels**: FinMarBa labels reflect actual market reactions, not
-#    human annotations—a different notion of "sentiment"
+#    human annotations-a different notion of "sentiment"
 #
 # ### Implications for Practitioners
 # - Always evaluate on held-out data from different sources when possible

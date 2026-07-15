@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.18.1
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -23,17 +23,20 @@
 #
 # ## Purpose
 #
-# This notebook aggregates temporal feature results across all case studies,
-# comparing model inventories, incremental IC contributions, and regime detection
-# patterns. It answers the key question: **when do temporal features help,
-# and when are they noise?**
+# This notebook inventories the temporal features each case study produced -
+# which model families (GARCH, HMM, Kalman, FFD, ARIMA, ...) appear, how many
+# features each contributes, and where regime indicators are present. It is a
+# cross-asset map of *what was built*; the incremental predictive value of these
+# features is evaluated inside each case study's ML pipeline (Ch11+) against the
+# results registry, not here.
 #
 # ## Learning Objectives
 #
 # 1. Compare temporal model usage across asset classes (GARCH, HMM, Kalman, FFD, ARIMA)
-# 2. Quantify incremental IC from temporal features beyond base features
-# 3. Compare regime detection across case studies (do stress regimes align?)
-# 4. Identify which temporal models add the most predictive value
+# 2. Count how many temporal features each case study contributes, and in which families
+# 3. Locate regime indicators (HMM / regime features) across case studies
+# 4. See where walk-forward temporal features enter the pipeline, before their
+#    predictive value is measured downstream
 #
 # ## Prerequisites
 #
@@ -47,6 +50,7 @@ import warnings
 
 import plotly.graph_objects as go
 import polars as pl
+from IPython.display import display
 
 warnings.filterwarnings("ignore")
 
@@ -171,9 +175,8 @@ for cs, result in all_temporal.items():
     row["n_features"] = result["n_temporal_features"]
     model_inventory.append(row)
 
-if model_inventory:
-    inv_df = pl.DataFrame(model_inventory)
-    inv_df
+inv_df = pl.DataFrame(model_inventory)
+inv_df
 
 # %% [markdown]
 # ## 3. Temporal Feature Count by Case Study
@@ -211,11 +214,13 @@ if all_temporal:
     fig.show()
 
 # %% [markdown]
-# ## 4. Incremental IC from Temporal Features
+# ## 4. Temporal Feature Inventory by Case Study
 #
-# The key question: do temporal features add predictive value beyond
-# the base features from Ch8? We compare individual temporal feature IC
-# against the primary label.
+# A representative sample of the temporal feature names each case study produces,
+# alongside the count of features in each model family. This shows the *shape* of
+# each case study's temporal feature set. Whether these features add incremental
+# predictive value is measured in the case study ML pipelines (Ch11+), where their
+# IC is evaluated against the registry - not in this inventory.
 
 # %%
 if has_incremental:
@@ -232,7 +237,7 @@ if has_incremental:
 
     if incr_rows:
         incr_df = pl.DataFrame(incr_rows)
-        incr_df
+        display(incr_df)
 
         # Bar chart: feature count by family per case study
         fig = go.Figure()
@@ -289,10 +294,12 @@ regime_df = pl.DataFrame(regime_info)
 regime_df
 
 # %% [markdown]
-# ## 6. Walk-Forward Discipline Audit
+# ## 6. Temporal Model Presence by Case Study
 #
-# Temporal models are prone to lookahead bias. Verify that all case studies
-# use filtered (not smoothed) probabilities and walk-forward fitting.
+# Temporal models are prone to lookahead bias, so they are fit walk-forward inside
+# each case study's cross-validation pipeline - that is where the filtered-vs-smoothed
+# and point-in-time discipline is enforced and tested. Here we simply record which
+# temporal models are present per case study as a coverage check.
 
 # %%
 # Temporal models are all fitted walk-forward within the CV framework (per the pipeline design).
@@ -313,35 +320,25 @@ disc_df = pl.DataFrame(discipline_rows)
 disc_df
 
 # %% [markdown]
-# ## Key Findings
+# ## Summary
 #
-# *This section will be populated after incremental evaluation data is available.*
+# This inventory maps the temporal features available to each case study before
+# their predictive value is measured downstream:
 #
-# **Expected patterns**:
-# 1. **HMM regime features**: Low individual IC but valuable for conditional analysis.
-#    Regime indicators help downstream models adapt to volatility environments rather
-#    than directly predicting returns.
-# 2. **GARCH conditional volatility**: Strong IC for options-based case studies
-#    (sp500_options, sp500_equity_option_analytics) where volatility IS the signal.
-#    Weaker for equity momentum where vol is a secondary factor.
-# 3. **FFD (fractional differencing)**: Preserves long memory while achieving
-#    stationarity. Most valuable for ETFs and equities where price levels carry
-#    information but are non-stationary.
-# 4. **Kalman filter**: Strongest for FX where trend/mean-reversion decomposition
-#    separates slow macro trends from noise.
-# 5. **Incremental value is modest**: Temporal features typically add 5-15% to
-#    overall model performance. The base features from Ch8 carry most of the signal.
+# - **Model coverage varies by asset class.** The inventory table (Section 2) shows
+#   which of GARCH, HMM, Kalman, FFD, ARIMA, spectral, and Bayesian-SV features each
+#   case study produced; not every model applies to every market.
+# - **Regime indicators** (HMM / regime-tagged features) appear wherever a case study
+#   runs an HMM, and feed conditional analysis rather than predicting returns directly.
+# - **Feature counts** (Section 3) show how much temporal structure each case study
+#   adds on top of its Ch8 base features.
 #
-# **When temporal features help**:
-# - High-frequency data with autocorrelation structure (crypto 8H, NASDAQ 15M)
-# - Volatility-driven strategies (options, VRP)
-# - Trend-following with regime conditioning (ETFs, futures)
+# What this notebook deliberately does **not** claim is the incremental IC of temporal
+# features. That is evaluated per case study in the ML pipeline (Ch11+) against the
+# results registry, where base-plus-temporal models are compared to base-only models
+# on held-out data. Chapter 9.7 discusses temporal feature integration and the risk of
+# adding complexity without proportional predictive improvement; the case study results
+# are what quantify whether that risk paid off.
 #
-# **When temporal features are noise**:
-# - Monthly data with limited time series (firm characteristics: 84 months)
-# - Very efficient markets at the target horizon (daily FX returns)
-# - Small cross-sections where regime detection is unstable (4-symbol options)
-#
-# **Next**: Case study agents will run models in Ch11+ using combined base + temporal features.
-# **Book**: Chapter 9.7 discusses temporal feature integration and the risk of
-# adding complexity without proportional predictive improvement.
+# **Next**: case study pipelines (Ch11+) fit models on combined base + temporal
+# features and record their evaluation in the registry.

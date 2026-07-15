@@ -538,7 +538,6 @@ for pair_y, pair_x, description in CANDIDATE_PAIRS:
             "Obs": len(pair_df),
             "EG p-value": eg_pval_pair,
             "Johansen": "Yes" if joh_sig else "No",
-            "Cointegrated": eg_pval_pair < 0.05,
             "Hedge Ratio": hedge,
             "Half-life (d)": hl,
         }
@@ -580,8 +579,11 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 # %% [markdown]
 # ### Generate Signals for Cointegrated Pairs
 #
-# Package spread signals and hedge ratios for all cointegrated pairs,
-# saving for downstream strategy evaluation in Chapters 18–19.
+# We save signals for any pair with cointegration evidence from either
+# test (Engle-Granger at 5% or Johansen at 5%). The primary demonstration
+# pair XLE/USO illustrates the mechanics above but is not saved: it fails
+# both tests over this sample. Downstream strategy evaluation in Chapters
+# 18 and 19 consumes only pairs the screening supports.
 
 
 # %%
@@ -635,34 +637,23 @@ def generate_pair_signals(pair_y: str, pair_x: str) -> pl.DataFrame | None:
 
 
 # %%
-# Apply to all cointegrated pairs
+# Save signals for every pair with cointegration evidence from either test
+# (Engle-Granger at 5% or Johansen at 5%). A pair flagged by only one test is
+# kept but treated with caution downstream; a pair that fails both is excluded.
 all_signals = []
-cointegrated_pairs = [r for r in screening_results if r["Cointegrated"]]
+eligible_pairs = [r for r in screening_results if r["EG p-value"] < 0.05 or r["Johansen"] == "Yes"]
 
-print(f"Processing {len(cointegrated_pairs)} cointegrated pairs...")
+print(f"Processing {len(eligible_pairs)} pairs with cointegration evidence...")
 
-for r in cointegrated_pairs:
+for r in eligible_pairs:
     pair_y, pair_x = r["Pair"].split("/")
     signals = generate_pair_signals(pair_y, pair_x)
     if signals is not None:
         all_signals.append(signals)
-
-# Also include the primary pair if not already included
-if f"{PAIR_Y}/{PAIR_X}" not in [r["Pair"] for r in cointegrated_pairs]:
-    primary_signals = pl.DataFrame(
-        {
-            "timestamp": df.index.values,
-            "pair": f"{PAIR_Y}/{PAIR_X}",
-            "asset_y": PAIR_Y,
-            "asset_x": PAIR_X,
-            "hedge_ratio": df["hedge_ratio_kf"].values,
-            "spread": df["spread_kf"].values,
-            "z_score": df["z_score"].values,
-            "signal": df["signal"].values,
-        }
-    ).drop_nulls()
-    all_signals.append(primary_signals)
-    print(f"  {PAIR_Y}/{PAIR_X}: {len(primary_signals)} obs (primary)")
+        print(
+            f"  {r['Pair']}: EG p={r['EG p-value']:.4f}, "
+            f"Johansen={r['Johansen']}, {len(signals):,} obs"
+        )
 
 # %%
 # Combine and save

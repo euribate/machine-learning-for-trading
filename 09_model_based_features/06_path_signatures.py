@@ -56,6 +56,7 @@ from sklearn.metrics import r2_score
 
 from data import load_etfs
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -292,13 +293,14 @@ print(f"Log-signature dimension (depth {SIGNATURE_DEPTH}): {logsignatures.shape[
 # ### Computational Complexity
 #
 # The signature dimension grows exponentially with depth: for a $d$-dimensional path
-# truncated at depth $K$, the full signature has $\sum_{k=1}^{K} d^k$ terms. Our
-# 3-dimensional path (time, price, cumulative return) at depth 3 produces
-# $3 + 9 + 27 = 39$ features. A 5-dimensional path (e.g., multi-asset) at depth 3
-# would produce $5 + 25 + 125 = 155$ features per window.
+# truncated at depth $K$, `esig` returns $1 + \sum_{k=1}^{K} d^k$ terms (the leading
+# term is the constant level-0 scalar $1$). Our 3-dimensional path (time, price,
+# cumulative return) at depth 3 produces $1 + 3 + 9 + 27 = 40$ features. A
+# 5-dimensional path (e.g., multi-asset) at depth 3 would produce
+# $1 + 5 + 25 + 125 = 156$ features per window.
 #
 # Log-signatures are substantially more compact: the same 3D path at depth 3 yields
-# only 14 log-signature terms (vs. 39 full signature terms). This compactness makes
+# only 14 log-signature terms (vs. 40 full signature terms). This compactness makes
 # log-signatures the pragmatic default for production use.
 #
 # **Practical guideline**: Truncation at depth 2 is sufficient for most daily-frequency
@@ -450,16 +452,17 @@ results = {
 # ## Results Comparison
 
 # %%
-print("=" * 60)
-print("Predictive Performance Comparison (5-day forward returns)")
-print("=" * 60)
-print(f"{'Feature Set':<20} {'Train R²':>10} {'Val R²':>10} {'Test R²':>10} {'Test IC':>10}")
-print("-" * 60)
-for name, res in results.items():
-    print(
-        f"{name:<20} {res['train_r2']:>10.4f} {res['val_r2']:>10.4f} {res['test_r2']:>10.4f} {res['ic']:>10.4f}"
-    )
-print("-" * 60)
+# Predictive performance across feature sets (5-day forward returns)
+results_df = pl.DataFrame(
+    {
+        "Feature Set": list(results.keys()),
+        "Train R²": [res["train_r2"] for res in results.values()],
+        "Val R²": [res["val_r2"] for res in results.values()],
+        "Test R²": [res["test_r2"] for res in results.values()],
+        "Test IC": [res["ic"] for res in results.values()],
+    }
+).with_columns(pl.col(pl.Float64).round(4))
+results_df
 
 # %% [markdown]
 # **Interpretation**:
@@ -475,9 +478,12 @@ print("-" * 60)
 
 # %% [markdown]
 # ## Visualize Signature Feature Importance
+#
+# Importance is the gradient-boosting impurity reduction (`feature_importances_`),
+# which measures predictive contribution to this single model, not causal importance.
 
 # %%
-# Feature importance for combined model
+# Feature importance for combined model (impurity-based)
 combined_model = results["Combined"]["model"]
 n_lag = lag_features.shape[1]
 n_sig = logsignatures.shape[1]
@@ -490,9 +496,9 @@ fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
 # Importance by category
 ax = axes[0]
-ax.bar(["Lag Features", "Signatures"], [lag_imp, sig_imp], color=["steelblue", "darkorange"])
-ax.set_ylabel("Total Feature Importance")
-ax.set_title("Feature Category Importance in Combined Model")
+ax.bar(["Lag features", "Signatures"], [lag_imp, sig_imp], color=[COLORS["blue"], COLORS["copper"]])
+ax.set_ylabel("Total impurity importance")
+ax.set_title("Lag and signature features contribute nearly equally")
 
 # Top individual features
 ax = axes[1]
@@ -502,10 +508,10 @@ top_idx = np.argsort(importances)[-top_k:][::-1]
 ax.barh(
     [feature_names[i] for i in top_idx],
     importances[top_idx],
-    color=["steelblue" if i < n_lag else "darkorange" for i in top_idx],
+    color=[COLORS["blue"] if i < n_lag else COLORS["copper"] for i in top_idx],
 )
-ax.set_xlabel("Feature Importance")
-ax.set_title(f"Top {top_k} Individual Features")
+ax.set_xlabel("Impurity importance")
+ax.set_title(f"Lag and signature terms interleave across the top {top_k}")
 ax.invert_yaxis()
 
 plt.tight_layout()

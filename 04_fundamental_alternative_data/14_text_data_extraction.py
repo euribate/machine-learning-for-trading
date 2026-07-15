@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -49,7 +49,7 @@
 # - **Item Numbers**: Standard sections in SEC filings (Item 7 = MD&A)
 
 # %%
-"""Text Data Extraction — extract and structure high-value text blocks from SEC filings for NLP analysis."""
+"""Text Data Extraction - extract and structure high-value text blocks from SEC filings for NLP analysis."""
 
 import warnings
 
@@ -61,12 +61,17 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import plotly.graph_objects as go
 import polars as pl
 from bs4 import BeautifulSoup
 from edgar import Company, set_identity
 
+# Importing utils.style registers and activates the ML4T Plotly template
+# (house palette, fonts, gridlines) so figures inherit the book style.
+from utils.style import COLORS
+
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Production defaults - Papermill injects overrides for CI
 EDGAR_TICKER = "AAPL"
 EDGAR_FORM = "10-K"
 
@@ -302,7 +307,7 @@ def extract_section(text: str, section_name: str, patterns: dict = None) -> str 
     Robust to TOC duplicates by finding all start_pattern matches and
     picking the candidate (start, end) span with the most content
     between it and the next end_pattern. Inline references inside
-    narrative text are filtered out by the same span-length test —
+    narrative text are filtered out by the same span-length test -
     they don't have a matching end-pattern Item N+1 immediately after.
 
     Parameters
@@ -803,7 +808,7 @@ print("  save_text_dataset(text_dataset, 'data/sec_text_data.parquet')")
 # ```
 #
 # The fetch is read-only, rate-limited by edgartools, and typically
-# completes in 1–3 seconds.
+# completes in 1-3 seconds.
 
 # %%
 edgar_identity = os.environ.get("EDGAR_IDENTITY")
@@ -825,8 +830,8 @@ print(
 # %% [markdown]
 # Fetch the filing text and run the section extractor with the
 # form-aware patterns. The two highest-value sections (Risk Factors
-# and MD&A) come back as plain strings — ready for `clean_text`,
-# tokenisation, or downstream NLP feature engineering.
+# and MD&A) come back as plain strings - ready for `clean_text`,
+# tokenization, or downstream NLP feature engineering.
 
 # %%
 real_text = latest_filing.text()
@@ -854,11 +859,58 @@ real_stats = pl.DataFrame(
 real_stats
 
 # %% [markdown]
-# A successful run shows non-zero word counts on each row — the same
+# A successful run shows non-zero word counts on each row - the same
 # pipeline that produced the synthetic-text statistics in Section 5
 # works against a current SEC filing without code changes. From here,
 # the cleaned strings feed directly into the NLP feature pipeline in
 # Chapter 10.
+#
+# Charting the per-section word counts makes the relative text budget
+# explicit: the Risk Factors block dwarfs Business and MD&A. Modern 10-K
+# risk sections have ballooned into the single largest narrative block,
+# which is exactly why they are the most-mined section for sentiment and
+# change-detection signals downstream.
+
+# %%
+# Section labels for display (item numbers depend on form type; keep generic).
+_SECTION_LABELS = {
+    "business": "Business",
+    "risk_factors": "Risk Factors",
+    "mda": "MD&A",
+}
+
+chart_df = real_stats.sort("word_count", descending=True)
+labels = [_SECTION_LABELS.get(s, s) for s in chart_df["section"].to_list()]
+counts = chart_df["word_count"].to_list()
+
+# Emphasise the largest section in amber; the rest provide context in blue.
+bar_colors = [COLORS["amber"] if i == 0 else COLORS["blue"] for i in range(len(labels))]
+
+fig = go.Figure(
+    go.Bar(
+        x=counts,
+        y=labels,
+        orientation="h",
+        marker_color=bar_colors,
+        text=[f"{c:,}" for c in counts],
+        textposition="outside",
+        cliponaxis=False,
+    )
+)
+fig.update_layout(
+    title=dict(
+        text=f"Risk Factors Dominate the Text Volume in {EDGAR_TICKER}'s Latest {EDGAR_FORM}"
+        f"<br><sup>Extracted words per high-value section, accession "
+        f"{latest_filing.accession_no}</sup>",
+    ),
+    xaxis_title="Extracted Words (count)",
+    xaxis=dict(range=[0, max(counts) * 1.15]),  # headroom for outside data labels
+    yaxis_title="",
+    yaxis=dict(autorange="reversed"),  # largest section at the top
+    margin=dict(l=110, r=40, t=70, b=55),
+    height=360,
+)
+fig.show()
 
 # %% [markdown]
 # ## 9. Key Takeaways

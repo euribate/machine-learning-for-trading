@@ -30,6 +30,7 @@
 # %%
 """Polymarket Prediction Markets — compare crypto-based event contracts with Kalshi for ML feature engineering."""
 
+import re
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -188,7 +189,6 @@ fig.update_layout(
     xaxis_title="Latest Implied Probability",
     yaxis_title="Number of Contracts",
     xaxis=dict(tickformat=".0%", range=[0, 1.05]),
-    template="plotly_white",
     height=450,
     margin=dict(t=90, b=60, l=60, r=40),
 )
@@ -216,6 +216,8 @@ fig.show()
 category_colors = {
     "monetary_policy": COLORS["amber"],
     "crypto": COLORS["slate"],
+    "technology": COLORS["copper"],
+    "science": COLORS["positive"],
     "commodities": COLORS["blue"],
     "geopolitics": COLORS.get("rose", "#e11d48"),
     "other": "#94a3b8",
@@ -278,7 +280,6 @@ fig.update_layout(
     xaxis_title="Date",
     yaxis_title="Implied Probability",
     yaxis=dict(tickformat=".0%", range=[0, 1.05]),
-    template="plotly_white",
     height=500,
     margin=dict(t=160, b=60, l=60, r=40),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
@@ -332,7 +333,7 @@ live_snapshot.head(10) if live_snapshot is not None else None
 #
 # Both Polymarket and Kalshi offer binary contracts on Federal Reserve
 # rate decisions. This creates a natural cross-platform comparison. We
-# load the Kalshi OHLCV data from disk (see notebook 13) and compare it
+# load the Kalshi OHLCV data from disk (see notebook 12) and compare it
 # with downloaded Polymarket monetary-policy contracts.
 
 # %%
@@ -349,12 +350,17 @@ print(f"Polymarket Fed/Macro markets: {len(fed_markets)}")
 fed_markets.select("symbol", "latest_prob", "total_volume", "avg_intraday_range")
 
 # %% [markdown]
-# ## 10. Kalshi Rate Threshold Probabilities
+# ## 10. Two Ways to Trade the Fed: Kalshi Ladder vs Polymarket Events
 #
-# Kalshi offers multiple threshold contracts per FOMC meeting (e.g., rate
-# above 4.00%, 4.25%, 4.50%). These form a probability distribution over
-# rate outcomes. We visualize the latest Kalshi prices alongside the latest
-# downloaded Polymarket monetary-policy probabilities.
+# The two platforms cover Fed policy very differently, and the contrast is the
+# point. Kalshi offers many threshold contracts per FOMC meeting (rate above
+# 0.25%, 2.25%, 3.75%, ...), which together form a full implied-probability
+# *distribution* over rate outcomes - so its prices span roughly 1% to 95%.
+# Polymarket's Fed markets are instead a handful of *discrete event* bets
+# (a 25bp cut after the June meeting, Powell out as chair, Shelton confirmed),
+# and in this snapshot every one is a low-probability tail event under 5%. That
+# is why the panels below use separate x-scales: forcing them onto one axis would
+# render the Polymarket bets invisible and imply a false like-for-like comparison.
 
 # %%
 kalshi_latest = (
@@ -369,63 +375,105 @@ kalshi_latest = (
 )
 kalshi_latest
 
+
 # %%
+def _short_kalshi_label(sym: str) -> str:
+    # KXFED-27APR-T0.25 -> "Apr'27 >=0.25%"
+    parts = sym.split("-")
+    meeting = parts[1] if len(parts) > 1 else sym
+    thr = parts[-1][1:] if parts[-1].startswith("T") else ""
+    m = re.match(r"(\d{2})([A-Z]{3})", meeting)
+    stem = f"{m.group(2).title()}'{m.group(1)}" if m else meeting
+    return f"{stem} ≥{thr}%" if thr else stem
+
+
+def _short_poly_label(sym: str) -> str:
+    # Turn a Polymarket slug into a short, distinct human label.
+    s = sym.replace(":YES", "")
+    up = s.upper()
+    m = re.search(
+        r"(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*-(?:\d{1,2}-)?(\d{4})", up
+    )
+    when = f" ({m.group(1).title()} '{m.group(2)[2:]})" if m else ""
+    bps = re.search(r"(\d+)-BPS", up)
+    if "DECREASE" in up:
+        return f"Cut {bps.group(1)}bps{when}" if bps else f"Rate cut{when}"
+    if "INCREASE" in up:
+        return f"Hike {bps.group(1)}bps{when}" if bps else f"Rate hike{when}"
+    if "POWELL" in up and "OUT" in up:
+        return f"Powell out{when}"
+    if "SHELTON" in up:
+        return "Shelton as chair"
+    words = s.replace("-", " ").split()
+    return " ".join(w.title() for w in words[:4]) + ("…" if len(words) > 4 else "")
+
+
+# Horizontal bars so the long market names read cleanly on the y-axis. The two
+# platforms are NOT the same contract: Kalshi is a granular rate-threshold ladder
+# (a full distribution, ~1-95%); Polymarket's Fed markets are a handful of discrete
+# tail-event bets, all well under 5% here - so each panel gets its own x-scale with
+# explicit probability labels rather than a shared axis that would hide them.
 fig = make_subplots(
     rows=1,
     cols=2,
     subplot_titles=(
-        "Kalshi: KXFED Thresholds",
-        "Polymarket: Monetary Policy",
+        "Kalshi: rate-threshold ladder",
+        "Polymarket: discrete event bets",
     ),
-    horizontal_spacing=0.18,
+    horizontal_spacing=0.30,
 )
 
-kalshi_data = kalshi_latest.to_pandas()
-labels = [s.split("-T")[-1] if "-T" in s else s for s in kalshi_data["symbol"]]
-
+kalshi_data = kalshi_latest.sort("kalshi_prob").to_pandas()
 fig.add_trace(
     go.Bar(
-        x=labels,
-        y=kalshi_data["kalshi_prob"],
+        x=kalshi_data["kalshi_prob"],
+        y=[_short_kalshi_label(s) for s in kalshi_data["symbol"]],
+        orientation="h",
         marker_color=COLORS["blue"],
-        name="Kalshi",
+        text=[f"{p:.0%}" for p in kalshi_data["kalshi_prob"]],
+        textposition="outside",
+        cliponaxis=False,
     ),
     row=1,
     col=1,
 )
+fig.update_xaxes(range=[0, 1.12], tickformat=".0%", title_text="Implied probability", row=1, col=1)
 
 if not fed_markets.is_empty():
-    fed_data = fed_markets.filter(pl.col("latest_prob").is_not_null()).to_pandas()
-    fed_labels = [s[:35] + "..." if len(s) > 35 else s for s in fed_data["symbol"]]
-
+    fed_data = (
+        fed_markets.filter(pl.col("latest_prob").is_not_null()).sort("latest_prob").to_pandas()
+    )
+    poly_max = float(fed_data["latest_prob"].max())
     fig.add_trace(
         go.Bar(
-            x=fed_labels,
-            y=fed_data["latest_prob"],
+            x=fed_data["latest_prob"],
+            y=[_short_poly_label(s) for s in fed_data["symbol"]],
+            orientation="h",
             marker_color=COLORS["amber"],
-            name="Polymarket",
+            text=[f"{p:.1%}" for p in fed_data["latest_prob"]],
+            textposition="outside",
+            cliponaxis=False,
         ),
         row=1,
         col=2,
     )
-
-# %%
-fig.update_yaxes(tickformat=".0%", range=[0, 1.05], row=1, col=1)
-fig.update_yaxes(tickformat=".0%", range=[0, 1.05], row=1, col=2)
-fig.update_xaxes(tickangle=45, row=1, col=1)
-fig.update_xaxes(tickangle=45, row=1, col=2)
+    fig.update_xaxes(
+        range=[0, poly_max * 1.4],
+        tickformat=".1%",
+        title_text="Implied probability (own scale)",
+        row=1,
+        col=2,
+    )
 
 fig.update_layout(
-    title=dict(text="Fed Rate Markets: Kalshi vs Polymarket", y=0.98),
-    height=600,
-    template="plotly_white",
-    showlegend=True,
-    legend=dict(orientation="h", yanchor="top", y=-0.35, xanchor="center", x=0.5),
-    margin=dict(t=110, b=180, l=60, r=40),
+    title=dict(
+        text="Kalshi prices a full rate ladder; Polymarket lists a few low-probability Fed bets",
+        y=0.97,
+    ),
+    height=460,
+    showlegend=False,
+    margin=dict(t=90, b=60, l=150, r=80),
 )
-# Push subplot titles down so the legend at the top of plot area can fit
-for ann in fig.layout.annotations:
-    ann.update(y=1.05)
 
 fig.show()
 
@@ -513,7 +561,15 @@ fig = make_subplots(
     horizontal_spacing=0.15,
 )
 
-for cat in ["monetary_policy", "crypto", "commodities", "geopolitics"]:
+# Iterate over the categories actually present in the snapshot (ordered by
+# market count) so every downloaded bucket appears — hard-coding a fixed
+# list silently drops categories like technology and science that the
+# regex/loader inference surfaces.
+present_categories = (
+    features.group_by("category").len().sort("len", descending=True)["category"].to_list()
+)
+
+for cat in present_categories:
     subset = features.filter(pl.col("category") == cat)
     if subset.is_empty():
         continue
@@ -546,7 +602,6 @@ fig.update_yaxes(title_text="Intraday Range", tickformat=".1%", row=1, col=2)
 fig.update_layout(
     title=dict(text="ML Feature Distributions by Market Category", y=0.98),
     height=550,
-    template="plotly_white",
     legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
     margin=dict(t=100, b=130, l=60, r=40),
 )
@@ -556,9 +611,13 @@ for ann in fig.layout.annotations:
 fig.show()
 
 # %% [markdown]
-# Monetary policy markets tend to have high conviction (prices near 0 or 1)
-# because FOMC outcomes are well-anticipated. Crypto and commodity markets
-# show more dispersion — more opportunities for ML-driven signals.
+# Across this snapshot every category sits close to full conviction: prices
+# cluster near 0 or 1, so `|p - 0.5|` stays near 0.5 for essentially all
+# contracts and the high-confidence flag is set on every row. The categories
+# separate on intraday range instead — crypto contracts move the most within
+# a bar, while monetary-policy, technology, and science contracts are nearly
+# static. That intraday dispersion is where ML-driven signals are most likely
+# to live.
 
 # %% [markdown]
 # ## 13. Data Quality Assessment

@@ -13,7 +13,7 @@
 #     name: python3
 # ---
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # # Feature Selection and Deduplication
 #
 # **Chapter 8: Feature Engineering**
@@ -50,10 +50,10 @@
 #
 # **Output**: Selected feature list for downstream Chapter 9 use
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## Setup
 
-# %%
+# %% tags=[]
 """Feature Selection and Deduplication — reduce feature candidates to a focused production-ready set."""
 
 import warnings
@@ -80,15 +80,15 @@ N_BOOTSTRAP = 50
 MAX_SYMBOLS = 0
 SEED = 42
 
-# %%
+# %% tags=[]
 set_global_seeds(SEED)
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 1. Load Features from ETF Case Study
 #
 # The ETF case study produced features in `case_studies/etfs/features/`.
 
-# %%
+# %% tags=[]
 CASE_DIR = get_case_study_dir("etfs")
 FEATURES_PATH = CASE_DIR / "features" / "financial.parquet"
 
@@ -128,20 +128,32 @@ labels_df = (
 print(f"Features: {features_df.shape}")
 print(f"Labels: {labels_df.shape}")
 
-# %%
+# %% tags=[]
 all_feature_cols = [c for c in features_df.columns if c not in ["timestamp", "symbol"]]
+
+# Replace non-finite feature values (e.g. 0/0 in short-window Sharpe ratios)
+# with nulls. Left in place they survive drop_nulls (which removes only nulls)
+# and propagate NaN through pl.corr and the panel correlation matrix, poisoning
+# the affected features' correlations and misgrouping them in the clustering.
+features_df = features_df.with_columns(
+    [
+        pl.when(pl.col(c).is_finite()).then(pl.col(c)).otherwise(None).alias(c)
+        for c in all_feature_cols
+    ]
+)
+
 print(f"Available features: {len(all_feature_cols)}")
 for i, col in enumerate(all_feature_cols, 1):
     print(f"  {i:2d}. {col}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 2. Compute Information Coefficient (IC)
 #
 # IC measures the Spearman rank correlation between features and forward returns.
 # We compute IC **cross-sectionally** (per date, then average). Pooled IC
 # conflates time-series drift with cross-sectional predictive power.
 
-# %%
+# %% tags=[]
 # Merge features with forward returns
 analysis = features_df.join(
     labels_df.select(["timestamp", "symbol", "fwd_return_1m"]),
@@ -151,7 +163,7 @@ analysis = features_df.join(
 
 print(f"Analysis dataset: {analysis.shape}")
 
-# %%
+# %% tags=[]
 # Compute cross-sectional IC per date
 ic_by_date = analysis.group_by("timestamp").agg(
     [pl.corr(col, "fwd_return_1m", method="spearman").alias(col) for col in all_feature_cols]
@@ -161,32 +173,48 @@ ic_by_date = analysis.group_by("timestamp").agg(
 # information sets, slow-moving common factors). We report both the i.i.d.
 # t-stat and a Newey-West HAC t-stat from regressing the IC time series on a
 # constant. HAC is the headline used for the BH-FDR step in §5.
+#
+# ``pl.corr`` returns a float NaN (not a null) on any date where a feature is
+# constant across symbols, so we filter each daily IC series on finiteness
+# rather than nulls. A feature whose cross-sectional IC is undefined on most
+# dates, or whose defined ICs have zero variance, is a date-level series with no
+# cross-sectional signal; we drop it from the ranking and every downstream step.
 NW_MAXLAGS = 12
+MIN_IC_OBS = 20
+MIN_DEFINED_FRAC = 0.5
+
+
+def finite_daily_ics(col: str) -> np.ndarray | None:
+    """Finite daily cross-sectional ICs for a feature, or ``None`` when it has
+    no usable cross-sectional variation."""
+    ics = ic_by_date[col].to_numpy()
+    ics = ics[np.isfinite(ics)]
+    if len(ics) < MIN_IC_OBS or len(ics) / ic_by_date.height < MIN_DEFINED_FRAC:
+        return None
+    if np.std(ics, ddof=1) == 0:
+        return None
+    return ics
+
+
 ic_results = {}
+excluded_features = []
 for col in all_feature_cols:
-    daily_ics = ic_by_date[col].drop_nulls().to_numpy()
-    if len(daily_ics) < 10:
-        ic_results[col] = {"ic": np.nan, "n": len(daily_ics)}
+    daily_ics = finite_daily_ics(col)
+    if daily_ics is None:
+        excluded_features.append(col)
         continue
 
     mean_ic = np.mean(daily_ics)
     std_ic = np.std(daily_ics, ddof=1)
-    # Yield NaN on both branches when std_ic == 0 so the iid and HAC outputs
-    # are internally consistent for degenerate series.
-    if std_ic > 0:
-        t_stat_iid = mean_ic / (std_ic / np.sqrt(len(daily_ics)))
-        nw = sm.OLS(daily_ics, np.ones(len(daily_ics))).fit(
-            cov_type="HAC", cov_kwds={"maxlags": NW_MAXLAGS}
-        )
-        t_stat_nw = float(nw.tvalues[0])
-    else:
-        t_stat_iid = np.nan
-        t_stat_nw = np.nan
+    t_stat_iid = mean_ic / (std_ic / np.sqrt(len(daily_ics)))
+    nw = sm.OLS(daily_ics, np.ones(len(daily_ics))).fit(
+        cov_type="HAC", cov_kwds={"maxlags": NW_MAXLAGS}
+    )
     ic_results[col] = {
         "ic": mean_ic,
         "ic_std": std_ic,
         "t_stat_iid": t_stat_iid,
-        "t_stat_NW": t_stat_nw,
+        "t_stat_NW": float(nw.tvalues[0]),
         "n": len(daily_ics),
     }
 
@@ -207,10 +235,15 @@ ic_df = (
     .sort("ic_abs", descending=True)
 )
 
+if excluded_features:
+    print(
+        f"Excluded {len(excluded_features)} features with no cross-sectional "
+        f"variation (date-level series): {excluded_features}"
+    )
 print(f"\nFeature IC Rankings (top 15) — Newey-West with {NW_MAXLAGS} lags:")
 ic_df.head(15)
 
-# %%
+# %% tags=[]
 # IC bar chart
 fig, ax = plt.subplots(figsize=(10, 8))
 ic_pd = ic_df.to_pandas().sort_values("ic_abs", ascending=True)
@@ -224,26 +257,26 @@ ax.set_title("Feature IC Ranking")
 ax.legend()
 plt.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 3. Correlation Filtering
 #
 # Highly correlated features provide overlapping information. We compute
 # correlation on the full panel (all dates × symbols), then remove features
 # with |r| > 0.9 — keeping the one with higher IC in each redundant pair.
 
-# %%
+# %% tags=[]
 feature_matrix = features_df.select(all_feature_cols).drop_nulls()
 corr_np = feature_matrix.corr().to_numpy()
 
 print(f"Correlation matrix: {corr_np.shape[0]} × {corr_np.shape[1]} features")
 
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### Remove Redundant Features
 # Greedily drop the weaker member of each highly correlated pair.
 
 
-# %%
+# %% tags=[]
 def filter_correlated_features(
     corr_matrix: np.ndarray,
     feature_names: list[str],
@@ -273,7 +306,7 @@ def filter_correlated_features(
     return kept, list(removed)
 
 
-# %%
+# %% tags=[]
 ic_scores = {row["feature"]: row["ic"] for row in ic_df.to_dicts()}
 
 kept_after_corr, removed_by_corr = filter_correlated_features(
@@ -288,7 +321,7 @@ print(f"  Before: {len(all_feature_cols)} features")
 print(f"  After:  {len(kept_after_corr)} features")
 print(f"  Removed: {removed_by_corr}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 4. Clustering and Deduplication
 #
 # Even after removing pairs above 0.9, many features remain near-duplicates.
@@ -296,13 +329,19 @@ print(f"  Removed: {removed_by_corr}")
 # representative per cluster — preserving diversity across families while
 # removing redundancy within them.
 #
-# **Linkage choice**: We use **average linkage** (not Ward) because Ward
-# assumes Euclidean distance. Correlation-based distances don't satisfy
-# this assumption; average and complete linkage work with any distance.
+# **Linkage choice**: We use **complete linkage** (not Ward) because Ward
+# assumes Euclidean distance, which correlation-based distances do not satisfy.
+# Complete linkage also avoids the chaining that average linkage produces on
+# this panel, where many features share moderate correlations; it yields compact
+# clusters whose members are mutually near-duplicate.
 
-# %%
-# Build correlation matrix for surviving features
-surv_idx = [all_feature_cols.index(f) for f in kept_after_corr]
+# %% tags=[]
+# Cluster only features that carry a cross-sectional IC; the date-level series
+# excluded from the ranking have no meaningful correlation structure to group.
+cluster_features = [f for f in kept_after_corr if f in ic_scores]
+
+# Build correlation matrix for the clustered features
+surv_idx = [all_feature_cols.index(f) for f in cluster_features]
 surv_corr = corr_np[np.ix_(surv_idx, surv_idx)]
 
 # Distance = 1 - |ρ| (NaN correlations treated as uncorrelated → distance 1.0)
@@ -312,12 +351,12 @@ dist_matrix = (dist_matrix + dist_matrix.T) / 2
 dist_matrix = np.clip(dist_matrix, 0, 2)
 
 dist_condensed = squareform(dist_matrix, checks=False)
-link = linkage(dist_condensed, method="average")
+link = linkage(dist_condensed, method="complete")
 
-# %%
+# %% tags=[]
 # Clustered heatmap
 leaves = leaves_list(link)
-reordered_names = [kept_after_corr[i] for i in leaves]
+reordered_names = [cluster_features[i] for i in leaves]
 reordered_corr = surv_corr[np.ix_(leaves, leaves)]
 
 fig, ax = plt.subplots(figsize=(14, 12))
@@ -336,38 +375,40 @@ sns.heatmap(
     yticklabels=reordered_names,
     cbar_kws={"label": "Correlation"},
 )
-ax.set_title("Feature Correlation (Clustered, Average Linkage)")
+ax.set_title("Feature Correlation (Clustered, Complete Linkage)")
 ax.tick_params(axis="both", labelsize=8)
 plt.setp(ax.get_xticklabels(), rotation=60, ha="right")
 plt.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # The block structure reveals which features are essentially measuring the
-# same thing. Within each block, correlations are high (>0.7), confirming
-# that one representative per cluster is sufficient. Between blocks,
-# correlations are low — genuine diversification.
+# same thing. Within each block, correlations are high, confirming that one
+# representative per cluster captures the shared signal. Between blocks,
+# correlations are lower, marking genuine diversification.
 
-# %%
+# %% tags=[]
 # Assign clusters and select representatives by highest |IC|
-N_CLUSTERS = 5
+N_CLUSTERS = 10
 clusters = fcluster(link, N_CLUSTERS, criterion="maxclust")
 
 print(f"\n=== Factor Clusters ({N_CLUSTERS} groups) ===\n")
 representatives = []
 
 for c in range(1, N_CLUSTERS + 1):
-    cluster_factors = [kept_after_corr[i] for i, clust in enumerate(clusters) if clust == c]
-    best = max(cluster_factors, key=lambda f: abs(ic_scores.get(f, 0)))
+    cluster_factors = [cluster_features[i] for i, clust in enumerate(clusters) if clust == c]
+    if not cluster_factors:
+        continue
+    best = max(cluster_factors, key=lambda f: abs(ic_scores[f]))
     representatives.append(best)
 
     print(f"Cluster {c}:")
     for f in cluster_factors:
         marker = "  →" if f == best else "   "
-        print(f"  {marker} {f}: IC = {ic_scores.get(f, 0):.4f}")
+        print(f"  {marker} {f}: IC = {ic_scores[f]:.4f}")
 
 print(f"\nRepresentatives: {representatives}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 5. Multiple Testing Correction (BH-FDR)
 #
 # With many features tested, some appear significant by chance.
@@ -379,18 +420,17 @@ print(f"\nRepresentatives: {representatives}")
 # would overstate significance because daily ICs share slow-moving common
 # factors and overlapping information sets.
 
-# %%
+# %% tags=[]
 from ml4t.diagnostic.evaluation.stats import benjamini_hochberg_fdr
 
 ic_pvalues = []
 ic_feature_names = []
 for col in all_feature_cols:
-    daily_ics = ic_by_date[col].drop_nulls().to_numpy()
-    # Exclude degenerate series (constant or non-finite) so they do not
-    # contribute NaN p-values, which would still inflate BH's denominator and
-    # tighten the per-rank threshold for every valid feature. Mirror the same
-    # std_ic > 0 guard the IC-ranking loop above uses.
-    if len(daily_ics) < 20 or np.std(daily_ics, ddof=1) == 0 or not np.isfinite(daily_ics).all():
+    # Reuse the same finiteness/variance guard as the IC ranking so degenerate
+    # series do not contribute NaN p-values, which would still inflate BH's
+    # denominator and tighten the per-rank threshold for every valid feature.
+    daily_ics = finite_daily_ics(col)
+    if daily_ics is None:
         continue
     nw = sm.OLS(daily_ics, np.ones(len(daily_ics))).fit(
         cov_type="HAC", cov_kwds={"maxlags": NW_MAXLAGS}
@@ -418,32 +458,33 @@ if ic_pvalues:
         for f in survivors:
             print(f"  - {f}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 6. Selection Pipeline
 #
-# Applying the filters in sequence: correlation filtering → IC filtering →
-# top-K selection.
+# Applying the steps in sequence: correlation filtering removes obvious
+# redundancy, clustering reduces each near-duplicate family to a single
+# representative, and an IC threshold keeps the representatives with predictive
+# power.
 
-# %%
-# IC filtering
+# %% tags=[]
+# IC filtering applied to the cluster representatives from §4
 IC_THRESHOLD = 0.01
-kept_after_ic = [f for f in kept_after_corr if abs(ic_scores.get(f, 0)) >= IC_THRESHOLD]
+kept_after_ic = [f for f in representatives if abs(ic_scores[f]) >= IC_THRESHOLD]
 
-print(f"IC Filtering (|IC| >= {IC_THRESHOLD}):")
-print(f"  Before: {len(kept_after_corr)} features")
-print(f"  After:  {len(kept_after_ic)} features")
+print(f"IC Filtering of representatives (|IC| >= {IC_THRESHOLD}):")
+print(f"  Representatives: {len(representatives)} features")
+print(f"  After IC filter: {len(kept_after_ic)} features")
 
-# %%
-# Top-K selection
+# %% tags=[]
+# Rank the surviving representatives by |IC| (top-K cap)
 TOP_K = 10
-ic_ranked = sorted(kept_after_ic, key=lambda f: abs(ic_scores.get(f, 0)), reverse=True)
-final_features = ic_ranked[:TOP_K]
+final_features = sorted(kept_after_ic, key=lambda f: abs(ic_scores[f]), reverse=True)[:TOP_K]
 
-print(f"\nTop-{TOP_K} Selected Features:")
+print(f"\nSelected Features ({len(final_features)}):")
 for i, f in enumerate(final_features, 1):
     print(f"  {i:2d}. {f} (IC={ic_scores[f]:.4f})")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 7. Stability Selection via Bootstrap IC
 #
 # Stability selection tests whether features remain important across bootstrap
@@ -456,7 +497,7 @@ for i, f in enumerate(final_features, 1):
 # > time-aware resampling.
 
 
-# %%
+# %% tags=[]
 def bootstrap_ic(
     df: pl.DataFrame,
     feature_cols: list[str],
@@ -510,12 +551,12 @@ def bootstrap_ic(
     return pl.DataFrame(stability_data).sort("ic_ir", descending=True)
 
 
-# %%
+# %% tags=[]
 stability = bootstrap_ic(df=analysis, feature_cols=final_features, n_bootstrap=N_BOOTSTRAP)
 print(f"Stability Selection ({N_BOOTSTRAP} bootstrap samples):")
 stability
 
-# %%
+# %% tags=[]
 fig, ax = plt.subplots(figsize=(10, 6))
 stab_pd = stability.to_pandas()
 ax.errorbar(
@@ -534,14 +575,14 @@ ax.set_title("Feature IC Stability (Bootstrap)")
 plt.xticks(rotation=45, ha="right")
 plt.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 8. ML-Based Feature Importance
 #
 # Beyond IC ranking, ML models identify features with non-linear predictive
 # power. We fit a quick LightGBM model and compare its feature importance
 # with the IC rankings above.
 
-# %%
+# %% tags=[]
 from ml4t.diagnostic.metrics import analyze_ml_importance
 
 ml_data = analysis.select(["timestamp", "symbol"] + final_features + ["fwd_return_1m"]).drop_nulls()
@@ -569,17 +610,17 @@ if len(X) > 100:
         print(f"Method agreement: {importance_result['method_agreement']}")
     print(f"\n{importance_result['interpretation']}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # **Interpretation**: MDI (Mean Decrease in Impurity) measures how much each
 # feature reduces prediction error in the tree ensemble. PFI (Permutation
 # Feature Importance) measures how much shuffling a feature degrades
 # predictions. Features ranking high in both IC and ML importance are the
 # strongest candidates for production.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 9. Post-Selection Verification
 
-# %%
+# %% tags=[]
 # Verify low inter-correlation among selected features
 selected_matrix = features_df.select(final_features).drop_nulls()
 corr_after = selected_matrix.corr().to_numpy()
@@ -607,15 +648,16 @@ np.fill_diagonal(corr_after, 0)
 max_corr = np.abs(corr_after).max()
 print(f"Max remaining correlation: {max_corr:.3f}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 10. Selection Summary and Output
 
-# %%
+# %% tags=[]
 print("=" * 60)
 print("FEATURE SELECTION REPORT")
 print("=" * 60)
 print(f"\nInitial Features:           {len(all_feature_cols)}")
 print(f"After Correlation Filter:   {len(kept_after_corr)}")
+print(f"Cluster Representatives:    {len(representatives)}")
 print(f"After IC Filter:            {len(kept_after_ic)}")
 print(f"Final Selected:             {len(final_features)}")
 print(f"Removal Rate:               {100 * (1 - len(final_features) / len(all_feature_cols)):.1f}%")
@@ -631,7 +673,7 @@ for i, f in enumerate(final_features, 1):
 
 print("=" * 60)
 
-# %%
+# %% tags=[]
 # Save selected features for Chapter 9
 OUTPUT_DIR = get_output_dir(8, "feature_selection")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -648,7 +690,7 @@ print(f"Saved selected features to {OUTPUT_DIR}")
 print(f"  - selected_features.parquet: {len(final_features)} features")
 print(f"  - features_selected.parquet: {filtered_features.shape}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## Key Takeaways
 #
 # 1. **Cross-sectional IC** is the correct method for factor evaluation —

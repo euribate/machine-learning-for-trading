@@ -109,6 +109,9 @@ print(f"Loaded {len(trades):,} trades across {trades['stock'].n_unique()} stocks
 
 
 # %%
+from ml4t.engineer.features.microstructure import effective_tick_rule
+
+
 def aggregate_to_bars(
     trades: pl.DataFrame,
     interval: str = "5m",
@@ -116,10 +119,20 @@ def aggregate_to_bars(
     price_col: str = "price",
     volume_col: str = "shares",
 ) -> pl.DataFrame:
-    """Aggregate trades to OHLCV bars with volume breakdown."""
+    """Aggregate trades to OHLCV bars with a trade-level buy/sell volume split.
+
+    Order flow imbalance is a *flow* feature: it must be built from the sign of
+    individual trades and then aggregated. We classify every trade with the tick
+    rule (buyer- vs seller-initiated) BEFORE aggregating, so each bar carries a
+    genuine ``buy_volume``/``sell_volume`` split. Classifying the bar *close*
+    instead would only recover the sign of the bar's own return, collapsing OFI
+    to +/-1 rather than measuring imbalance.
+    """
+    classified = trades.sort([stock_col, "timestamp"]).with_columns(
+        effective_tick_rule(price_col).over(stock_col).alias("trade_sign")
+    )
     bars = (
-        trades.sort([stock_col, "timestamp"])
-        .group_by_dynamic("timestamp", every=interval, by=stock_col)
+        classified.group_by_dynamic("timestamp", every=interval, by=stock_col)
         .agg(
             [
                 pl.col(price_col).first().alias("open"),
@@ -128,16 +141,27 @@ def aggregate_to_bars(
                 pl.col(price_col).last().alias("close"),
                 pl.col(volume_col).sum().alias("volume"),
                 pl.len().alias("trade_count"),
+                pl.col(volume_col).filter(pl.col("trade_sign") > 0).sum().alias("buy_volume"),
+                pl.col(volume_col).filter(pl.col("trade_sign") < 0).sum().alias("sell_volume"),
             ]
         )
         .sort([stock_col, "timestamp"])
     )
 
-    # Add returns and dollar volume
+    # Add returns, dollar volume, and the genuine per-bar OFI. Cast the summed
+    # share volumes to a signed dtype before subtracting: ``shares`` is unsigned
+    # (UInt32), so buy - sell would silently underflow on net-selling bars.
     return bars.with_columns(
         [
             (pl.col("close") / pl.col("close").shift(1).over(stock_col) - 1).alias("returns"),
             (pl.col("close") * pl.col("volume")).alias("dollar_volume"),
+            pl.when((pl.col("buy_volume") + pl.col("sell_volume")) > 0)
+            .then(
+                (pl.col("buy_volume").cast(pl.Int64) - pl.col("sell_volume").cast(pl.Int64))
+                / (pl.col("buy_volume") + pl.col("sell_volume"))
+            )
+            .otherwise(0.0)
+            .alias("ofi"),
         ]
     )
 
@@ -168,15 +192,13 @@ print(f"\n{FOCUS_STOCK}: {len(focus_bars):,} bars")
 from ml4t.engineer.features.microstructure import (
     amihud_illiquidity,
     kyle_lambda,
-    order_flow_imbalance,
-    price_impact_ratio,
-    realized_spread,
     roll_spread_estimator,
     trade_intensity,
-    volume_synchronicity,
 )
 
-# Compute all trade-based features
+# Compute the trade-based liquidity features. ``ofi`` already lives on the bars
+# (built from the trade-level buy/sell split in aggregate_to_bars), so it is not
+# recomputed here.
 PERIOD = 20
 
 features_df = focus_bars.with_columns(
@@ -185,12 +207,7 @@ features_df = focus_bars.with_columns(
         kyle_lambda("returns", "volume", period=PERIOD).alias("kyle_lambda"),
         amihud_illiquidity("returns", "volume", "close", period=PERIOD).alias("amihud"),
         roll_spread_estimator("close", period=PERIOD).alias("roll_spread"),
-        realized_spread("high", "low", "close", period=PERIOD).alias("realized_spread"),
-        # Order flow proxies (from bar data)
-        order_flow_imbalance("volume", "close", use_tick_rule=True).alias("ofi"),
         trade_intensity("volume", period=PERIOD).alias("trade_intensity"),
-        price_impact_ratio("returns", "volume", period=PERIOD).alias("price_impact"),
-        volume_synchronicity("volume", "returns", period=PERIOD).alias("vol_sync"),
     ]
 )
 
@@ -297,12 +314,20 @@ print(f"Kyle λ / Amihud correlation: {corr:.3f}")
 # %% [markdown]
 # ## 4. Order Flow Imbalance (OFI)
 #
-# OFI measures the buy-sell imbalance, proxying for **net order flow**.
+# OFI measures the buy-sell imbalance within a bar, proxying for **net order
+# flow**:
 #
 # $$\text{OFI} = \frac{V_{buy} - V_{sell}}{V_{buy} + V_{sell}}$$
 #
-# **Important**: Without trade labels (exchange-provided buy/sell indicator),
-# we must estimate using the **tick rule** or **Lee-Ready algorithm**.
+# **Important**: Without exchange-provided buy/sell labels we estimate the side
+# of each trade with the **tick rule** (Lee-Ready), classifying it buyer- or
+# seller-initiated from the sign of the price change. That classification has to
+# happen at the **trade** level, before aggregation — which is why
+# `aggregate_to_bars` splits `buy_volume`/`sell_volume` there. Applying the tick
+# rule to a *bar's* single close would collapse OFI to the sign of that bar's
+# own return (+/-1), a tautology rather than a flow measure. This is the concrete
+# reason OFI is a **flow** feature that needs trade data, not a bar-OHLCV
+# feature (Learning Objective 3).
 
 # %%
 # OFI visualization
@@ -367,25 +392,22 @@ fig.show()
 # ```
 
 # %%
-# Demonstrate proper lagging for alpha features
+# Contrast the leaky same-bar reading with the honest predictive one.
 alpha_df = features_df.with_columns(
-    [
-        # Lagged OFI as alpha signal
-        pl.col("ofi").shift(1).alias("ofi_lag1"),
-        # Forward return as target
-        pl.col("returns").shift(-1).alias("fwd_return"),
-    ]
+    # Next-bar return as the prediction target
+    pl.col("returns").shift(-1).alias("fwd_return"),
 )
+alpha_df = alpha_df.drop_nulls(["ofi", "returns", "fwd_return"])
 
-# Correlation analysis
-alpha_df = alpha_df.drop_nulls(["ofi_lag1", "fwd_return"])
-
-corr_lagged = alpha_df.select(pl.corr("ofi_lag1", "fwd_return")).item()
-corr_contemp = alpha_df.select(pl.corr("ofi", "fwd_return")).item()
+# Same-bar OFI vs same-bar return: mechanically strong because a bar with a buy
+# imbalance is usually an up bar — using it as a signal peeks at the outcome.
+corr_same = alpha_df.select(pl.corr("ofi", "returns")).item()
+# Same OFI against the NEXT bar's return: the honest, tradable predictive content.
+corr_pred = alpha_df.select(pl.corr("ofi", "fwd_return")).item()
 
 print(f"OFI Predictive Content (n={len(alpha_df)} bars):")
-print(f"  Lagged OFI vs Forward Return:        {corr_lagged:+.4f}")
-print(f"  Contemporaneous OFI vs Same Return:  {corr_contemp:+.4f} (leaky!)")
+print(f"  Same-bar OFI vs same-bar return:  {corr_same:+.4f} (leaky if used as a signal)")
+print(f"  OFI vs next-bar return:           {corr_pred:+.4f} (honest, tradable)")
 
 # %% [markdown]
 # **Interpretation**: The contemporaneous correlation is typically much larger
@@ -577,19 +599,21 @@ summary
 # | Kyle λ | `kyle_lambda()` | Price impact estimation |
 # | Amihud | `amihud_illiquidity()` | Illiquidity premium |
 # | Roll Spread | `roll_spread_estimator()` | Transaction cost proxy |
-# | OFI | `order_flow_imbalance()` | Short-term prediction |
+# | OFI | `effective_tick_rule()` + per-bar buy/sell aggregation | Short-term prediction |
 # | Trade Intensity | `trade_intensity()` | Activity regime |
 #
 # ### Critical Distinctions
 #
 # 1. **Alpha vs Feasibility**: OFI is alpha (lag it!); Kyle λ is feasibility (use directly)
 # 2. **Flow vs State**: Trade arrivals ≠ book state; don't compute "spread" from flow
-# 3. **Data requirements**: These features work on bars; LOB features need tick data
+# 3. **Data requirements**: Kyle λ, Amihud, and Roll work on OHLCV bars; OFI is a
+#    flow feature that needs trade-level classification (tick rule per trade, then
+#    aggregate); true LOB features need book snapshots
 #
 # ### Integration with Strategy
 #
 # - **Feasibility overlay**: Use Kyle λ, Amihud to size positions and filter illiquid names
-# - **Cost estimation**: Use Roll spread, realized spread for transaction cost models
+# - **Cost estimation**: Use the Roll spread estimator for transaction cost models
 # - **Alpha signals**: Use lagged OFI, trade intensity for short-horizon prediction
 #
 # ### Next Notebooks

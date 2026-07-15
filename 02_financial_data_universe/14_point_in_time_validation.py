@@ -58,6 +58,7 @@ import polars as pl
 from ml4t.data.providers import FREDProvider
 
 from data import load_etfs, load_macro
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -97,7 +98,7 @@ fig.add_trace(
         x=spy_ma["timestamp"].to_list(),
         y=spy_ma["close"].to_list(),
         name="SPY close",
-        line=dict(color="black", width=1),
+        line=dict(color=COLORS["blue"], width=1),
     )
 )
 fig.add_trace(
@@ -105,7 +106,7 @@ fig.add_trace(
         x=spy_ma["timestamp"].to_list(),
         y=spy_ma["ma20_trailing"].to_list(),
         name="20d trailing MA (PIT-correct)",
-        line=dict(color="#1f77b4", width=2),
+        line=dict(color=COLORS["slate"], width=2),
     )
 )
 fig.add_trace(
@@ -113,15 +114,14 @@ fig.add_trace(
         x=spy_ma["timestamp"].to_list(),
         y=spy_ma["ma20_centered"].to_list(),
         name="20d centered MA (uses future)",
-        line=dict(color="#d62728", width=2, dash="dash"),
+        line=dict(color=COLORS["copper"], width=2, dash="dash"),
     )
 )
 fig.update_layout(
-    title="Trailing vs Centered Moving Average — Centered Knows the Future",
+    title="Trailing vs centered moving average — centered knows the future",
     xaxis_title="Date",
     yaxis_title="SPY price",
     height=420,
-    template="plotly_white",
 )
 fig.show()
 

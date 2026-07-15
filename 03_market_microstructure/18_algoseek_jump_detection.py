@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -72,9 +72,11 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
+from scipy.stats import norm
 
 from data import load_nasdaq100_bars
 from utils.paths import get_output_dir
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # AlgoSeek preserves historical tickers — for 2020 the Meta entry is "FB"
@@ -169,7 +171,29 @@ daily = (
         ),
     )
 )
-daily.describe()
+print(f"Symbol-days: {daily.height:,}  symbols: {daily['symbol'].n_unique()}")
+
+# %% [markdown]
+# The jump share of realized variance is right-skewed across symbol-days:
+# most days are almost purely diffusive (RV ≈ BV, so the jump share sits
+# near zero), while a heavy right tail carries the episodic jump days. The
+# ECDF makes the concentration explicit — the median day attributes little
+# variance to jumps, but the upper decile can attribute a large fraction.
+
+# %%
+fig, ax = plt.subplots(figsize=(8, 4))
+sym_colors = [COLORS["blue"], COLORS["amber"], COLORS["copper"]]
+for sym, color in zip(SYMBOLS, sym_colors):
+    shares = daily.filter(pl.col("symbol") == sym)["jump_share_rv"].sort().to_numpy()
+    ecdf = np.arange(1, len(shares) + 1) / len(shares)
+    ax.step(shares * 100, ecdf, where="post", label=sym, lw=1.6, color=color)
+ax.axhline(0.5, color=COLORS["neutral"], ls="--", lw=0.8)
+ax.set_xlabel("Jump share of realized variance (%)")
+ax.set_ylabel("Cumulative fraction of symbol-days")
+ax.set_title("On most days jumps explain little realized variance; a heavy tail carries the rest")
+ax.legend(title="Symbol")
+fig.tight_layout()
+fig.show()
 
 # %% [markdown]
 # Annualized, BV gives the continuous-volatility floor of each name and
@@ -303,17 +327,17 @@ daily_jump_counts = (
 ).join(
     daily.select("symbol", "date", "rv", "bv", "jump_var", "jump_share_rv"), on=["symbol", "date"]
 )
-print(daily_jump_counts.describe())
 
 # %%
 fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-for sym in SYMBOLS:
+sym_colors = [COLORS["blue"], COLORS["amber"], COLORS["copper"]]
+for sym, color in zip(SYMBOLS, sym_colors):
     counts = daily_jump_counts.filter(pl.col("symbol") == sym)["jump_count"].to_numpy()
-    axes[0].hist(counts, bins=range(0, int(counts.max()) + 2), alpha=0.5, label=sym)
-axes[0].set_xlabel("Lee–Mykland jumps per day")
+    axes[0].hist(counts, bins=range(0, int(counts.max()) + 2), alpha=0.5, label=sym, color=color)
+axes[0].set_xlabel("Lee–Mykland jumps per day (count)")
 axes[0].set_ylabel("Trading days")
-axes[0].set_title("Daily jump-count distribution")
-axes[0].legend()
+axes[0].set_title("Most days see only a handful of jumps")
+axes[0].legend(title="Symbol")
 
 # Q-Q of standardized returns: all vs jump-filtered. sigma_local is NaN for
 # the first LEE_MYKLAND_K-1 bars of each session (no within-session window
@@ -324,17 +348,19 @@ filt = flagged.filter(~pl.col("is_jump"))
 filt_z_raw = (filt["log_return"] / filt["sigma_local"]).to_numpy()
 filt_z = filt_z_raw[np.isfinite(filt_z_raw)]
 qs = np.linspace(0.001, 0.999, 200)
-from scipy.stats import norm  # noqa: PLC0415
-
 norm_q = norm.ppf(qs)
-axes[1].scatter(norm_q, np.quantile(all_z, qs), s=10, alpha=0.7, label="All returns")
-axes[1].scatter(norm_q, np.quantile(filt_z, qs), s=10, alpha=0.7, label="Jump-filtered")
-axes[1].plot([-4, 4], [-4, 4], "k--", lw=0.8)
+axes[1].scatter(
+    norm_q, np.quantile(all_z, qs), s=10, alpha=0.7, label="All returns", color=COLORS["blue"]
+)
+axes[1].scatter(
+    norm_q, np.quantile(filt_z, qs), s=10, alpha=0.7, label="Jump-filtered", color=COLORS["amber"]
+)
+axes[1].plot([-4, 4], [-4, 4], ls="--", lw=0.8, color=COLORS["neutral"])
 axes[1].set_xlim(-4, 4)
 axes[1].set_ylim(-8, 8)
-axes[1].set_xlabel("Theoretical quantile (N(0,1))")
-axes[1].set_ylabel("Empirical quantile")
-axes[1].set_title("Standardized-return Q-Q: jumps cause the tail")
+axes[1].set_xlabel("Theoretical quantile, N(0,1) (std. dev.)")
+axes[1].set_ylabel("Empirical quantile (std. dev.)")
+axes[1].set_title("Removing flagged jumps pulls the return tails back to normal")
 axes[1].legend()
 fig.tight_layout()
 fig.show()
@@ -381,12 +407,13 @@ ax.bar(
     tod_rate["rate_per_1k"].to_numpy(),
     width=BAR_MINUTES / 60.0,
     edgecolor="none",
+    color=COLORS["blue"],
 )
 ax.set_xlabel("Hour of day (ET)")
 ax.set_ylabel("Jumps per 1,000 bars")
-ax.set_title("Lee–Mykland jump rate by time of day")
-ax.axvspan(9.5, 10.0, alpha=0.1, color="grey")
-ax.axvspan(15.5, 16.0, alpha=0.1, color="grey")
+ax.set_title("The jump rate rises into the close of the trading session")
+ax.axvspan(9.5, 10.0, alpha=0.12, color=COLORS["neutral"])
+ax.axvspan(15.5, 16.0, alpha=0.12, color=COLORS["neutral"])
 fig.tight_layout()
 fig.show()
 
@@ -401,17 +428,20 @@ fig.show()
 # %%
 fig, ax = plt.subplots(figsize=(11, 4))
 focus = daily.filter(pl.col("symbol") == SYMBOLS[0]).sort("date").to_pandas()
-ax.fill_between(focus["date"], 0, focus["bv"], alpha=0.6, label="Continuous (BV)")
+ax.fill_between(
+    focus["date"], 0, focus["bv"], alpha=0.7, color=COLORS["neutral"], label="Continuous (BV)"
+)
 ax.fill_between(
     focus["date"],
     focus["bv"],
     focus["bv"] + focus["jump_var"],
-    alpha=0.7,
+    alpha=0.85,
+    color=COLORS["amber"],
     label="Jump variance (RV − BV)",
 )
-ax.set_xlabel("Date")
-ax.set_ylabel("Daily realized variance (log returns)")
-ax.set_title(f"{SYMBOLS[0]}: continuous and jump components of daily RV")
+ax.set_xlabel("Date (2020)")
+ax.set_ylabel("Daily realized variance (sum of squared log returns)")
+ax.set_title(f"{SYMBOLS[0]}: jump variance is episodic while diffusion runs steady")
 ax.legend()
 fig.tight_layout()
 fig.show()
@@ -445,8 +475,34 @@ comparison = (
         lm_only=(pl.col("is_jump") & ~pl.col("naive_jump")).sum(),
         naive_only=(~pl.col("is_jump") & pl.col("naive_jump")).sum(),
     )
+    .sort("symbol")
 )
-comparison
+
+# %% [markdown]
+# Split each symbol's flags into three buckets: bars both rules agree are
+# jumps, bars only Lee–Mykland flags (the naive rule *misses* these, mostly
+# on volatile days when the inflated daily $\hat\sigma_d$ swallows real
+# jumps), and bars only the naive rule flags (it *over-fires* on calm days
+# when the small daily $\hat\sigma_d$ makes ordinary bars look extreme).
+# Substantial disagreement on either side means the fixed-threshold rule is
+# not a safe substitute.
+
+# %%
+syms = comparison["symbol"].to_list()
+x = np.arange(len(syms))
+w = 0.26
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.bar(x - w, comparison["both"].to_numpy(), w, color=COLORS["blue"], label="Both agree")
+ax.bar(x, comparison["lm_only"].to_numpy(), w, color=COLORS["amber"], label="Lee–Mykland only")
+ax.bar(x + w, comparison["naive_only"].to_numpy(), w, color=COLORS["copper"], label="Naive only")
+ax.set_xticks(x)
+ax.set_xticklabels(syms)
+ax.set_xlabel("Symbol")
+ax.set_ylabel("Flagged bars (count)")
+ax.set_title("The fixed-threshold rule both misses and over-fires against Lee–Mykland")
+ax.legend()
+fig.tight_layout()
+fig.show()
 
 # %% [markdown]
 # ## 8. Materialize the jump-feature panel

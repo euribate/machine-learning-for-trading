@@ -891,7 +891,8 @@ def compute_book_imbalance(lob_df: pl.DataFrame) -> pl.DataFrame:
 # This section examines OFI's predictive power across 50 stocks stratified by activity.
 #
 # **Key finding**: OFI shows **weak, noisy correlation** with subsequent returns when
-# used naively. Correlations range from -0.3 to +0.5 with high variance.
+# used naively. Across this cross-section the correlations cluster near zero with high
+# variance, spanning roughly -0.35 to +0.16.
 #
 # **Implication**: Raw OFI isn't directly tradeable. Chapter 6 shows how **conditional
 # signals**—extreme OFI events plus spread dynamics—extract the actual edge.
@@ -1049,8 +1050,8 @@ def plot_ofi_vs_returns(results: list[dict], ax=None):
         s=150,
         c=corrs,
         cmap="coolwarm",
-        vmin=-0.3,
-        vmax=0.5,
+        vmin=-0.36,
+        vmax=0.36,
         edgecolor="black",
         linewidth=1.5,
     )
@@ -1078,59 +1079,6 @@ def plot_ofi_vs_returns(results: list[dict], ax=None):
 
     cbar = plt.colorbar(scatter, ax=ax, label="ρ (correlation)")
     cbar.ax.axhline(0, color="gray", linewidth=1)  # Mark zero on colorbar
-
-
-# %% [markdown]
-# ### Grayscale Version for Print
-#
-# Create a grayscale version of the OFI vs returns scatter plot for print publication.
-
-
-# %%
-def plot_ofi_vs_returns_grayscale(results: list[dict]):
-    """Create grayscale version for print publication.
-
-    Uses marker shapes and sizes to distinguish stocks instead of color.
-
-    Args:
-        results: List of dicts with 'symbol', 'order_count', 'corr'
-    """
-    if not results:
-        print("No results to plot")
-        return
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    order_counts = np.array([r.get("order_count", r.get("buckets", 0)) for r in results])
-    corrs = np.array([r["corr"] for r in results])
-    symbols = [r["symbol"] for r in results]
-
-    # Uniform gray for all dots - correlation is already shown on Y-axis
-    scatter = ax.scatter(
-        order_counts,
-        corrs,
-        s=150,
-        c="0.5",  # Medium gray
-        edgecolor="black",
-        linewidth=1.5,
-    )
-
-    # Labels for each symbol
-    for sym, oc, c in zip(symbols, order_counts, corrs, strict=False):
-        ax.annotate(
-            sym, (oc, c), textcoords="offset points", xytext=(8, 5), fontsize=9, fontweight="bold"
-        )
-
-    ax.set_xscale("log")
-    ax.set_xlabel("Daily Order Count (log scale)", fontsize=12)
-    ax.set_ylabel("Correlation: OFI → Next Return (1-min)", fontsize=12)
-    ax.set_title(
-        "Naive OFI Shows Weak, Noisy Signal",
-        fontsize=13,
-        fontweight="bold",
-    )
-    ax.axhline(0, color="gray", linestyle="-", alpha=0.5, linewidth=1.5)
-    ax.grid(True, alpha=0.3)
 
 
 # %%
@@ -1231,12 +1179,8 @@ if len(multi_stock_results) >= 3:
     results_df.write_parquet(results_path)
     print(f"Persisted Fig 3.3 cross-section: {results_path} ({len(results_df)} symbols)")
 
-    # Generate Figure 3.3 from actual data (color version)
+    # Generate Figure 3.3 from actual data
     plot_ofi_vs_returns(multi_stock_results)
-    plt.show()
-
-    # Generate grayscale version for print publication
-    plot_ofi_vs_returns_grayscale(multi_stock_results)
     plt.show()
 else:
     print("\nWARNING: Multi-stock OFI analysis requires multiple stocks for comparison")
@@ -1337,10 +1281,10 @@ if lob_data:
 # ### The Signal Extraction Problem
 #
 # Figure 3.3 demonstrates a key lesson: **naive order flow metrics don't work**.
-# Across the 50 NASDAQ stocks, the bucketed OFI→return correlation has a
-# cross-stock mean of ρ ≈ 0.01 with a standard deviation of ≈ 0.10 and a
-# range from −0.35 to 0.16 — i.e. centred on noise with high cross-stock
-# dispersion.
+# Across the 41 NASDAQ stocks with enough intraday activity for a stable estimate,
+# the bucketed OFI→return correlation has a cross-stock mean of ρ ≈ 0.01 with a
+# standard deviation of ≈ 0.10 and a range from −0.35 to 0.16: centered on noise
+# with high cross-stock dispersion.
 #
 # **What's missing?** Chapter 6's order flow reversal strategy shows that tradeable
 # signals emerge only when you condition on:

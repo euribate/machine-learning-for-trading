@@ -5,7 +5,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -24,7 +24,7 @@
 # Build the four bar families §3.4 walks through (time, tick, volume, dollar
 # plus imbalance/run information bars) from a single AAPL ITCH trading day,
 # compare their statistical properties (normality, autocorrelation), and
-# generate the Figure 3.4 sampling-comparison panel.
+# generate the sampling-comparison panel.
 #
 # ## Learning Objectives
 #
@@ -38,8 +38,8 @@
 #
 # ## Book reference
 #
-# Section §3.4, *The Art of Sampling: From Ticks to Bars*. Notebook generates
-# Figure 3.4 (2-hour window, 10:00-12:00 ET).
+# Section §3.4, *The Art of Sampling: From Ticks to Bars* — this notebook builds
+# the sampling comparison that section discusses from a single AAPL ITCH day.
 #
 # ## Prerequisites
 #
@@ -63,7 +63,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import polars as pl
-import seaborn as sns
 from limit_orderbook import classify_trades_lee_ready
 
 # ML4T Engineer - Bar samplers
@@ -77,7 +76,9 @@ from ml4t.engineer.bars.run import TickRunBarSampler
 from scipy import stats
 
 from data.equities.loader import load_nasdaq_itch
+from utils import ML4T_PATH
 from utils.paths import get_output_dir
+from utils.style import COLORS, add_message_title
 
 # %% tags=["parameters"]
 SYMBOL = "AAPL"
@@ -85,8 +86,6 @@ TRADING_DATE = "2020-01-30"
 MAX_TRADES = 0  # 0 = all trades
 
 # %%
-sns.set_style("whitegrid")
-
 # Normalize MAX_TRADES: 0 means no limit
 if MAX_TRADES == 0:
     MAX_TRADES = None
@@ -99,8 +98,9 @@ MESSAGE_DIR = load_nasdaq_itch(get_base_path=True)
 OUTPUT_DIR = get_output_dir(3, "nasdaq_itch") / "bars"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"Input directory (messages): {MESSAGE_DIR}")
-print(f"Output directory (bars): {OUTPUT_DIR}")
+# Print repo-relative paths so outputs stay portable across machines
+print(f"Input directory (messages): {MESSAGE_DIR.relative_to(ML4T_PATH)}")
+print(f"Output directory (bars): {OUTPUT_DIR.relative_to(ML4T_PATH)}")
 
 # Validate parsed ITCH data — produced by 01_itch_parser or Rust parser
 assert MESSAGE_DIR.exists(), (
@@ -195,13 +195,19 @@ def load_itch_trades(symbol: str, max_trades: int | None = None) -> pl.DataFrame
 
 
 # %% [markdown]
-# **Note**: The `classify_trades_lee_ready` function is imported from `utils.limit_orderbook` where
-# it shares the correct LOB reconstruction logic with `02_itch_lob_reconstruction`.
-# This ensures consistent order pool tracking and proper handling of Replace (U) chains.
+# **Note**: `classify_trades_lee_ready` is imported from the chapter-local
+# `limit_orderbook` module, which shares the LOB reconstruction logic used in
+# `02_itch_lob_reconstruction` — consistent order-pool tracking and proper
+# handling of Replace (U) chains.
+
+# %% [markdown]
+# ### Load trades and classify aggressor side
+#
+# We initialise the bar variables to `None` so downstream cells degrade
+# gracefully if the ITCH data is unavailable, then load the tick-test-classified
+# trade stream for `SYMBOL`.
 
 # %%
-# Load trades for our symbol
-# Initialize variables for graceful handling when data missing
 all_trades = None
 trades = None
 time_1m = None
@@ -278,40 +284,45 @@ if trades is not None and len(trades) > 0:
     )
     print(f"Time bars (1-min): {len(time_1m):,}")
 
-    # Tick bars - 100 trades per bar (AAPL has fewer trades than NVDA)
+    # Tick bars - 100 trades per bar
     tick_sampler = TickBarSampler(ticks_per_bar=100)
     tick_bars = tick_sampler.sample(trades)
     print(f"Tick bars (100): {len(tick_bars):,}")
 
-    # Volume bars - 10K shares per bar (AAPL pre-split had ~$320 price)
+    # Volume bars - 10K shares per bar (AAPL traded near $320 pre-split)
     volume_sampler = VolumeBarSampler(volume_per_bar=10_000)
     volume_bars = volume_sampler.sample(trades)
     print(f"Volume bars (10K): {len(volume_bars):,}")
 
-    # Dollar bars - $3M per bar (adjusted for ~$320 price)
+    # Dollar bars - $3M per bar, matched to the ~$320 price so counts are comparable
     dollar_sampler = DollarBarSampler(dollars_per_bar=3_000_000)
     dollar_bars = dollar_sampler.sample(trades)
     print(f"Dollar bars ($3M): {len(dollar_bars):,}")
 
+# %% [markdown]
+# ### Imbalance bars close on a fixed signed-tick threshold
+#
+# A tick-imbalance bar closes when the cumulative signed order flow crosses a
+# threshold:
+#
+# $$\theta_T = \sum_{t=1}^{T} b_t, \qquad b_t \in \{-1, +1\}, \qquad
+# \text{close when } |\theta_T| \ge \tau.$$
+#
+# We use a **fixed** threshold $\tau$ rather than the adaptive
+# $E[\theta_T] = E[T]\,\lvert 2P[b_t{=}1] - 1\rvert$ target. The adaptive form
+# feeds back on its own bar lengths and threshold-spirals on persistently
+# one-sided flow — the instability §3.4 warns about — so the library recommends
+# the fixed sampler for production. Signed bars also need genuine two-sided flow:
+# an all-one-side stream (the raw ITCH `buy_sell_indicator` before tick-test
+# classification) makes $\theta_T$ monotonic and degenerates the bars into tick
+# bars, so we require both directions to be present.
+
 # %%
-# Imbalance bars - close when the signed tick imbalance exceeds a fixed threshold
-# AFML tick-imbalance statistic: θ = Σ b_t (fixed threshold, not adaptive E[θ_T])
 if trades is not None and len(trades) > 0:
-    # A meaningful imbalance/run bar needs genuine two-sided flow. Require BOTH
-    # directions to be present — an all-one-side stream (e.g. the raw ITCH
-    # buy_sell_indicator before tick-test classification) would make signed
-    # imbalance monotonic and degenerate the bars into near-tick bars.
     n_buy = trades.filter(pl.col("side") == 1).height
     n_sell = trades.filter(pl.col("side") == -1).height
     has_valid_sides = n_buy > 0 and n_sell > 0
 
-    # Use a FIXED imbalance threshold rather than the adaptive (EWMA) sampler.
-    # The adaptive E[θ_T] = E[T] × |2P[b=1] − 1| feeds back on its own bar
-    # lengths and threshold-spirals on persistently one-sided flow — the
-    # instability this section warns about. The fixed-threshold sampler the
-    # library recommends for production is stable and reproducible. threshold=20
-    # yields ~130 imbalance bars on this ~15k-trade AAPL day (comparable to the
-    # volume/dollar bars above).
     if has_valid_sides:
         imbalance_sampler = FixedTickImbalanceBarSampler(threshold=20)
         imbalance_bars = imbalance_sampler.sample(trades)
@@ -320,15 +331,21 @@ if trades is not None and len(trades) > 0:
         print("Imbalance bars skipped (insufficient side attribution in trade data)")
         imbalance_bars = pl.DataFrame()
 
+# %% [markdown]
+# ### Run bars close when one side sustains a directional run
+#
+# A tick-run bar tracks the longer of the cumulative buy/sell run,
+# $\theta_T = \max\!\left(\sum b_t^{+},\, \sum b_t^{-}\right)$, and closes when it
+# exceeds the expected run length. Bars form when one side dominates, flagging
+# sustained directional flow. A small EWMA decay keeps the adaptive expected-run
+# threshold stable.
+
 # %%
-# Run bars - close when cumulative run count exceeds expected threshold
-# AFML formula: θ = max(cumulative_buys, cumulative_sells)
-# Bars form when one side dominates, signaling sustained directional flow
 if trades is not None and len(trades) > 0 and has_valid_sides:
     try:
         run_sampler = TickRunBarSampler(
-            expected_ticks_per_bar=50,  # Initial E[T]
-            alpha=0.001,  # small EWMA decay: keeps the adaptive threshold stable
+            expected_ticks_per_bar=50,  # initial E[T]
+            alpha=0.001,  # small EWMA decay keeps the adaptive threshold stable
         )
         run_bars = run_sampler.sample(trades)
         print(f"Tick run bars: {len(run_bars):,}")
@@ -401,17 +418,47 @@ if time_1m is not None:
             results.append(result)
 
     stats_df = pd.DataFrame(results).set_index("bar_type")
-    print("\n=== Statistical Properties Comparison ===\n")
-    print(stats_df.round(4).to_string())
+    stats_df.round(4)
 
 # %% [markdown]
-# ### Interpretation
+# The reference table above carries the full set of moments; the headline is
+# **excess kurtosis** (0 for a normal distribution — higher means fatter tails).
+# The chart below reads it directly.
 #
-# | Metric | Meaning | Better Value |
+# | Metric | Meaning | Better value |
 # |--------|---------|--------------|
-# | JB Stat | Distance from normality | Lower |
-# | Autocorr | Serial dependence | Closer to 0 |
-# | Kurtosis | Fat tails (excess over 3) | Lower |
+# | JB stat | Distance from normality | Lower |
+# | Autocorr (lag 1) | Serial dependence | Closer to 0 |
+# | Kurtosis | Excess kurtosis, fat tails (0 = normal) | Lower |
+
+# %% [markdown]
+# ### Volume and dollar bars trim the fat tails that time bars leave in
+#
+# Sampling on activity rather than the clock pulls return kurtosis toward the
+# Gaussian benchmark. The bar below sorts each family by excess kurtosis; the
+# dashed line marks the normal reference of 0.
+
+# %%
+if time_1m is not None:
+    kurt = stats_df["kurtosis"].sort_values()
+    bar_colors = [
+        COLORS["copper"] if name == "Time (1-min)" else COLORS["blue"] for name in kurt.index
+    ]
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+    ax.bar(kurt.index, kurt.to_numpy(), color=bar_colors, alpha=0.9)
+    ax.axhline(0, color=COLORS["neutral"], linestyle="--", linewidth=1, label="Normal (0)")
+    add_message_title(
+        ax,
+        "Time bars stay fat-tailed while activity-sampled bars approach normality",
+        subtitle=f"{SYMBOL} intraday return excess kurtosis by bar type, {TRADING_DATE}",
+    )
+    ax.set_xlabel("Bar type")
+    ax.set_ylabel("Excess kurtosis (0 = normal)")
+    ax.legend()
+    plt.xticks(rotation=20, ha="right")
+    plt.tight_layout()
+    plt.show()
 
 # %% [markdown]
 # ## 4. Visualize Return Distributions
@@ -436,27 +483,31 @@ if time_1m is not None:
             returns = returns[(returns > -2) & (returns < 2)]  # Clip outliers
 
             if len(returns) > 5:
-                ax.hist(returns, bins=50, density=True, alpha=0.7, color="steelblue")
+                ax.hist(returns, bins=50, density=True, alpha=0.7, color=COLORS["blue"])
 
-                # Overlay normal distribution
+                # Overlay the fitted normal for a visual normality reference
                 x = np.linspace(returns.min(), returns.max(), 100)
                 ax.plot(
                     x,
                     stats.norm.pdf(x, returns.mean(), returns.std()),
-                    "r-",
+                    color=COLORS["amber"],
                     linewidth=2,
-                    label="Normal",
+                    label="Fitted normal",
                 )
 
             ax.set_title(f"{name}\n(n={len(bars):,})")
-            ax.set_xlabel("Return (%)")
+            ax.set_xlabel("Bar return (%)")
             ax.set_ylabel("Density")
             ax.legend()
 
     # Hide empty subplot
     axes[5].axis("off")
 
-    plt.suptitle(f"{SYMBOL} - Return Distributions by Bar Type ({TRADING_DATE})", fontsize=14)
+    plt.suptitle(
+        f"{SYMBOL} activity-sampled bars sit closer to normal than time bars "
+        f"({TRADING_DATE}, tails clipped to ±2%)",
+        fontsize=14,
+    )
     plt.tight_layout()
     plt.show()
 
@@ -485,20 +536,29 @@ if tick_bars is not None:
         if len(timestamps) > 1:
             durations = np.diff(timestamps).astype("timedelta64[s]").astype(float)
 
-            ax.plot(range(len(durations)), durations, alpha=0.5, linewidth=0.5)
+            ax.plot(
+                range(len(durations)),
+                durations,
+                color=COLORS["blue"],
+                alpha=0.6,
+                linewidth=0.6,
+            )
             ax.axhline(
                 np.mean(durations),
-                color="red",
+                color=COLORS["amber"],
                 linestyle="--",
                 label=f"Mean: {np.mean(durations):.1f}s",
             )
 
-            ax.set_title(f"{name} Bar Duration")
-            ax.set_xlabel("Bar Index")
+            ax.set_title(f"{name} bar duration")
+            ax.set_xlabel("Bar index (chronological)")
             ax.set_ylabel("Duration (seconds)")
             ax.legend()
 
-    plt.suptitle(f"{SYMBOL} - Bar Duration Over Time ({TRADING_DATE})", fontsize=14)
+    plt.suptitle(
+        f"{SYMBOL} information-bar duration swings with activity ({TRADING_DATE})",
+        fontsize=14,
+    )
     plt.tight_layout()
     plt.show()
 
@@ -524,8 +584,6 @@ if volume_bars is not None and "buy_volume" in volume_bars.columns:
     has_sell_volume = volume_bars_pd["sell_volume"].sum() > 0
 
     if has_sell_volume:
-        print("=== Order Flow Analysis ===\n")
-
         # Compute signed imbalance in [-1, 1]. buy_volume/sell_volume are unsigned
         # (uint32), so cast to float BEFORE subtracting — an unsigned difference
         # underflows to ~2^32 on every sell-dominated bar.
@@ -536,10 +594,9 @@ if volume_bars is not None and "buy_volume" in volume_bars.columns:
         print(f"Mean imbalance: {volume_bars_pd['imbalance'].mean():.4f}")
         print(f"Std imbalance: {volume_bars_pd['imbalance'].std():.4f}")
     else:
-        print("=== Order Flow Analysis ===\n")
-        print("WARNING: ITCH Trade (P) messages do not provide aggressor direction.")
-        print("   All trades show buy_sell_indicator='B' uniformly.")
-        print("\nSee Section 7 below for Lee-Ready classification using LOB midpoint.")
+        print("ITCH Trade (P) messages do not provide aggressor direction: all")
+        print("trades show buy_sell_indicator='B' uniformly. See §7 for Lee-Ready")
+        print("classification using the LOB midpoint.")
 
 # %%
 if volume_bars is not None and "buy_volume" in volume_bars.columns:
@@ -548,18 +605,20 @@ if volume_bars is not None and "buy_volume" in volume_bars.columns:
 
         # Imbalance over time
         ax = axes[0]
-        colors = ["green" if x > 0 else "red" for x in volume_bars_pd["imbalance"]]
+        bar_colors = [
+            COLORS["positive"] if x > 0 else COLORS["negative"] for x in volume_bars_pd["imbalance"]
+        ]
         ax.bar(
             range(len(volume_bars_pd)),
             volume_bars_pd["imbalance"],
-            color=colors,
-            alpha=0.6,
+            color=bar_colors,
+            alpha=0.7,
             width=1.0,
         )
-        ax.axhline(0, color="black", linewidth=0.5)
-        ax.set_title("Volume Imbalance Over Time")
-        ax.set_xlabel("Bar Index")
-        ax.set_ylabel("(Buy - Sell) / Total")
+        ax.axhline(0, color=COLORS["neutral"], linewidth=0.6)
+        ax.set_title("Order-flow imbalance flips bar to bar")
+        ax.set_xlabel("Bar index (chronological)")
+        ax.set_ylabel("(Buy - Sell) / total volume")
 
         # Imbalance vs returns
         ax = axes[1]
@@ -569,13 +628,18 @@ if volume_bars is not None and "buy_volume" in volume_bars.columns:
             volume_bars_pd["return"].iloc[1:] * 100,
             alpha=0.3,
             s=5,
+            color=COLORS["blue"],
         )
-        ax.axhline(0, color="black", linewidth=0.5)
-        ax.axvline(0, color="black", linewidth=0.5)
-        ax.set_title("Imbalance vs Next Bar Return")
-        ax.set_xlabel("Imbalance (t)")
-        ax.set_ylabel("Return (t+1, %)")
+        ax.axhline(0, color=COLORS["neutral"], linewidth=0.6)
+        ax.axvline(0, color=COLORS["neutral"], linewidth=0.6)
+        ax.set_title("Imbalance vs next-bar return")
+        ax.set_xlabel("Imbalance at bar t")
+        ax.set_ylabel("Return at bar t+1 (%)")
 
+        plt.suptitle(
+            f"{SYMBOL} volume-bar order flow (tick-test sides, {TRADING_DATE})",
+            fontsize=14,
+        )
         plt.tight_layout()
         plt.show()
 
@@ -604,19 +668,16 @@ if volume_bars is not None and "buy_volume" in volume_bars.columns:
 # `02_itch_lob_reconstruction` for the complete LOB state machine.
 
 # %%
-# Lee-Ready classification (slower but accurate)
-# Only run in full mode due to computational cost
+# Lee-Ready classification reconstructs the LOB, so it is slower than the tick test.
 lee_ready_trades = None
 lee_ready_imbalance_bars = None
 
 if MESSAGE_DIR.exists():
-    print("=== Lee-Ready Classification ===\n")
     print("Reconstructing LOB state to classify trades by quote midpoint...")
-    print("(Using shared utils.limit_orderbook with correct order pool tracking)\n")
 
     try:
-        # Use shared function from utils.limit_orderbook with proper LOB reconstruction
-        # Filter to regular trading hours (9:30 AM - 4:00 PM)
+        # Shared classify_trades_lee_ready (chapter-local limit_orderbook module),
+        # restricted to regular trading hours (9:30 AM - 4:00 PM ET).
         from datetime import datetime
 
         start_time = datetime.strptime(f"{TRADING_DATE} 09:30:00", "%Y-%m-%d %H:%M:%S")
@@ -651,7 +712,7 @@ if lee_ready_trades is not None and len(lee_ready_trades) > 0:
 
         # Compare to tick-test imbalance bars
         if imbalance_bars is not None:
-            print("\n=== Classification Method Comparison ===")
+            print("\nClassification method comparison:")
             print(f"Tick-test imbalance bars: {len(imbalance_bars):,}")
             print(f"Lee-Ready imbalance bars: {len(lee_ready_imbalance_bars):,}")
 
@@ -697,27 +758,32 @@ if tick_bars is not None and len(tick_bars) > 0:
 
     # Bars per hour
     ax = axes[0]
-    bars_per_hour.plot(kind="bar", ax=ax, color="steelblue", alpha=0.7)
-    ax.set_title(f"{SYMBOL} - Tick Bars per Hour")
+    bars_per_hour.plot(kind="bar", ax=ax, color=COLORS["blue"], alpha=0.9)
+    ax.set_title("Tick-bar count peaks at the open and close")
     ax.set_xlabel("Hour (ET)")
-    ax.set_ylabel("Number of Bars")
+    ax.set_ylabel("Number of tick bars")
     ax.set_xticklabels([f"{h}:00" for h in bars_per_hour.index], rotation=45)
 
     # Volume per hour
     ax = axes[1]
     volume_per_hour = tick_bars_pd.groupby("hour")["volume"].sum()
-    volume_per_hour.plot(kind="bar", ax=ax, color="green", alpha=0.7)
-    ax.set_title(f"{SYMBOL} - Volume per Hour")
+    volume_per_hour.plot(kind="bar", ax=ax, color=COLORS["amber"], alpha=0.9)
+    ax.set_title("Traded volume follows the same U-shape")
     ax.set_xlabel("Hour (ET)")
     ax.set_ylabel("Volume (shares)")
     ax.set_xticklabels([f"{h}:00" for h in volume_per_hour.index], rotation=45)
 
+    plt.suptitle(
+        f"{SYMBOL} intraday activity traces the classic U-shape ({TRADING_DATE})",
+        fontsize=14,
+    )
     plt.tight_layout()
     plt.show()
 
-    print("\nIntraday Pattern (U-shape expected):")
-    print("Opening hour typically has highest activity due to overnight information processing.")
-    print("Closing hour has high activity due to portfolio rebalancing and MOC orders.")
+    print(
+        "Intraday U-shape: the opening hour concentrates activity as overnight "
+        "information is processed, and the close draws rebalancing and MOC flow."
+    )
 
 # %% [markdown]
 # ## 9. Save Results

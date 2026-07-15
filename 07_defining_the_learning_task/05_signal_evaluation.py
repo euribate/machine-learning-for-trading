@@ -78,6 +78,7 @@ from sklearn.metrics import (
 
 from data import load_etfs
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # importing utils.style activates the ml4t Plotly template
 
 warnings.filterwarnings("ignore")
 
@@ -377,7 +378,7 @@ if ic_21d:
     # Time series
     fig.add_trace(
         go.Scatter(
-            y=ic_21d, mode="lines", name="Daily IC", line=dict(color="#1f77b4"), opacity=0.7
+            y=ic_21d, mode="lines", name="Daily IC", line=dict(color=COLORS["blue"]), opacity=0.6
         ),
         row=1,
         col=1,
@@ -392,29 +393,29 @@ if ic_21d:
             y=rolling_ic,
             mode="lines",
             name=f"{window}D Rolling Mean",
-            line=dict(color="#ff7f0e", width=2),
+            line=dict(color=COLORS["amber"], width=2),
         ),
         row=1,
         col=1,
     )
 
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=1)
+    fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=1, col=1)
 
     # Distribution
     fig.add_trace(
-        go.Histogram(x=ic_21d, nbinsx=30, name="IC Distribution", marker_color="#2ca02c"),
+        go.Histogram(x=ic_21d, nbinsx=30, name="IC Distribution", marker_color=COLORS["blue"]),
         row=1,
         col=2,
     )
 
     mean_ic = np.mean(ic_21d)
-    fig.add_vline(x=mean_ic, line_dash="dash", line_color="red", row=1, col=2)
+    fig.add_vline(x=mean_ic, line_dash="dash", line_color=COLORS["negative"], row=1, col=2)
 
-fig.update_xaxes(title_text="Date", row=1, col=1)
+fig.update_xaxes(title_text="Trading day (chronological)", row=1, col=1)
 fig.update_yaxes(title_text="IC (Spearman)", row=1, col=1)
 fig.update_xaxes(title_text="IC", row=1, col=2)
 fig.update_yaxes(title_text="Count", row=1, col=2)
-fig.update_layout(height=350, template="plotly_white", showlegend=True)
+fig.update_layout(height=350, showlegend=True)
 fig.show()
 
 # %% [markdown]
@@ -487,7 +488,10 @@ for period in PERIODS:
 # %%
 # Visualize quantile returns
 fig = make_subplots(
-    rows=1, cols=len(PERIODS), subplot_titles=[f"{p}D Forward Returns" for p in PERIODS]
+    rows=1,
+    cols=len(PERIODS),
+    subplot_titles=[f"{p}D Forward Returns" for p in PERIODS],
+    horizontal_spacing=0.12,
 )
 
 for i, period in enumerate(PERIODS, 1):
@@ -504,7 +508,7 @@ for i, period in enumerate(PERIODS, 1):
                 y=returns,
                 name=period_key,
                 showlegend=False,
-                marker_color=["#f97316" if v < 0 else "#2166ac" for v in returns],
+                marker_color=[COLORS["amber"] if v < 0 else COLORS["blue"] for v in returns],
             ),
             row=1,
             col=i,
@@ -512,8 +516,11 @@ for i, period in enumerate(PERIODS, 1):
 
 for i in range(1, len(PERIODS) + 1):
     fig.update_xaxes(title_text="Quantile", row=1, col=i)
-    fig.update_yaxes(title_text="Mean Forward Return", row=1, col=i)
-fig.update_layout(title="Mean Returns by Signal Quantile", template="plotly_white", height=350)
+    fig.update_yaxes(tickformat=".2%", row=1, col=i)
+# Label the shared y-axis only on the first panel to avoid the title overlapping
+# the neighbouring panel's bars; each panel keeps its own (per-horizon) scale.
+fig.update_yaxes(title_text="Mean forward return", row=1, col=1)
+fig.update_layout(title="Higher signal quantiles do not earn higher forward returns", height=350)
 fig.show()
 
 # %%
@@ -563,33 +570,35 @@ horizons = list(PERIODS)
 ics = [result.ic.get(f"{h}D", float("nan")) for h in horizons]
 icirs = [result.ic_ir.get(f"{h}D", float("nan")) for h in horizons]
 
-# IC plot (colorblind-safe)
+# IC plot (colorblind-safe blue/amber)
 fig.add_trace(
     go.Bar(
         x=[f"{h}D" for h in horizons],
         y=ics,
         name="Mean IC",
-        marker_color=["#2166ac" if v > 0 else "#f97316" for v in ics],
+        marker_color=[COLORS["blue"] if v > 0 else COLORS["amber"] for v in ics],
     ),
     row=1,
     col=1,
 )
 
 # ICIR plot
-icir_colors = ["#2166ac" if v > 0.5 else "#9ecae1" if v > 0 else "#f97316" for v in icirs]
+icir_colors = [
+    COLORS["blue"] if v > 0.5 else COLORS["slate"] if v > 0 else COLORS["amber"] for v in icirs
+]
 fig.add_trace(
     go.Bar(x=[f"{h}D" for h in horizons], y=icirs, name="ICIR", marker_color=icir_colors),
     row=1,
     col=2,
 )
 
-fig.add_hline(y=0.5, line_dash="dash", line_color="gray", row=1, col=2)
+fig.add_hline(y=0.5, line_dash="dash", line_color=COLORS["neutral"], row=1, col=2)
 
 fig.update_xaxes(title_text="Horizon", row=1, col=1)
 fig.update_yaxes(title_text="Mean IC", row=1, col=1)
 fig.update_xaxes(title_text="Horizon", row=1, col=2)
 fig.update_yaxes(title_text="ICIR", row=1, col=2)
-fig.update_layout(height=350, template="plotly_white", showlegend=False)
+fig.update_layout(height=350, showlegend=False)
 fig.show()
 
 # %% [markdown]
@@ -643,7 +652,7 @@ fig.add_trace(
         line=dict(width=2),
     )
 )
-fig.add_hline(y=0, line_dash="dash", line_color="gray")
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"])
 
 # First horizon at which IC falls below half its peak — diagnostic only.
 # When IC reverses sign rather than decays monotonically (as is common for
@@ -657,24 +666,28 @@ for i, ic in enumerate(decay_ics):
         fig.add_vline(
             x=crossing,
             line_dash="dot",
-            line_color="red",
+            line_color=COLORS["negative"],
             annotation_text=f"IC < ½·peak by day {crossing}",
         )
         break
 
 fig.update_layout(
-    title="IC Decay Across Horizons",
+    title="Horizon IC profile: weak short-horizon reversal, flat thereafter",
     xaxis_title="Forward Return Horizon (days)",
     yaxis_title="Mean IC (Spearman)",
     height=350,
-    template="plotly_white",
 )
 fig.show()
 
 # %% [markdown]
-# **Interpretation**: The IC decay curve shows how quickly the signal's
-# predictive power diminishes with longer horizons. Rebalancing should match
-# the horizon where IC peaks or begins to decay significantly.
+# **Interpretation**: The horizon-IC curve is the tool for choosing a rebalancing
+# frequency — for a cleanly decaying signal you rebalance near where IC peaks and
+# stop before it fades. This 21-day ETF momentum factor does *not* show that clean
+# decay: every horizon IC sits within ±0.006 and none is statistically distinct
+# from zero, with the short horizons even mildly negative (weak reversal) before
+# flattening out. The half-peak marker is therefore a mechanical diagnostic, not a
+# tradeable half-life here; the honest read is a factor with no exploitable
+# cross-sectional horizon structure on this universe.
 
 # %% [markdown]
 # ## 6. Turnover Analysis
@@ -964,12 +977,12 @@ fig = make_subplots(
 # Use fold test-start dates as x-axis labels for temporal context
 fold_labels = [r["test_start"][:7] for r in fold_results]  # YYYY-MM format
 
-# Colorblind-safe: blue for positive, orange for negative
+# Colorblind-safe: blue for positive, amber for negative
 fig.add_trace(
     go.Bar(
         x=fold_labels,
         y=[r["ic"] for r in fold_results],
-        marker_color=["#2166ac" if r["ic"] > 0 else "#f97316" for r in fold_results],
+        marker_color=[COLORS["blue"] if r["ic"] > 0 else COLORS["amber"] for r in fold_results],
         name="Fold IC",
     ),
     row=1,
@@ -980,22 +993,22 @@ fig.add_trace(
 fig.add_hline(
     y=fold_ic_mean,
     line_dash="dash",
-    line_color="#2166ac",
+    line_color=COLORS["blue"],
     line_width=1.5,
     annotation_text=f"Mean={fold_ic_mean:.3f}",
     row=1,
     col=1,
 )
-fig.add_hline(y=0, line_dash="dot", line_color="gray", row=1, col=1)
+fig.add_hline(y=0, line_dash="dot", line_color=COLORS["neutral"], row=1, col=1)
 
 # Histogram of IC values
 fig.add_trace(
-    go.Histogram(x=[r["ic"] for r in fold_results], nbinsx=10, marker_color="#2166ac"),
+    go.Histogram(x=[r["ic"] for r in fold_results], nbinsx=10, marker_color=COLORS["blue"]),
     row=1,
     col=2,
 )
-fig.add_vline(x=0, line_dash="dot", line_color="gray", row=1, col=2)
-fig.add_vline(x=fold_ic_mean, line_dash="dash", line_color="#2166ac", row=1, col=2)
+fig.add_vline(x=0, line_dash="dot", line_color=COLORS["neutral"], row=1, col=2)
+fig.add_vline(x=fold_ic_mean, line_dash="dash", line_color=COLORS["blue"], row=1, col=2)
 
 fig.update_xaxes(title_text="Test Fold Start", row=1, col=1)
 fig.update_yaxes(title_text="IC (Spearman)", row=1, col=1)
@@ -1004,7 +1017,6 @@ fig.update_yaxes(title_text="Count", row=1, col=2)
 
 fig.update_layout(
     height=400,
-    template="plotly_white",
     showlegend=False,
     font=dict(size=12),
 )
@@ -1110,23 +1122,22 @@ fig.add_trace(
         x=permuted_ics,
         nbinsx=30,
         name="Permuted IC",
-        marker_color="#9ecae1",
+        marker_color=COLORS["slate"],
         opacity=0.8,
     )
 )
 fig.add_vline(
     x=observed_ic_mean,
     line_dash="solid",
-    line_color="#d62728",
+    line_color=COLORS["negative"],
     line_width=2,
     annotation_text=f"Observed IC={observed_ic_mean:.4f}",
 )
 fig.update_layout(
-    title="Within-Time Permutation Test",
+    title="Observed IC sits far outside the within-time permutation null",
     xaxis_title="Mean IC (permuted)",
     yaxis_title="Count",
     height=350,
-    template="plotly_white",
     showlegend=False,
 )
 fig.show()
@@ -1274,7 +1285,7 @@ fig.add_trace(
         y=tpr,
         mode="lines",
         name=f"ROC (AUC={roc_auc:.3f})",
-        line=dict(color="#2166ac", width=2),
+        line=dict(color=COLORS["blue"], width=2),
     ),
     row=1,
     col=1,
@@ -1285,7 +1296,7 @@ fig.add_trace(
         y=[0, 1],
         mode="lines",
         name="Random",
-        line=dict(dash="dash", color="gray"),
+        line=dict(dash="dash", color=COLORS["neutral"]),
     ),
     row=1,
     col=1,
@@ -1298,7 +1309,7 @@ fig.add_trace(
         y=precision,
         mode="lines",
         name=f"PR (AUC={pr_auc:.3f})",
-        line=dict(color="#2166ac", width=2),
+        line=dict(color=COLORS["blue"], width=2),
     ),
     row=1,
     col=2,
@@ -1307,7 +1318,7 @@ baseline_precision = y_true.mean()
 fig.add_hline(
     y=baseline_precision,
     line_dash="dash",
-    line_color="gray",
+    line_color=COLORS["neutral"],
     row=1,
     col=2,
     annotation_text=f"Prevalence={baseline_precision:.1%}",
@@ -1321,7 +1332,6 @@ fig.update_yaxes(title_text="Precision", row=1, col=2)
 
 fig.update_layout(
     height=400,
-    template="plotly_white",
     showlegend=True,
     font=dict(size=12),
 )

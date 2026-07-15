@@ -56,6 +56,7 @@ from ml4t.diagnostic.metrics import pooled_ic
 from plotly.subplots import make_subplots
 
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # activates the ml4t Plotly template on import
 
 warnings.filterwarnings("ignore")
 
@@ -104,9 +105,13 @@ print(f"Computing features for {len(symbols)} symbols")
 from ml4t.diagnostic.metrics import compute_ic_hac_stats
 
 
-def _ic_stats_with_icir(ic_series: np.ndarray) -> dict:
-    """Compute HAC-adjusted IC stats and add ICIR (mean IC / std IC)."""
-    stats = compute_ic_hac_stats(ic_series)
+def _ic_stats_with_icir(ic_series: np.ndarray, label_horizon: int | None = None) -> dict:
+    """Compute HAC-adjusted IC stats and add ICIR (mean IC / std IC).
+
+    ``label_horizon`` is forwarded to the HAC bandwidth so overlapping
+    forward-return labels get a Newey-West lag of at least ``horizon - 1``.
+    """
+    stats = compute_ic_hac_stats(ic_series, label_horizon=label_horizon)
     std_ic = float(np.std(ic_series[~np.isnan(ic_series)], ddof=1))
     stats["icir"] = stats["mean_ic"] / std_ic if std_ic > 0 else np.nan
     return stats
@@ -180,7 +185,7 @@ for lb in LOOKBACK_RANGE:
     ic_series = compute_momentum_ic_series(prices_wide, symbols, lb, FORWARD_HORIZON)
 
     if len(ic_series) >= 20:
-        stats_result = _ic_stats_with_icir(ic_series)
+        stats_result = _ic_stats_with_icir(ic_series, label_horizon=FORWARD_HORIZON)
         stats_result["ics"] = ic_series  # Keep for later use
         sweep_results[lb] = stats_result
 
@@ -203,7 +208,12 @@ for lb in LOOKBACK_RANGE:
 # %%
 # Visualize response surface
 if sweep_results:
-    fig = make_subplots(rows=1, cols=2, subplot_titles=["Mean IC by Lookback", "ICIR by Lookback"])
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=["Mean IC by Lookback", "ICIR by Lookback"],
+        horizontal_spacing=0.13,
+    )
 
     lbs = list(sweep_results.keys())
     mean_ics = [sweep_results[lb]["mean_ic"] for lb in lbs]
@@ -216,12 +226,13 @@ if sweep_results:
             y=mean_ics,
             mode="lines+markers",
             name="Mean IC",
+            line=dict(color=COLORS["blue"]),
             error_y=dict(type="data", array=[1.96 * se for se in hac_ses]),
         ),
         row=1,
         col=1,
     )
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=1)
+    fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=1, col=1)
 
     fig.add_trace(
         go.Scatter(
@@ -229,13 +240,17 @@ if sweep_results:
             y=icirs,
             mode="lines+markers",
             name="ICIR",
-            line=dict(color="darkorange"),
+            line=dict(color=COLORS["amber"]),
         ),
         row=1,
         col=2,
     )
 
-    fig.update_layout(title="ETF Momentum: Response Surface", height=400, showlegend=False)
+    fig.update_layout(
+        title="ETF momentum response surface across lookback windows (95% HAC band)",
+        height=400,
+        showlegend=False,
+    )
     fig.update_xaxes(title_text="Lookback (days)", row=1, col=1)
     fig.update_xaxes(title_text="Lookback (days)", row=1, col=2)
     fig.update_yaxes(title_text="Mean IC", row=1, col=1)
@@ -311,26 +326,27 @@ if sweep_results and robustness:
             y=icirs,
             mode="lines+markers",
             name="ICIR",
-            line=dict(color="steelblue", width=2),
+            line=dict(color=COLORS["blue"], width=2),
         )
     )
 
     fig.add_hline(
         y=robustness["threshold"],
         line_dash="dash",
-        line_color="darkorange",
+        line_color=COLORS["amber"],
         annotation_text=f"90% of best ({robustness['threshold']:.2f})",
+        annotation_position="bottom left",
     )
 
     if robustness["robust_range"]:
         fig.add_vrect(
             x0=robustness["robust_range"][0],
             x1=robustness["robust_range"][1],
-            fillcolor="lightgreen",
+            fillcolor=COLORS["positive"],
             opacity=0.3,
             line_width=0,
-            annotation_text="Robust Region",
-            annotation_position="top left",
+            annotation_text="Robust region",
+            annotation_position="top right",
         )
 
 # %%
@@ -342,12 +358,12 @@ if sweep_results and robustness:
             y=[robustness["best_value"]],
             mode="markers",
             name=f"Best ({robustness['best_param']}d)",
-            marker=dict(color="red", size=12, symbol="star"),
+            marker=dict(color=COLORS["negative"], size=12, symbol="star"),
         )
     )
 
     fig.update_layout(
-        title="ETF Momentum: Robust Region Analysis",
+        title="Only the 189-day lookback lies within 90% of peak ICIR",
         xaxis_title="Lookback (days)",
         yaxis_title="ICIR",
         height=450,
@@ -488,7 +504,7 @@ def compute_regime_ic(
                         ics.append(ic)
 
         if ics:
-            stats = _ic_stats_with_icir(np.array(ics))
+            stats = _ic_stats_with_icir(np.array(ics), label_horizon=forward_horizon)
             stats["ics"] = np.array(ics)
             regime_results[regime] = stats
 
@@ -521,10 +537,11 @@ if spy_vol is not None:
             print("IC range <= 0.04 across regimes — signal does not depend on regime")
 
 # %% [markdown]
-# ### Book Figure: Conditional IC Box Plot
+# ### Conditional IC Distribution by Regime
 #
-# Static matplotlib version for print — box plots with fold-level IC
-# observations overlaid, showing distribution stability across regimes.
+# Box plots of the daily IC observations within each volatility tercile, with
+# the raw daily ICs overlaid, show how the distribution shifts across regimes -
+# not just the mean, but the spread and skew.
 
 # %%
 if spy_vol is not None and regime_ic:
@@ -536,8 +553,6 @@ if spy_vol is not None and regime_ic:
         "Mid Vol\n(middle tercile)",
         "High Vol\n(top tercile)",
     ]
-    grays = ["0.85", "0.60", "0.35"]
-
     ic_data = [regime_ic[r]["ics"] for r in regime_order if r in regime_ic]
     positions = list(range(1, len(ic_data) + 1))
 
@@ -546,49 +561,53 @@ if spy_vol is not None and regime_ic:
         positions=positions,
         widths=0.5,
         patch_artist=True,
-        medianprops=dict(color="black", linewidth=1.5),
-        whiskerprops=dict(color="0.4"),
-        capprops=dict(color="0.4"),
-        flierprops=dict(marker=".", markersize=3, markerfacecolor="0.5"),
+        showfliers=False,  # every point is drawn by the jittered overlay below
+        medianprops=dict(color=COLORS["blue"], linewidth=1.5),
+        whiskerprops=dict(color=COLORS["neutral"]),
+        capprops=dict(color=COLORS["neutral"]),
     )
-    for patch, gray in zip(bp["boxes"], grays, strict=False):
-        patch.set_facecolor(gray)
-        patch.set_edgecolor("black")
+    for patch in bp["boxes"]:
+        patch.set_facecolor(COLORS["silver_muted"])
+        patch.set_edgecolor(COLORS["blue"])
         patch.set_linewidth(0.8)
 
     for i, (ics, pos) in enumerate(zip(ic_data, positions, strict=False)):
         jitter = np.random.default_rng(SEED).uniform(-0.12, 0.12, size=len(ics))
-        ax.scatter(pos + jitter, ics, s=8, alpha=0.3, color="black", zorder=3)
+        ax.scatter(pos + jitter, ics, s=8, alpha=0.3, color=COLORS["neutral"], zorder=3)
 
-    # Annotate and finalize the regime IC figure (must be in the same cell as
-    # the plot to avoid the matplotlib-inline backend auto-displaying the
-    # un-annotated figure on cell exit).
+    # Add headroom above the data so the per-regime IC/t labels clear the
+    # whiskers (annotations must stay in this cell, else the matplotlib-inline
+    # backend auto-displays the un-annotated figure on cell exit).
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin, ymax * 1.22)
+    label_y = ymax * 1.08
     for i, regime in enumerate(regime_order):
         if regime in regime_ic:
             r = regime_ic[regime]
             ax.text(
                 i + 1,
-                ax.get_ylim()[1] * 0.92,
+                label_y,
                 f"IC = {r['mean_ic']:+.3f}\n(t = {r['t_stat']:.1f})",
                 ha="center",
-                va="top",
+                va="bottom",
                 fontsize=8,
+                color=COLORS["neutral"],
             )
 
-    ax.axhline(y=0, ls="--", color="black", lw=0.7)
+    ax.axhline(y=0, ls="--", color=COLORS["neutral"], lw=0.7)
     ax.set_xticks(positions)
     ax.set_xticklabels(regime_labels)
     ax.set_ylabel("Information Coefficient (rank IC)")
-    ax.set_title("Momentum IC by Volatility Regime")
+    ax.set_title("Momentum IC weakens from low- to high-volatility regimes")
     ax.text(
         0.5,
-        -0.12,
+        -0.22,
         "126d momentum, 20d fwd returns, 42d vol window",
         transform=ax.transAxes,
         ha="center",
         fontsize=8,
         style="italic",
-        color="0.4",
+        color=COLORS["neutral"],
     )
 
     plt.show()
@@ -679,7 +698,7 @@ if spy_vol is not None and len(interact_df) > 252:
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            y=ic_raw, mode="lines", name="Raw Momentum", line=dict(color="steelblue", width=1.5)
+            y=ic_raw, mode="lines", name="Raw Momentum", line=dict(color=COLORS["blue"], width=1.5)
         )
     )
     fig.add_trace(
@@ -687,10 +706,10 @@ if spy_vol is not None and len(interact_df) > 252:
             y=ic_gated,
             mode="lines",
             name="Gated Momentum",
-            line=dict(color="darkorange", width=1.5),
+            line=dict(color=COLORS["amber"], width=1.5),
         )
     )
-    fig.add_hline(y=0, line_dash="dash", line_color="gray")
+    fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"])
     fig.update_layout(
         title="Rolling 126-Day IC: Raw vs Gated Momentum",
         xaxis_title="Trading Days",
@@ -738,7 +757,7 @@ def _compute_variant_ic(
                 if not np.isnan(ic):
                     ics.append(ic)
 
-    return _ic_stats_with_icir(np.array(ics))
+    return _ic_stats_with_icir(np.array(ics), label_horizon=FORWARD_HORIZON)
 
 
 # %%

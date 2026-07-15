@@ -58,6 +58,7 @@
 # %%
 """DataBento MBO: Multi-Day Bar Calibration Study — calibrating bar sampling parameters across trading days."""
 
+import re
 import warnings
 from pathlib import Path
 
@@ -124,49 +125,50 @@ if MAX_ROWS_PER_DAY == 0:
 def _load_day_trades(file_path: Path, max_rows_per_day: int | None = None) -> pl.DataFrame:
     """Load and process trades from a single daily parquet file.
 
-    Filters to Regular Trading Hours (13:30-21:00 UTC) and maps
-    aggressor side from DataBento MBO conventions.
+    Filters to Regular Trading Hours (09:30-16:00 America/New_York) and maps the
+    aggressor side from DataBento's Trade-record convention.
     """
-    # Extract date from filename (xnas-itch-YYYYMMDD.mbo.dbn.parquet)
-    date_str = file_path.name.split("-")[2].split(".")[0]
+    # Derive the date from the trailing 8-digit token so both file layouts work:
+    # Download Center `xnas-itch-YYYYMMDD.mbo.dbn.parquet` and API `YYYYMMDD.parquet`.
+    date_str = re.search(r"(\d{8})", file_path.stem).group(1)
     trade_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
 
     # Load raw MBO data
     df = pl.read_parquet(file_path)
 
-    # Select columns — data uses canonical "timestamp" column
+    # Normalize the event-time column name (API files use `ts_event`).
+    if "timestamp" not in df.columns and "ts_event" in df.columns:
+        df = df.rename({"ts_event": "timestamp"})
+
+    # Select columns
     df = df.select(["timestamp", "action", "side", "price", "size"])
 
-    # Cast timestamp
+    # Cast timestamp (UTC; kept naive for downstream)
     df = df.with_columns(pl.col("timestamp").cast(pl.Datetime("ns")))
 
     # Filter to trades only (action == 'T')
     df = df.filter(pl.col("action") == "T")
 
-    # Filter to RTH (13:30-21:00 UTC covers both EDT and EST)
-    # Note: This conservative filter works year-round but may include
-    # 30-60 minutes of pre/post market during DST transitions.
-    # Production systems should use proper market calendar.
+    # Regular trading hours (09:30-16:00 America/New_York). Convert the UTC instant
+    # to exchange-local time so the window is correct in both EDT and EST rather
+    # than admitting an hour of pre-market as a fixed UTC window does.
+    _et = pl.col("timestamp").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York")
     df = df.filter(
-        (
-            (pl.col("timestamp").dt.hour() > 13)
-            | ((pl.col("timestamp").dt.hour() == 13) & (pl.col("timestamp").dt.minute() >= 30))
-        )
-        & (pl.col("timestamp").dt.hour() < 21)
+        ((_et.dt.hour() > 9) | ((_et.dt.hour() == 9) & (_et.dt.minute() >= 30)))
+        & (_et.dt.hour() < 16)
     )
 
     # Add date column
     df = df.with_columns(pl.lit(trade_date).alias("date"))
 
-    # Map side: DataBento MBO 'side' is the RESTING order's side (the side hit)
-    # A = trade hit resting ASK → BUY aggressor (+1)
-    # B = trade hit resting BID → SELL aggressor (-1)
-    # N = unknown (0)
+    # Aggressor side for Trade (T) records: DataBento sets `side` to the trade
+    # aggressor — B = buy-initiated (+1), A = sell-initiated (-1), N = unknown (0).
+    # (The resting-order interpretation applies to Fill `F` records, not `T`.)
     df = df.with_columns(
-        pl.when(pl.col("side") == "A")
-        .then(1)  # Buy aggressor (hit ask)
-        .when(pl.col("side") == "B")
-        .then(-1)  # Sell aggressor (hit bid)
+        pl.when(pl.col("side") == "B")
+        .then(1)
+        .when(pl.col("side") == "A")
+        .then(-1)
         .otherwise(0)
         .alias("side_num")
     )

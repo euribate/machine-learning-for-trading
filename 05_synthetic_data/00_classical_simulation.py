@@ -920,7 +920,6 @@ fig.update_layout(
     title_text="Stochastic Models: Price Paths",
     height=600,
     width=950,
-    template="plotly_white",
 )
 fig.show()
 
@@ -1042,7 +1041,6 @@ fig.update_layout(
     xaxis_title="Daily Log-Return",
     yaxis_title="Density",
     barmode="overlay",
-    template="plotly_white",
 )
 fig.show()
 
@@ -1386,7 +1384,6 @@ fig.update_layout(
     title="ACF of Squared Returns: Bootstrap Method Comparison",
     xaxis_title="Lag (days)",
     yaxis_title="Autocorrelation",
-    template="plotly_white",
 )
 fig.show()
 

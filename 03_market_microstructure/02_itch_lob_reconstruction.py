@@ -143,7 +143,6 @@ print(f"Available message types: {msg_types}")
 # to attach price and side information to D/X/E messages.
 
 # %%
-# %%
 # Get the stock_locate ID for our symbol from R messages
 stock_map = get_stock_locate_mapping(ITCH_DIR)
 assert SYMBOL in stock_map, f"Symbol {SYMBOL} not found in stock directory"
@@ -286,7 +285,12 @@ print(f"  Trades (P): {len(trades):,}")
 add_orders.head(5)
 
 # %%
-print(f"Price range: ${add_orders['price'].min():.2f} - ${add_orders['price'].max():.2f}")
+# A handful of far-from-market and market-peg orders sit at sentinel prices
+# (near $0 or ~$200k), so the raw min-max spans an implausibly wide range. The
+# 1st-99th percentile shows where displayed liquidity actually rests.
+_p = add_orders["price"]
+print(f"Price range (min-max):    ${_p.min():,.2f} - ${_p.max():,.2f}")
+print(f"Central range (1st-99th): ${_p.quantile(0.01):,.2f} - ${_p.quantile(0.99):,.2f}")
 
 # %% [markdown]
 # ## 3. Order Book Reconstruction Algorithm

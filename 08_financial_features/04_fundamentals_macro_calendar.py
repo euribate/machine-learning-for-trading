@@ -57,10 +57,16 @@
 
 from __future__ import annotations
 
+import logging
 import warnings
 from datetime import date, datetime, timedelta
 
+import plotly.graph_objects as go
 import polars as pl
+from plotly.subplots import make_subplots
+
+# Importing utils.style registers and activates the ML4T Plotly template.
+from utils.style import COLORS
 
 warnings.filterwarnings("ignore")
 
@@ -197,10 +203,14 @@ print("Value factors computed:")
 value_df.select(["symbol", "fiscal_quarter_end", "book_to_market", "earnings_yield"]).tail(10)
 
 # %% [markdown]
-# **Interpretation**: A book-to-market ratio of 0.5 means the stock trades at
-# 2x its book value — the market assigns significant intangible/growth premium.
-# Earnings yield is the inverse of the P/E ratio, making higher values more
-# "value-oriented."
+# **Interpretation**: On real data, a book-to-market ratio of 0.5 means the
+# stock trades at 2x its book value - the market assigns a significant
+# intangible/growth premium. Here every book-to-market equals exactly 0.5 by
+# construction, because the scaffolding sets `market_cap = 2 x book_value`; the
+# cell demonstrates the *formula*, not a cross-section of values. Earnings yield
+# (earnings / market_cap) is the inverse of the P/E ratio, so higher values are
+# more "value-oriented"; it varies across quarters because earnings vary even
+# when the book-to-market is pinned.
 
 # %% [markdown]
 # ## 1.3 Quality Factors
@@ -287,7 +297,8 @@ daily_dates = (
     pl.DataFrame(
         {"timestamp": pl.date_range(date(2024, 1, 1), date(2024, 12, 31), "1d", eager=True)}
     )
-    .filter(pl.col("timestamp").dt.weekday() < 5)  # Business days
+    # Polars weekday(): Mon=1 .. Sun=7, so <=5 keeps Mon-Fri (business days).
+    .filter(pl.col("timestamp").dt.weekday() <= 5)
     .join(pl.DataFrame({"symbol": symbols}), how="cross")
 )
 
@@ -298,15 +309,72 @@ aligned = align_factors_to_daily(
     daily_dates,
 )
 
-print(f"Daily aligned: {len(aligned):,} rows")
-aligned.filter(pl.col("symbol") == symbols[0]).head(10)
+print(f"Daily aligned: {len(aligned):,} rows across {aligned['symbol'].n_unique()} symbols")
 
 # %% [markdown]
-# ### 1.5 Fake Sample Size Warning
+# The ASOF join makes point-in-time discipline visible: the daily ROE is a step
+# function that changes **only** on an announcement date and holds the last
+# reported value until the next filing. Plotting one symbol shows the staircase;
+# the amber dashed lines mark the quarterly announcement dates that create each
+# step.
+
+# %%
+# unique() order is not stable, and a few symbols have all-null ROE on this
+# scaffolding slice (e.g. missing XBRL earnings), so select deterministically:
+# the symbol whose daily ROE has the fewest gaps gives an unbroken staircase.
+viz_symbol = (
+    aligned.group_by("symbol")
+    .agg(pl.col("roe").is_not_null().sum().alias("n_obs"))
+    .sort(["n_obs", "symbol"], descending=[True, False])["symbol"][0]
+)
+viz_aligned = aligned.filter(pl.col("symbol") == viz_symbol).sort("timestamp")
+ann_dates = (
+    quality_df.filter(pl.col("symbol") == viz_symbol)
+    .select("announcement_date")
+    .drop_nulls()
+    .unique()
+    .sort("announcement_date")["announcement_date"]
+    .to_list()
+)
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=viz_aligned["timestamp"].to_list(),
+        y=viz_aligned["roe"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["blue"], shape="hv"),  # step-after: value held forward
+        name="Daily ROE (ASOF backward-fill)",
+    )
+)
+for ad in ann_dates:
+    if date(2024, 1, 1) <= ad <= date(2024, 12, 31):
+        fig.add_vline(x=ad, line_dash="dash", line_color=COLORS["amber"])
+
+# Fix the y-range to the plotted values (with padding) so the modest quarterly
+# steps fill the axis instead of being crushed by autoscale.
+lo, hi = viz_aligned["roe"].min(), viz_aligned["roe"].max()
+pad = (hi - lo) * 0.25
+fig.update_layout(
+    height=420,
+    title=f"Between filings ROE holds flat, stepping only on announcement dates ({viz_symbol})",
+    showlegend=False,
+)
+fig.update_xaxes(title_text="Trading day (2024)")
+fig.update_yaxes(
+    title_text="Return on equity (earnings / book value)",
+    range=[lo - pad, hi + pad],
+)
+fig.show()
+
+# %% [markdown]
+# ### 1.5 Inflated Sample-Size Warning
 #
 # Forward-filling quarterly data to daily frequency inflates the apparent
-# sample size. Each unique fundamental observation appears ~63 times (one
-# quarter of trading days), but carries the same information.
+# sample size. Each fundamental observation is repeated across every trading
+# day until the next announcement - roughly a quarter's worth of days - so the
+# daily panel carries the same information many times over. The cell below
+# reports the empirical inflation factor for this demo.
 
 # %%
 # Count unique fundamental observations vs total daily rows
@@ -325,7 +393,7 @@ if len(aligned) > 0:
     print(f"Unique observations:  {n_unique:,}")
     print(f"Inflation ratio:      {inflation_ratio:.0f}x")
     print(
-        "\nEach fundamental observation is repeated ~63 times via forward-fill."
+        f"\nEach fundamental observation is repeated ~{inflation_ratio:.0f} times via forward-fill."
         "\nThis inflates t-statistics if not accounted for."
         "\nSee Section 7.2 on uniqueness weighting for the correction."
     )
@@ -527,8 +595,68 @@ macro_features = macro_features.with_columns(
         ).alias("yc_slope_zscore_250d"),
     ]
 )
-print("Yield-curve slope feature:")
-macro_features.select(["timestamp", "t10y2y", "yc_slope_ema5", "yc_slope_zscore_250d"]).tail(5)
+# %% [markdown]
+# The two panels below trace the whole history. The top panel shows the raw
+# 10Y-2Y spread with its 5-day EMA; the shaded band marks inversions (spread
+# below zero), the classic recession precursor. The bottom panel shows the
+# 250-day z-score, which restates the same slope relative to its own recent
+# regime.
+
+# %%
+yc = macro_features.select(
+    ["timestamp", "t10y2y", "yc_slope_ema5", "yc_slope_zscore_250d"]
+).drop_nulls("yc_slope_zscore_250d")
+
+fig = make_subplots(
+    rows=2,
+    cols=1,
+    shared_xaxes=True,
+    vertical_spacing=0.08,
+    subplot_titles=["10Y-2Y spread and 5-day EMA", "250-day z-score of the EMA slope"],
+)
+fig.add_trace(
+    go.Scatter(
+        x=yc["timestamp"].to_list(),
+        y=yc["t10y2y"].to_list(),
+        name="Raw spread",
+        line=dict(color=COLORS["neutral"], width=1),
+        opacity=0.5,
+    ),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Scatter(
+        x=yc["timestamp"].to_list(),
+        y=yc["yc_slope_ema5"].to_list(),
+        name="5-day EMA",
+        line=dict(color=COLORS["blue"], width=2),
+    ),
+    row=1,
+    col=1,
+)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["copper"], row=1, col=1)
+fig.add_trace(
+    go.Scatter(
+        x=yc["timestamp"].to_list(),
+        y=yc["yc_slope_zscore_250d"].to_list(),
+        name="z-score",
+        line=dict(color=COLORS["blue"], width=1.5),
+    ),
+    row=2,
+    col=1,
+)
+fig.add_hline(y=2, line_dash="dash", line_color=COLORS["neutral"], row=2, col=1)
+fig.add_hline(y=-2, line_dash="dash", line_color=COLORS["neutral"], row=2, col=1)
+fig.update_layout(
+    height=560,
+    title="The yield-curve slope, EMA-smoothed and restated as a regime-relative z-score",
+    showlegend=False,
+)
+fig.update_yaxes(title_text="Spread (pct points)", row=1, col=1)
+fig.update_yaxes(title_text="z-score (std devs)", row=2, col=1)
+fig.update_xaxes(title_text="Date", row=2, col=1)
+fig.show()
 
 # %% [markdown]
 # **Interpretation**: The z-score centers the slope relative to its recent history.
@@ -609,6 +737,10 @@ spy = etfs.filter(pl.col("symbol") == "SPY").sort("timestamp")
 calendar_start_dt = datetime.fromisoformat(CALENDAR_START_DATE)
 spy = spy.filter(pl.col("timestamp") >= calendar_start_dt)
 
+# cyclical_encode resets its own logger level to INFO on every call, so a global
+# disable gate (not setLevel) is the reliable way to keep its per-call
+# "Starting/Completed calculation" lines out of the reader-facing output.
+logging.disable(logging.INFO)
 # Cyclical encoding for month
 month_encoded = cyclical_encode(pl.col("timestamp").dt.month(), period=12, name_prefix="month")
 cal_df = spy.with_columns(**month_encoded)
@@ -616,9 +748,63 @@ cal_df = spy.with_columns(**month_encoded)
 # Day-of-week encoding (Monday=1, Friday=5)
 dow_encoded = cyclical_encode(pl.col("timestamp").dt.weekday(), period=5, name_prefix="dow")
 cal_df = cal_df.with_columns(**dow_encoded)
+logging.disable(logging.NOTSET)
 
-print("Calendar encodings (last 10 rows):")
-cal_df.select(["timestamp", "month_sin", "month_cos", "dow_sin", "dow_cos"]).tail(10)
+print(f"Calendar encodings added to {len(cal_df):,} SPY daily rows (month_sin/cos, dow_sin/cos)")
+
+# %% [markdown]
+# The value of the encoding is easiest to see on the unit circle. Mapping each
+# month to $(\cos\theta, \sin\theta)$ places the twelve months evenly around a
+# ring, so December (12) sits right next to January (1) - the "wrap-around" that
+# an integer 1-12 encoding breaks. Distance on the ring equals distance in the
+# calendar.
+
+# %%
+# Recover the 12 distinct month encodings actually produced above.
+month_circle = (
+    cal_df.select(
+        month=pl.col("timestamp").dt.month(),
+        month_sin="month_sin",
+        month_cos="month_cos",
+    )
+    .unique()
+    .sort("month")
+)
+month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# Close the ring by repeating the first point so the connecting line wraps.
+xs = month_circle["month_cos"].to_list()
+ys = month_circle["month_sin"].to_list()
+labels = [month_names[m - 1] for m in month_circle["month"].to_list()]
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=xs + xs[:1],
+        y=ys + ys[:1],
+        mode="lines",
+        line=dict(color=COLORS["slate"], width=1, dash="dot"),
+        showlegend=False,
+    )
+)
+fig.add_trace(
+    go.Scatter(
+        x=xs,
+        y=ys,
+        mode="markers+text",
+        marker=dict(color=COLORS["blue"], size=11),
+        text=labels,
+        textposition="top center",
+        showlegend=False,
+    )
+)
+fig.update_layout(
+    height=520,
+    title="Cyclical encoding places December and January adjacent on the unit circle",
+)
+fig.update_xaxes(title_text="month_cos", range=[-1.6, 1.6], zeroline=True)
+fig.update_yaxes(title_text="month_sin", range=[-1.6, 1.6], zeroline=True, scaleanchor="x")
+fig.show()
 
 # %% [markdown]
 # **Usage**: Calendar features are primarily **state variables** for conditioning.
@@ -670,7 +856,8 @@ daily = (
     pl.DataFrame(
         {"timestamp": pl.date_range(date(2023, 1, 1), date(2024, 12, 31), "1d", eager=True)}
     )
-    .filter(pl.col("timestamp").dt.weekday() < 5)
+    # Polars weekday(): Mon=1 .. Sun=7, so <=5 keeps Mon-Fri (business days).
+    .filter(pl.col("timestamp").dt.weekday() <= 5)
     .join(pl.DataFrame({"symbol": ["AAPL", "MSFT", "GOOGL"]}), how="cross")
     .sort(["symbol", "timestamp"])
 )
@@ -706,15 +893,37 @@ daily_with_events = daily_with_events.with_columns(
     .alias("event_proximity")
 )
 
-print("Time-to-event features:")
-# Show a sample around an earnings date
-sample_symbol = "AAPL"
-print(
-    daily_with_events.filter(
-        (pl.col("symbol") == sample_symbol)
-        & (pl.col("timestamp").is_between(date(2023, 4, 25), date(2023, 5, 20)))
-    ).select(["timestamp", "symbol", "days_to_earnings", "event_proximity"])
+n_dates = daily_with_events["timestamp"].n_unique()
+print(f"Time-to-event features computed for 3 symbols across {n_dates} trading days")
+
+# %% [markdown]
+# The feature is a sawtooth: it counts down to zero as an earnings date
+# approaches, resets to the `H_MAX` cap the day after (when the next event is
+# more than 63 days out; copper dashed line), then counts down again toward the
+# following quarter's announcement. The plot shows one symbol across two years.
+
+# %%
+saw = daily_with_events.filter(pl.col("symbol") == "AAPL").sort("timestamp")
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=saw["timestamp"].to_list(),
+        y=saw["days_to_earnings"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["blue"], width=1.5),
+        name="Days to earnings",
+    )
 )
+fig.add_hline(y=H_MAX, line_dash="dash", line_color=COLORS["copper"])
+fig.update_layout(
+    height=420,
+    title="Days-to-earnings counts down to zero at each announcement, then resets - AAPL",
+    showlegend=False,
+)
+fig.update_xaxes(title_text="Date")
+fig.update_yaxes(title_text="Trading days to next earnings (capped at H_max)")
+fig.show()
 
 # %% [markdown]
 # **Interpretation**: Time-to-event serves as a **state variable** — a label

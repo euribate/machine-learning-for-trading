@@ -61,6 +61,10 @@ from data import load_etfs, load_macro
 from utils import ML4T_DATA_PATH
 from utils.reproducibility import set_global_seeds
 
+# Importing utils.style registers and activates the ML4T Plotly template
+# (palette, fonts, backgrounds) as the repo-wide default.
+from utils.style import COLORS
+
 warnings.filterwarnings("ignore")
 
 print(f"Data directory: {ML4T_DATA_PATH}")
@@ -299,7 +303,8 @@ print(f"Signal agreement: {signal_match}/4 quarters")
 gdp_signals
 
 # %%
-# Visualize the divergence
+# Visualize the divergence (single cell so the inline backend cannot capture an
+# un-laid-out intermediate render of the bars before the layout is applied).
 fig_revision = go.Figure()
 
 fig_revision.add_trace(
@@ -307,7 +312,7 @@ fig_revision.add_trace(
         name="Advance Estimate (PIT-Correct)",
         x=gdp_revisions["quarter"].to_list(),
         y=gdp_revisions["advance_estimate"].to_list(),
-        marker_color="#2E4057",  # ML4T blue
+        marker_color=COLORS["blue"],
         text=[f"{v:.1f}%" for v in gdp_revisions["advance_estimate"].to_list()],
         textposition="outside",
     )
@@ -318,7 +323,7 @@ fig_revision.add_trace(
         name="Final Value (Look-Ahead Bias)",
         x=gdp_revisions["quarter"].to_list(),
         y=gdp_revisions["final_value"].to_list(),
-        marker_color="#048A81",  # Teal
+        marker_color=COLORS["amber"],
         text=[f"{v:.1f}%" for v in gdp_revisions["final_value"].to_list()],
         textposition="outside",
     )
@@ -327,18 +332,16 @@ fig_revision.add_trace(
 fig_revision.add_hline(
     y=5.0,
     line_dash="dash",
-    line_color="#8B4513",
+    line_color=COLORS["copper"],
     annotation_text="Signal Threshold (5%)",
-    annotation_position="right",
+    annotation_position="top left",
 )
 
-# %%
 fig_revision.update_layout(
-    title="GDP Growth - Advance vs Final Estimates (2023)",
+    title="Only the revised Q3 GDP crosses the 5% signal line - a trade PIT data never takes",
     barmode="group",
-    yaxis_title="GDP Growth (%)",
-    xaxis_title="Quarter",
-    template="plotly_white",
+    yaxis_title="GDP Growth (% annualized)",
+    xaxis_title="Quarter (2023)",
     height=450,
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5),
 )
@@ -520,12 +523,12 @@ fig.add_trace(
         y=viz_df["yield_curve_spread"],
         mode="lines",
         name="10Y-2Y Spread",
-        line={"color": "#1E3A5F"},
+        line={"color": COLORS["blue"]},
     ),
     row=1,
     col=1,
 )
-fig.add_hline(y=0, line_dash="dash", line_color="red", row=1, col=1)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["negative"], row=1, col=1)
 
 # Unemployment
 if "unemployment_rate" in viz_df.columns:
@@ -535,7 +538,7 @@ if "unemployment_rate" in viz_df.columns:
             y=viz_df["unemployment_rate"],
             mode="lines",
             name="Unemployment",
-            line={"color": "#2E5A3F"},
+            line={"color": COLORS["slate"]},
         ),
         row=2,
         col=1,
@@ -549,16 +552,16 @@ if "vix" in viz_df.columns:
             y=viz_df["vix"],
             mode="lines",
             name="VIX",
-            line={"color": "#5A2E3F"},
+            line={"color": COLORS["copper"]},
         ),
         row=3,
         col=1,
     )
-    fig.add_hline(y=20, line_dash="dash", line_color="gray", row=3, col=1)
+    fig.add_hline(y=20, line_dash="dash", line_color=COLORS["neutral"], row=3, col=1)
 
 fig.update_layout(
     height=700,
-    title_text="Macro Regime Indicators (2020-Present)",
+    title_text="Yield-curve inversion, unemployment, and VIX trace the 2020-2025 macro regimes",
     showlegend=False,
 )
 fig.update_yaxes(title_text="Spread (%)", row=1, col=1)

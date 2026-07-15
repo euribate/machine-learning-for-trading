@@ -654,7 +654,7 @@ if us_equities is not None:
     axes[1].set_title("Winsorized Returns (1st/99th)")
     axes[1].set_xlabel("Daily Return")
 
-    fig.suptitle("Effect of Winsorization on US Equities Return Distribution")
+    fig.suptitle("Winsorization clips the 1st/99th-percentile tails, leaving the bulk unchanged")
     fig.tight_layout()
     fig.show()
 
@@ -953,8 +953,14 @@ print(
 # What happens when we cheat and fit on all data including the test set?
 
 # %%
+# Same configuration as the correct preprocessor (winsorize + scale) so the
+# only difference is the fit data — this isolates the leakage effect.
 full_data = pl.concat([train_df, test_df])
-leaky_preprocessor = SplitAwarePreprocessor(scale_cols=["returns"])
+leaky_preprocessor = SplitAwarePreprocessor(
+    scale_cols=["returns"],
+    winsorize_cols=["returns"],
+    winsorize_limits=(0.01, 0.99),
+)
 leaky_preprocessor.fit(full_data)  # BUG: includes future data!
 
 correct_mean = preprocessor._scale_params["returns"]["mean"]
@@ -985,12 +991,20 @@ leaky_test_processed = leaky_preprocessor.transform(test_df)
 # Visualize how the two scaling approaches produce different test-set distributions.
 
 # %%
-fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharey=True)
+fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True, sharey=True)
 
 correct_vals = test_processed["returns"].to_numpy()
 leaky_vals = leaky_test_processed["returns"].to_numpy()
 
-axes[0].hist(correct_vals, bins=np.linspace(correct_vals.min(), correct_vals.max(), 51), alpha=0.8)
+# Identical bins and shared axes so the two panels are directly comparable —
+# the only difference should be the leakage-induced shift, not the binning.
+bin_edges = np.linspace(
+    min(correct_vals.min(), leaky_vals.min()),
+    max(correct_vals.max(), leaky_vals.max()),
+    51,
+)
+
+axes[0].hist(correct_vals, bins=bin_edges, alpha=0.8)
 axes[0].axvline(
     correct_vals.mean(),
     color="C1",
@@ -1003,7 +1017,7 @@ axes[0].set_xlabel("Scaled Return")
 axes[0].set_ylabel("Count")
 axes[0].legend()
 
-axes[1].hist(leaky_vals, bins=np.linspace(leaky_vals.min(), leaky_vals.max(), 51), alpha=0.8)
+axes[1].hist(leaky_vals, bins=bin_edges, alpha=0.8)
 axes[1].axvline(
     leaky_vals.mean(),
     color="C1",
@@ -1015,14 +1029,16 @@ axes[1].set_title("Leaky: Full-Data Fit")
 axes[1].set_xlabel("Scaled Return")
 axes[1].legend()
 
-fig.suptitle("Distribution of Scaled Test Returns: Correct vs Leaky Preprocessing")
+fig.suptitle("Full-data leakage shifts the scaled test distribution only slightly")
 fig.tight_layout()
 fig.show()
 
 # %% [markdown]
-# The location and scale shifts between the two panels demonstrate information
-# leakage. In production with many features, this systematic bias accumulates
-# and can meaningfully inflate Sharpe ratios and IC estimates.
+# With everything else held equal (both panels winsorized, identical bins and
+# axes), the small shift in the mean line is the pure signature of leakage:
+# fitting scaling parameters on future data nudges the test distribution. The
+# effect is modest here, but in production with many features this systematic
+# bias accumulates and can meaningfully inflate Sharpe ratios and IC estimates.
 
 
 # %% [markdown]

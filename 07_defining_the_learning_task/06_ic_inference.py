@@ -52,6 +52,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 
 import numpy as np
@@ -67,8 +68,15 @@ from scipy import stats
 
 from data import load_etfs
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # importing utils.style activates the ml4t Plotly template
 
 warnings.filterwarnings("ignore")
+# Quiet ml4t library INFO logging. Child loggers (e.g. ml4t.diagnostic.evaluation.
+# autocorrelation) set their own level, so raising the parent alone does not silence
+# them - set every already-created ml4t logger explicitly.
+for _lg in list(logging.root.manager.loggerDict):
+    if _lg.startswith("ml4t"):
+        logging.getLogger(_lg).setLevel(logging.WARNING)
 
 # %% tags=["parameters"]
 SEED = 42
@@ -155,30 +163,35 @@ sig_bound = 1.96 / np.sqrt(n)
 # Visualize ACF
 fig = go.Figure()
 
+# Count significant lags
+n_significant_lags = sum(abs(acf_values[1:]) > sig_bound)
+
 fig.add_trace(
     go.Bar(
         x=list(range(1, 21)),
         y=acf_values[1:],
         name="ACF",
-        marker_color=["#d62728" if abs(v) > sig_bound else "#1f77b4" for v in acf_values[1:]],
+        marker_color=[
+            COLORS["amber"] if abs(v) > sig_bound else COLORS["blue"] for v in acf_values[1:]
+        ],
     )
 )
 
-fig.add_hline(y=sig_bound, line_dash="dash", line_color="red", annotation_text="95% CI")
-fig.add_hline(y=-sig_bound, line_dash="dash", line_color="red")
-fig.add_hline(y=0, line_color="gray")
+fig.add_hline(
+    y=sig_bound, line_dash="dash", line_color=COLORS["negative"], annotation_text="95% band"
+)
+fig.add_hline(y=-sig_bound, line_dash="dash", line_color=COLORS["negative"])
+fig.add_hline(y=0, line_color=COLORS["neutral"])
 
 fig.update_layout(
-    title="IC Autocorrelation Function",
-    xaxis_title="Lag",
+    title=f"IC is strongly autocorrelated: {n_significant_lags} of 20 lags breach the "
+    "white-noise band",
+    xaxis_title="Lag (days)",
     yaxis_title="Autocorrelation",
-    template="plotly_white",
+    template="ml4t",
     height=350,
 )
 fig.show()
-
-# Count significant lags
-n_significant_lags = sum(abs(acf_values[1:]) > sig_bound)
 print(f"\nSignificant autocorrelation lags: {n_significant_lags}/20")
 print("\nThis means naive t-statistics will overstate significance!")
 
@@ -389,7 +402,11 @@ print(f"  HAC CI: [{hac_ci_lower:.4f}, {hac_ci_upper:.4f}]")
 
 # %%
 # Visualize bootstrap distribution
-fig = make_subplots(rows=1, cols=2, subplot_titles=["Bootstrap Distribution", "CI Comparison"])
+fig = make_subplots(
+    rows=1,
+    cols=2,
+    subplot_titles=["Bootstrap distribution of mean IC", "95% CI: block bootstrap vs HAC"],
+)
 
 # Bootstrap distribution
 fig.add_trace(
@@ -397,7 +414,7 @@ fig.add_trace(
         x=block_result["bootstrap_means"],
         nbinsx=50,
         name="Bootstrap means",
-        marker_color="#1f77b4",
+        marker_color=COLORS["blue"],
         opacity=0.7,
     ),
     row=1,
@@ -408,7 +425,7 @@ fig.add_trace(
 fig.add_vline(
     x=block_result["ci_lower"],
     line_dash="dash",
-    line_color="red",
+    line_color=COLORS["negative"],
     annotation_text="2.5%",
     row=1,
     col=1,
@@ -416,12 +433,14 @@ fig.add_vline(
 fig.add_vline(
     x=block_result["ci_upper"],
     line_dash="dash",
-    line_color="red",
+    line_color=COLORS["negative"],
     annotation_text="97.5%",
     row=1,
     col=1,
 )
-fig.add_vline(x=0, line_dash="dot", line_color="gray", annotation_text="Null", row=1, col=1)
+fig.add_vline(
+    x=0, line_dash="dot", line_color=COLORS["neutral"], annotation_text="Null", row=1, col=1
+)
 
 # CI comparison
 methods = ["Block Bootstrap", "HAC"]
@@ -442,17 +461,23 @@ for i, method in enumerate(methods):
                 arrayminus=[means[i] - ci_lowers[i]],
             ),
             mode="markers",
-            marker=dict(size=12, color=["#1f77b4", "#ff7f0e"][i]),
+            marker=dict(size=12, color=[COLORS["blue"], COLORS["amber"]][i]),
             name=method,
         ),
         row=1,
         col=2,
     )
 
-fig.add_hline(y=0, line_dash="dot", line_color="gray", row=1, col=2)
+fig.add_hline(y=0, line_dash="dot", line_color=COLORS["neutral"], row=1, col=2)
 
-fig.update_layout(height=350, template="plotly_white", showlegend=False)
+fig.update_layout(
+    title="HAC and block bootstrap agree: the mean IC's 95% CI straddles zero",
+    height=400,
+    template="ml4t",
+    showlegend=False,
+)
 fig.update_xaxes(title_text="Mean IC", row=1, col=1)
+fig.update_yaxes(title_text="Frequency", row=1, col=1)
 fig.update_yaxes(title_text="Mean IC", row=1, col=2)
 
 fig.show()

@@ -141,7 +141,7 @@ raw_cumret = np.cumprod(1 + raw_returns)
 adj_cumret = np.cumprod(1 + adj_returns)
 
 # %%
-fig, ax = plt.subplots(figsize=(12, 6))
+fig, ax = plt.subplots(figsize=(12, 6), layout="tight")
 ax.plot(dates_arr[1:], adj_cumret, label="Adjusted prices (correct)", color="#1E3A5F", linewidth=2)
 ax.plot(dates_arr[1:], raw_cumret, label="Raw prices (wrong)", color="#8B0000", linewidth=2)
 
@@ -188,7 +188,6 @@ ax.set_yscale("log")
 ax.set_ylim(0.5, adj_cumret[-1] * 1.5)
 ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0f}x" if x >= 1 else f"{x:.1f}x"))
 ax.grid(True, alpha=0.3)
-plt.tight_layout()
 plt.show()
 
 # %%
@@ -328,7 +327,7 @@ else:
 # rolling relative difference stays below the tolerance line.
 
 # %%
-fig, axes = plt.subplots(2, 1, figsize=(14, 8))
+fig, axes = plt.subplots(2, 1, figsize=(14, 8), layout="tight")
 
 ax1 = axes[0]
 ax1.plot(dates, our_adj, label="Our adjustment", alpha=0.85)
@@ -353,7 +352,6 @@ ax2.set_title("Relative difference between local and Quandl series")
 ax2.set_ylim(0, max(relative_diff.max() * 1.1, tolerance_pct * 2))
 ax2.legend()
 
-plt.tight_layout()
 plt.show()
 
 # %% [markdown]
@@ -476,7 +474,11 @@ universe = pl.DataFrame(
 ranked = universe.with_columns(
     rank_price=pl.col("price_return").rank(descending=True, method="ordinal"),
     rank_total=pl.col("total_return").rank(descending=True, method="ordinal"),
-).with_columns(rank_change=pl.col("rank_price") - pl.col("rank_total"))
+).with_columns(
+    # Cast to a signed dtype before subtracting: ranks are u32, so a drop in
+    # rank (e.g. GLD 3 -> 4) would underflow to a huge number otherwise.
+    rank_change=pl.col("rank_price").cast(pl.Int32) - pl.col("rank_total").cast(pl.Int32)
+)
 
 ranked.select(
     [

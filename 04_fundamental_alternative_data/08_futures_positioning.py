@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -282,7 +282,7 @@ fig.add_trace(
         name="Lev Money Net",
         line=dict(color=COLORS["blue"], width=1.5),
         fill="tozeroy",
-        fillcolor="rgba(46, 64, 87, 0.3)",
+        fillcolor="rgba(10, 22, 40, 0.15)",
     ),
     row=1,
     col=1,
@@ -317,8 +317,7 @@ fig.update_layout(
     height=600,
     title="ES Leveraged Money: Net Positioning and 52-Week Z-Score",
     template="plotly_white",
-    showlegend=True,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    showlegend=False,
 )
 fig.update_yaxes(title_text="Net Contracts", row=1, col=1)
 fig.update_yaxes(title_text="Z-Score", row=2, col=1)
@@ -503,8 +502,7 @@ fig.update_layout(
     height=700,
     title="Speculator Positioning Z-Scores Across Asset Classes",
     template="plotly_white",
-    showlegend=True,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    showlegend=False,
 )
 fig.update_yaxes(title_text="Z-Score", range=[-4, 4])
 fig.show()

@@ -44,7 +44,7 @@
 #
 # - DataBento XNAS-ITCH MBO parquets at
 #   `data/equities/market/microstructure/market_by_order/{SYMBOL}/`
-#   (downloaded via `data/equities/market/microstructure/databento_mbo_download.py`).
+#   (downloaded via `data/equities/market/microstructure/mbo_download.py`).
 #
 # ## Decision Time vs Exchange Time
 #
@@ -68,6 +68,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
+import matplotlib.pyplot as plt
 import polars as pl
 
 # Import loader for MBO data
@@ -75,6 +76,7 @@ from data import load_mbo_data
 
 # ML4T imports - path resolution
 from utils.paths import get_output_dir
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 SYMBOL = "NVDA"
@@ -110,33 +112,38 @@ if data_files:
 
 # %%
 def load_databento_mbo(file_path: Path, max_rows: int | None = None) -> pl.DataFrame:
-    """Load and normalize DataBento MBO data."""
+    """Load and normalize DataBento MBO data.
+
+    Handles both file layouts the repo can produce: Download Center files carry a
+    ``timestamp`` column, while the API downloader (``mbo_download.py``) carries
+    ``ts_event``. We normalize to ``timestamp`` and filter regular trading hours in
+    exchange-local time so the window is correct on either side of a DST change.
+    """
     df = pl.read_parquet(file_path)
 
     # Apply row limit
     if max_rows is not None:
         df = df.head(max_rows)
 
-    # Normalize timestamps
+    # Normalize the event-time column name (API files use `ts_event`).
+    if "timestamp" not in df.columns and "ts_event" in df.columns:
+        df = df.rename({"ts_event": "timestamp"})
+
+    # DataBento timestamps are UTC; keep a UTC-naive column for downstream code.
     df = df.with_columns(pl.col("timestamp").cast(pl.Datetime("ns")))
 
     # Convert fixed-point prices to dollars if needed
     if "price" in df.columns and df["price"].max() > 1_000_000:
         df = df.with_columns((pl.col("price") / 1e9).alias("price"))
 
-    # Filter to trading hours (9:30-16:00 ET)
-    # Note: This uses 14:30-20:00 UTC which is correct for EDT (summer).
-    # For EST (winter), market closes at 21:00 UTC. A robust solution would:
-    # 1. Convert to America/New_York first
-    # 2. Filter on local time
-    # 3. Convert back to UTC
-    # For this validation, we use the conservative window that works for EDT.
+    # Filter to regular trading hours (09:30-16:00 America/New_York). Convert the
+    # UTC instant to exchange-local time so the window is correct in both EDT and
+    # EST: a fixed UTC window silently drops the final trading hour (or admits an
+    # hour of pre-market) whenever the sample straddles a DST boundary.
+    _et = pl.col("timestamp").dt.replace_time_zone("UTC").dt.convert_time_zone("America/New_York")
     df = df.filter(
-        (
-            (pl.col("timestamp").dt.hour() > 14)
-            | ((pl.col("timestamp").dt.hour() == 14) & (pl.col("timestamp").dt.minute() >= 30))
-        )
-        & (pl.col("timestamp").dt.hour() < 20)
+        ((_et.dt.hour() > 9) | ((_et.dt.hour() == 9) & (_et.dt.minute() >= 30)))
+        & (_et.dt.hour() < 16)
     )
 
     # Sort by timestamp. Note: Messages with identical timestamps may not have
@@ -652,6 +659,53 @@ if data_files:
     )
     multi_day_tick_summary.write_parquet(summary_path)
     print(f"\nSaved: {summary_path}")
+
+# %% [markdown]
+# ### Table 3.3 as a chart
+#
+# The three classifiers trade coverage against accuracy. Lee-Ready and the
+# continuous tick test classify every trade; the non-zero tick test is accurate
+# only on the ~18% of trades whose price actually moves, so its higher accuracy
+# comes at a steep coverage cost.
+
+# %%
+if "multi_day_tick_summary" in globals():
+    _s = multi_day_tick_summary.sort("accuracy_pct")
+    _methods = _s["method"].to_list()
+    _acc = _s["accuracy_pct"].to_list()
+    _cov = _s["coverage_pct"].to_list()
+
+    fig, ax = plt.subplots(figsize=(10, 4), layout="tight")
+    bars = ax.barh(_methods, _acc, color=COLORS["blue"], height=0.6)
+    for bar, acc, cov in zip(bars, _acc, _cov):
+        y = bar.get_y() + bar.get_height() / 2
+        ax.text(
+            acc - 1.0,
+            y,
+            f"{acc:.1f}%",
+            va="center",
+            ha="right",
+            color=COLORS["silver"],
+            fontweight="bold",
+        )
+        ax.text(
+            101,
+            y,
+            f"{cov:.0f}% coverage",
+            va="center",
+            ha="left",
+            color=COLORS["neutral"],
+            fontsize=9,
+        )
+    ax.set_xlim(0, 120)
+    ax.set_xlabel("Accuracy vs DataBento aggressor labels (%)")
+    ax.set_title(
+        "Lee-Ready recovers trade direction at ~95% accuracy with full coverage",
+        loc="left",
+        fontweight="bold",
+    )
+    ax.spines[["top", "right"]].set_visible(False)
+    plt.show()
 
 # %% [markdown]
 # ## Key Takeaways

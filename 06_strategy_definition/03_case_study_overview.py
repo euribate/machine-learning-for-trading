@@ -90,6 +90,18 @@ CHAPTER_TRACKS = {
 
 
 # %%
+def _fmt_window(value: Any) -> Any:
+    """Normalize an evaluation-window string for display.
+
+    A few configs (fx_pairs) write ISO-8601 durations like ``P5Y``/``P1Y``;
+    strip the leading ``P`` so the quick-reference table reads uniformly
+    (``5Y``/``1Y``) alongside the bare ``8Y``/``6M`` values used elsewhere.
+    """
+    if isinstance(value, str) and len(value) > 1 and value[0] in ("P", "p"):
+        return value[1:]
+    return value
+
+
 def _normalize_setup_yaml(case_id: str, cfg: dict) -> dict:
     """Convert setup.yaml structure to the summary/diagnostics format the notebook expects."""
     universe = cfg.get("universe", {})
@@ -131,11 +143,11 @@ def _normalize_setup_yaml(case_id: str, cfg: dict) -> dict:
             "universe_size": n_assets,
             "data_frequency": data_freq,
             "decision_cadence": cadence.replace("_", " "),
-            "cost_model": costs.get("class", ""),
+            "cost_model": costs.get("class", "").title(),
         },
         "diagnostics": {
-            "train_size": ev.get("train_size", "N/A"),
-            "test_size": ev.get("val_size", "N/A"),
+            "train_size": _fmt_window(ev.get("train_size", "N/A")),
+            "test_size": _fmt_window(ev.get("val_size", "N/A")),
             "n_splits": ev.get("n_splits", 0),
             "holdout_start": holdout_start,
             "holdout_end": holdout_end,
@@ -258,8 +270,10 @@ overview_df
 
 # %% [markdown]
 # **What to notice**:
-# - Universe sizes range widely: from 19 (Crypto) and 20 (FX) to 100 (ETFs) and
-#   633 (S&P 500 Equity+Options), affecting cross-sectional signal construction
+# - Universe sizes range widely: from 19 (Crypto) and 20 (FX) through the low
+#   hundreds (ETFs 100, NASDAQ-100 114, the S&P 500 option books ~600-630) up to
+#   the multi-thousand equity panels (US Firm Characteristics ~2,500, US Equities
+#   Panel 3,199) - a span that reshapes cross-sectional signal construction
 # - Data frequencies span 15-minute bars (NASDAQ-100) to weekly (CME Futures, S&P 500)
 # - Cost models are either "Material" (7 case studies) or "Dominant" (2),
 #   where dominant costs require exceptionally strong signals

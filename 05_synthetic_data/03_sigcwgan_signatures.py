@@ -1445,8 +1445,11 @@ print("\nUsing paper-exact data source: S&P 500 index log returns")
 # **Interpretation**: The Sig-W1 loss measures the L2 distance between expected
 # signatures of real and generated paths. A decreasing loss curve confirms the
 # generator is learning to produce paths whose signature statistics match the
-# training data. Compare the final value to the paper's reference of ~2.76 on
-# S&P 500 log returns.
+# training data. The absolute Sig-W1 value is **not** comparable to the paper's
+# ~2.76 out of the box - the metric's scale depends on the signature depth,
+# augmentation choices, and the magnitude of the input series (see the caveat in
+# the Key Takeaways). What matters here is the shape of the curve: a rapid drop
+# in the first ~150 steps followed by a low, stable plateau.
 
 # %% [markdown]
 # ## 9. Generate Synthetic Paths
@@ -1514,10 +1517,13 @@ fig = plot_fidelity_comparison(
 plt.show()
 
 # %% [markdown]
-# **Interpretation**: Overlapping point clouds confirm that synthetic paths occupy
-# the same region of feature space as real data. Sig-CWGAN's strength is capturing
-# path-wise properties via signatures -- the signature-based metrics below provide
-# a more rigorous assessment than visual inspection alone.
+# **Interpretation**: In the dense core, the synthetic point cloud overlaps the
+# real one - the generator reproduces the bulk of the distribution. The PCA panel
+# also exposes the model's main weakness: real returns have far-flung outliers
+# (extreme days) that the synthetic samples never reach, a first visual hint that
+# the generator under-produces the fat tails we quantify in the stylized-facts
+# table below. The signature-based metrics that follow provide a more rigorous
+# assessment than visual inspection alone.
 
 # %% [markdown]
 # ### 10.2 Compare Signature Distributions
@@ -2013,12 +2019,19 @@ if n_assets >= 2:
     print(f"\nCross-asset correlation: Real={real_corr:.4f}, Synth={syn_corr:.4f}")
 
 # %% [markdown]
-# **Interpretation**: Key stylized facts to check: (1) kurtosis should be >3
-# (fat tails), matching the well-known leptokurtic property of financial returns;
-# (2) negative skewness reflects asymmetric crash risk; (3) near-zero lag-1 ACF
-# of returns but positive lag-1 ACF of squared returns captures volatility
-# clustering. Large deviations in any metric indicate the generator misses
-# important market microstructure.
+# **Interpretation**: The stylized facts (computed here as *excess* kurtosis, so
+# a Gaussian scores 0) are where the unconditional Sig-WGAN shows its limits. The
+# generator matches the marginal **mean and standard deviation** closely, but the
+# synthetic series collapses toward a near-Gaussian shape: excess kurtosis falls
+# from the real series' heavy fat tails (well into double digits) to roughly zero,
+# the real returns' negative skew (asymmetric crash risk) vanishes, and the lag-1
+# ACF of squared returns - the signature of volatility clustering - largely
+# disappears. This is the key teaching point of the notebook: matching low-order
+# expected signatures pins down location and scale, but on this single-asset,
+# depth-4 setup it does **not**, on its own, recover the higher-moment and
+# temporal-dependence structure of returns. Capturing volatility clustering and
+# fat tails is exactly what the conditional Sig-CWGAN and richer augmentations are
+# designed to improve.
 
 # %% [markdown]
 # ## 14. Save Outputs
@@ -2186,3 +2199,7 @@ print(f"  {checkpoint_dir}/")
 # 1. **Signature Cost**: O(d^depth) where d = path dimension after augmentations
 # 2. **Small Universe**: 1-5 assets max at depth 4 (exponential scaling)
 # 3. **Single Asset**: Paper only demonstrates on single-asset time series
+# 4. **Higher-moment fidelity**: matching low-order expected signatures reproduces
+#    the marginal mean and variance but, in this unconditional depth-4 setup,
+#    under-produces fat tails, skewness, and volatility clustering (see the
+#    stylized-facts comparison in Section 13b)

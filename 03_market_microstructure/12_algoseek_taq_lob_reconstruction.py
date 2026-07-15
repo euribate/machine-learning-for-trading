@@ -226,9 +226,14 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# **Interpretation**: Most trades execute in a 2-5 bps spread environment, but
-# the long tail shows moments of stress where spreads widened to 20+ bps. These
-# are expensive trades - the aggressor pays a significant premium for immediacy.
+# **Interpretation**: Most trades execute in a tight spread environment (median
+# ~5 bps), but March 16, 2020 was a circuit-breaker day and the tail is heavy:
+# the 95th percentile reaches ~530 bps and the mean (98.7 bps) sits ~19x above
+# the median, dragged up by dislocated quotes that widen to several hundred and,
+# at the extreme, ~20,000 bps (200% of the midpoint) around the halts. The
+# histogram below caps the x-axis at 50 bps so the bulk is legible; the tail
+# runs far past its right edge. These are expensive prints - the aggressor pays
+# a significant premium for immediacy.
 
 # %% [markdown]
 # ## 4. Lee-Ready Classification
@@ -584,8 +589,11 @@ fig.show()
 # **3. Order imbalance co-moves with returns**: contemporaneous correlation of
 # ~0.08 at minute frequency for this single-day AAPL sample.
 #
-# **4. Stress amplifies patterns**: The open was dominated by sell imbalance
-# and wide spreads; both moderated through the day.
+# **4. Stress deepens into the afternoon**: Sell imbalance is present at the
+# open (-0.12) but troughs midday-to-afternoon (-0.16 by Hour 14), while the
+# widest spreads sit midday (~137 bps at Hour 12); both ease only in the final
+# hour. The intraday path is a worsening midday dislocation, not a clean
+# open-to-close moderation.
 #
 # **5. The three metrics are connected**: Price, imbalance, and spread move
 # together - understanding one requires understanding all three.

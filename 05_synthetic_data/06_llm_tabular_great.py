@@ -75,7 +75,7 @@
 # - https://github.com/kathrinse/be_great
 
 # %%
-"""LLM-Based Tabular Data Generation — GReaT framework for synthetic financial data."""
+"""LLM-Based Tabular Data Generation - GReaT framework for synthetic financial data."""
 
 # Note: temporal split used instead of train_test_split for financial data
 import warnings
@@ -277,7 +277,7 @@ else:
 
     print("Initializing GReaT with distilgpt2...")
 
-    # Use distilgpt2 (82M parameters) — smaller LLM keeps fine-tuning tractable
+    # Use distilgpt2 (82M parameters): smaller LLM keeps fine-tuning tractable
     # on CPU/single-GPU. Larger backbones (GPT-2 medium/large, LLaMA) trade
     # compute for fidelity but do not change the GReaT serialization pipeline.
     great = GReaT(
@@ -308,7 +308,7 @@ else:
 # %%
 print(f"\nGenerating {CONFIG['n_generate']} synthetic samples...")
 
-# Generate synthetic data — guided sampling enforces the column schema row by
+# Generate synthetic data: guided sampling enforces the column schema row by
 # row and is essential when fine-tuning is short (the unguided sampler tends
 # to drop columns on undertrained models). With well-trained checkpoints,
 # guided_sampling=False is faster and produces equivalent quality.
@@ -372,7 +372,6 @@ else:
 # ## 5. Compare Real vs Synthetic Distributions
 
 # %%
-compare_cols = [c for c in df.columns if c != "asset" and c in synthetic_df.columns]
 numerical_cols = ["ret_1d", "ret_5d", "ret_20d", "volatility", "volume_ratio", "fwd_ret_5d"]
 categorical_cols = ["direction", "momentum", "vol_regime"]
 
@@ -413,7 +412,7 @@ categorical_comparison = pd.DataFrame(categorical_rows).round(1)
 categorical_comparison
 
 # %% [markdown]
-# ## 5. Visualize Distributions
+# ## 6. Visualize Distributions
 
 # %%
 # Numerical distributions
@@ -444,6 +443,7 @@ for idx, (col, (row, col_num)) in enumerate(zip(plot_cols, positions, strict=Fal
                 opacity=0.6,
                 marker_color=COLORS["blue"],
                 nbinsx=30,
+                histnorm="probability density",
                 showlegend=showlegend,
                 legendgroup="real",
             ),
@@ -457,6 +457,7 @@ for idx, (col, (row, col_num)) in enumerate(zip(plot_cols, positions, strict=Fal
                 opacity=0.6,
                 marker_color=COLORS["amber"],
                 nbinsx=30,
+                histnorm="probability density",
                 showlegend=showlegend,
                 legendgroup="synthetic",
             ),
@@ -464,10 +465,10 @@ for idx, (col, (row, col_num)) in enumerate(zip(plot_cols, positions, strict=Fal
             col=col_num,
         )
 
-fig.update_yaxes(title_text="Density (count)")
+fig.update_yaxes(title_text="Probability density")
 fig.update_xaxes(title_text="Feature value")
 fig.update_layout(
-    title="Real vs GReaT Synthetic Distributions",
+    title="Synthetic returns collapse toward zero; scale features match real data",
     height=500,
     showlegend=True,
     barmode="overlay",
@@ -476,7 +477,7 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# ## 6. TSTR Evaluation: Train Synthetic, Test Real
+# ## 7. TSTR Evaluation: Train Synthetic, Test Real
 #
 # The key test: Can a model trained on GReaT synthetic data predict real outcomes?
 #
@@ -587,7 +588,7 @@ else:
         print("This can happen with very short training - increase epochs.")
 
 # %% [markdown]
-# ## 7. Statistical Tests
+# ## 8. Statistical Tests
 
 # %%
 print("\n" + "=" * 70)
@@ -612,14 +613,14 @@ for col in numerical_cols:
 # %% [markdown]
 # **Interpretation**: The KS test measures the maximum distance between the real
 # and synthetic cumulative distributions. Return features show high KS values
-# (`ret_1d` 0.50, `ret_5d` 0.59, `ret_20d` 0.58), indicating that the LLM does
-# not match the continuous return distributions well — synthetic returns are
+# (`ret_1d` 0.51, `ret_5d` 0.59, `ret_20d` 0.58), indicating that the LLM does
+# not match the continuous return distributions well: synthetic returns are
 # compressed toward zero with lower variance. Volatility (KS 0.32) and volume
 # ratio (KS 0.10) are matched more closely. The categorical distributions also
 # diverge: synthetic labels 94.8% of rows "down" while only 45.1% of real rows
-# are "down" (real is 54.9% up / 45.1% down — synthetic inverts the balance),
-# and under-generates "strong" momentum (9.8% vs 27.6%). The TSTR accuracy
-# ratio (91.6%) and AUC drop (0.741 → 0.696) show that the downstream classifier
+# are "down" (real is 55.0% up / 45.1% down, so synthetic inverts the balance),
+# and under-generates "strong" momentum (9.8% vs 27.8%). The TSTR accuracy
+# ratio (92.7%) and AUC drop (0.759 to 0.697) show that the downstream classifier
 # trained on synthetic data is close to but not at parity with the real-trained
 # baseline; the marginal-distribution failures above are the larger gap.
 
@@ -633,7 +634,7 @@ for col in numerical_cols:
 #    require separate encoders for categorical columns, the LLM serialization
 #    approach treats numericals and categoricals uniformly as text tokens.
 # 3. **TSTR utility depends on training budget**: this notebook fine-tunes
-#    distilgpt2 for 50 epochs on 1,400 ETF rows; the resulting TSTR accuracy
+#    distilgpt2 for 50 epochs on 2,000 ETF rows; the resulting TSTR accuracy
 #    ratio is reported in the evaluation cell above. Borisov et al. (2023)
 #    report higher TSTR ratios with larger backbones and longer fine-tuning;
 #    this notebook does not sweep epoch count or model size.

@@ -30,7 +30,7 @@
 # ## Purpose
 # This notebook demonstrates how Word2Vec learns word embeddings from financial text.
 # Understanding the training process illuminates why the distributional hypothesis
-# works—and why the same principle extends to asset embeddings (stocks as words,
+# works - and why the same principle extends to asset embeddings (stocks as words,
 # portfolios as documents).
 #
 # ## Learning Objectives
@@ -47,12 +47,14 @@
 # - Familiarity with token-level NLP terminology (vocabulary, context window).
 #
 # ## Related Notebooks
-# - `02_asset_embeddings.py` — same Skip-gram machinery applied to 13F portfolios
-# - `03_sentiment_evolution.py` — compares static embeddings to TF-IDF and Transformers
+# - `02_asset_embeddings.py` - same Skip-gram machinery applied to 13F portfolios
+# - `03_sentiment_evolution.py` - compares static embeddings to TF-IDF and Transformers
 
 # %%
-"""Word2Vec: Training Embeddings from Financial Text — train and evaluate word embeddings on financial text."""
+"""Word2Vec: Training Embeddings from Financial Text - train and evaluate word embeddings on financial text."""
 
+import contextlib
+import io
 import json
 import warnings
 from collections import Counter
@@ -67,15 +69,16 @@ from sklearn.manifold import TSNE
 from data import load_financial_phrasebank as load_financial_phrasebank_canonical
 from utils.paths import get_chapter_dir
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS
 
 warnings.filterwarnings("ignore")
 
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Production defaults - Papermill injects overrides for CI
 SEED = 42
 
 # %%
-# Reproducibility — single source of seeds for Python random, NumPy, and (if installed) Torch.
+# Reproducibility - single source of seeds for Python random, NumPy, and (if installed) Torch.
 set_global_seeds(SEED)
 
 CONFIG = {
@@ -106,7 +109,7 @@ print("=" * 70)
 # %% [markdown]
 # ## The Core Insight: Distributional Hypothesis
 #
-# **"You shall know a word by the company it keeps."** — J.R. Firth (1957)
+# **"You shall know a word by the company it keeps."** - J.R. Firth (1957)
 #
 # Word2Vec operationalizes this: words appearing in similar contexts get
 # similar vector representations. The model learns by predicting:
@@ -119,7 +122,7 @@ print("=" * 70)
 # %% [markdown]
 # ## Load Financial Text Data
 #
-# We use the Financial PhraseBank dataset—sentences from financial news
+# We use the Financial PhraseBank dataset - sentences from financial news
 # labeled for sentiment. This provides domain-specific vocabulary.
 
 
@@ -239,7 +242,7 @@ similar_words_frame(probe_words, top_n=5).pivot(values="neighbor", index="rank",
 # %% [markdown]
 # Analogy quality scales with corpus size. The Financial PhraseBank subset
 # used here covers a few thousand sentences, so analogy completions are noisy
-# — use them as an indicator that geometry exists, not as semantic gospel.
+# - use them as an indicator that geometry exists, not as semantic gospel.
 
 
 # %%
@@ -287,8 +290,11 @@ analogy_frame(analogy_triplets, top_n=3)
 
 # %%
 # Load pre-trained GloVe embeddings (~128MB, cached after first download).
+# The gensim downloader streams a per-chunk progress bar; suppress it so a
+# fresh-container download does not flood the notebook output with ~30k lines.
 print("Loading pre-trained GloVe embeddings (glove-wiki-gigaword-100)...")
-glove = api.load("glove-wiki-gigaword-100")
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    glove = api.load("glove-wiki-gigaword-100")
 print(f"GloVe vocabulary size: {len(glove):,}")
 
 
@@ -334,7 +340,11 @@ words_to_plot = []
 embeddings_to_plot = []
 colors = []
 
-color_map = {"positive": "#10b981", "negative": "#ef4444", "financial": "#3b82f6"}
+color_map = {
+    "positive": COLORS["positive"],
+    "negative": COLORS["negative"],
+    "financial": COLORS["blue"],
+}
 
 for category, word_list in categories.items():
     for word in word_list:
@@ -370,9 +380,9 @@ if embeddings_2d is not None:
 
     # Legend
     legend_elements = [
-        Patch(facecolor="#10b981", label="Positive"),
-        Patch(facecolor="#ef4444", label="Negative"),
-        Patch(facecolor="#3b82f6", label="Financial"),
+        Patch(facecolor=COLORS["positive"], label="Positive"),
+        Patch(facecolor=COLORS["negative"], label="Negative"),
+        Patch(facecolor=COLORS["blue"], label="Financial"),
     ]
     ax.legend(handles=legend_elements, loc="upper right")
 
@@ -388,7 +398,7 @@ if embeddings_2d is not None:
 # negative terms (`loss`, `decline`, `weak`). Domain nouns (`revenue`,
 # `earnings`, `dividend`) form a third cluster organised by topical context
 # rather than sentiment. The pre-trained GloVe comparison above shows where the
-# small-corpus model is unstable — `eur4` and `eur7` artefacts as profit
+# small-corpus model is unstable - `eur4` and `eur7` artefacts as profit
 # neighbours reflect tokenisation of currency amounts in the source text, not a
 # semantic relationship.
 
@@ -404,7 +414,7 @@ if embeddings_2d is not None:
 # | Skip-gram: predict context from word | SVD: decompose co-occurrence matrix |
 # | Analogies: vector arithmetic | Stock substitution: similar embeddings |
 #
-# The mathematical machinery is identical—only the domain changes.
+# The mathematical machinery is identical - only the domain changes.
 # Understanding Word2Vec illuminates why institutional holdings
 # can reveal stock relationships that aren't obvious from fundamentals.
 
@@ -429,19 +439,19 @@ if embeddings_2d is not None:
 # ## Key Takeaways
 #
 # 1. **Word2Vec learns from co-occurrence**: Words in similar contexts
-#    get similar vectors—operationalizing the distributional hypothesis.
+#    get similar vectors - operationalizing the distributional hypothesis.
 #
 # 2. **Training is unsupervised**: No labels needed, just text.
 #    The model learns structure from co-occurrence patterns.
 #
 # 3. **Domain-specific training matters**: Financial text has different
-#    patterns than Wikipedia—custom training captures these.
+#    patterns than Wikipedia-custom training captures these.
 #
 # 4. **Same principle for assets**: Asset embeddings apply Word2Vec
 #    intuition to portfolios: stocks held together are similar.
 #
 # 5. **Transformers overcome limitations**: Static embeddings can't
-#    handle polysemy or out-of-vocabulary words—motivating BERT.
+#    handle polysemy or out-of-vocabulary words - motivating BERT.
 
 # %%
 # Save model and results

@@ -51,8 +51,9 @@ This section makes experimentation auditable. Its value is not just reproducibil
 
 | Notebook                                                       | What it teaches                                                                                                          | Section |
 |----------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|---------|
-| [`01_cv_foundations`](01_cv_foundations.ipynb)                 | Walk-forward CV from first principles: decision-time admissibility, label buffer (purging), feature buffer (embargo), calendar-aware splits, nested walk-forward, and CPCV. | §6.5    |
-| [`02_case_study_overview`](02_case_study_overview.ipynb)       | Cross-strategy summary of the nine case studies — asset classes, universes, cost classes, evaluation protocols, and prediction-coverage timeline (Figure 6.5). | §6.3    |
+| [`01_where_ideas_come_from`](01_where_ideas_come_from.ipynb)   | From a story to a measured footprint: name a strategy's source of edge (the SLOW/WRONG/RISK taxonomy), then test whether cross-asset momentum leaves a footprint via a quintile conditional-return sort, an era stress test, and a turnover check. | §6.1–§6.2 |
+| [`02_cv_foundations`](02_cv_foundations.ipynb)                 | Walk-forward CV from first principles: decision-time admissibility, label buffer (purging), feature buffer (embargo), calendar-aware splits, nested walk-forward, and CPCV. | §6.5    |
+| [`03_case_study_overview`](03_case_study_overview.ipynb)       | Cross-strategy summary of the nine case studies — asset classes, universes, cost classes, evaluation protocols, and prediction-coverage timeline (Figure 6.5). | §6.3    |
 
 ## Running the Notebooks
 

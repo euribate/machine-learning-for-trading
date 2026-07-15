@@ -62,6 +62,7 @@ from sklearn.preprocessing import StandardScaler
 
 from data import load_sp500_index
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 WINDOW_LEN = 21
@@ -846,7 +847,7 @@ fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
 # Plot 1: Returns with true regime coloring
 ax = axes[0, 0]
-colors = np.where(true_regime == 0, "#2ecc71", "#e74c3c")
+colors = np.where(true_regime == 0, COLORS["positive"], COLORS["negative"])
 ax.scatter(range(len(returns)), returns, c=colors, s=1, alpha=0.5)
 ax.axhline(0, color="gray", linestyle="--", alpha=0.5)
 ax.set_xlabel("Time")
@@ -855,10 +856,20 @@ ax.set_title("Simulated Returns (True Regimes)")
 ax.legend(
     handles=[
         plt.Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor="#2ecc71", label="Regime 0 (Bull)"
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=COLORS["positive"],
+            label="Regime 0 (Bull)",
         ),
         plt.Line2D(
-            [0], [0], marker="o", color="w", markerfacecolor="#e74c3c", label="Regime 1 (Bear)"
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=COLORS["negative"],
+            label="Regime 1 (Bear)",
         ),
     ],
     loc="upper right",
@@ -869,7 +880,7 @@ ax = axes[0, 1]
 means = lifted.segments.mean(axis=1)
 stds = lifted.segments.std(axis=1)
 wk_labels = results["WK-means"]["labels"]
-colors = np.where(wk_labels == 0, "#3498db", "#9b59b6")
+colors = np.where(wk_labels == 0, COLORS["blue"], COLORS["amber"])
 ax.scatter(stds, means, c=colors, s=10, alpha=0.6)
 ax.set_xlabel("Volatility (std)")
 ax.set_ylabel("Mean Return")
@@ -881,7 +892,7 @@ ts_labels = aggregate_segment_labels(lifted.starts, WINDOW_LEN, wk_labels, len(r
 
 # Stack true vs predicted for swimlane comparison
 regime_stack = np.vstack([true_regime.reshape(1, -1), ts_labels.reshape(1, -1)])
-cmap_regime = ListedColormap(["#d0d0d0", "#404040"])  # Light gray = 0, dark gray = 1
+cmap_regime = ListedColormap([COLORS["silver_muted"], COLORS["neutral"]])  # Light = 0, dark = 1
 ax.imshow(regime_stack, aspect="auto", cmap=cmap_regime, vmin=0, vmax=1)
 ax.set_yticks([0, 1])
 ax.set_yticklabels(["True", "WK-means"])
@@ -891,8 +902,16 @@ ax.set_title("Regime Timeline: True vs WK-means")
 # Plot 4: Centroid comparison (quantile functions)
 ax = axes[1, 1]
 quantiles = np.linspace(0, 1, WINDOW_LEN)
-ax.plot(quantiles, wk_result.centroids[0], "b-", linewidth=2, label="Cluster 0 centroid")
-ax.plot(quantiles, wk_result.centroids[1], "r-", linewidth=2, label="Cluster 1 centroid")
+ax.plot(
+    quantiles, wk_result.centroids[0], color=COLORS["blue"], linewidth=2, label="Cluster 0 centroid"
+)
+ax.plot(
+    quantiles,
+    wk_result.centroids[1],
+    color=COLORS["amber"],
+    linewidth=2,
+    label="Cluster 1 centroid",
+)
 ax.set_xlabel("Quantile")
 ax.set_ylabel("Return")
 ax.set_title("Wasserstein Barycenters (Cluster Centroids)")
@@ -1036,7 +1055,7 @@ ax1 = axes[0]
 labels_2d = ts_labels.reshape(1, -1)
 # Map: low-vol=light gray, high-vol=dark gray
 label_colors = np.where(labels_2d == high_vol_cluster, 1, 0)
-cmap_regime = ListedColormap(["#d0d0d0", "#404040"])
+cmap_regime = ListedColormap([COLORS["silver_muted"], COLORS["neutral"]])
 ax1.imshow(
     label_colors, aspect="auto", cmap=cmap_regime, extent=[dates_num[0], dates_num[-1], 0, 1]
 )
@@ -1048,15 +1067,15 @@ ax1.set_title("S&P 500 Regime Detection via Wasserstein K-Means (1980-2025)")
 
 # Add legend
 legend_elements = [
-    Patch(facecolor="#d0d0d0", edgecolor="black", label="Low Volatility"),
-    Patch(facecolor="#404040", edgecolor="black", label="High Volatility"),
+    Patch(facecolor=COLORS["silver_muted"], edgecolor="black", label="Low Volatility"),
+    Patch(facecolor=COLORS["neutral"], edgecolor="black", label="High Volatility"),
 ]
 ax1.legend(handles=legend_elements, loc="upper right", ncol=2, fontsize=8)
 
 # Panel 2: Cumulative returns (log scale)
 ax2 = axes[1]
 cum_returns = np.exp(np.cumsum(sp500_returns))
-ax2.semilogy(dates_num, cum_returns, "k-", linewidth=0.5)
+ax2.semilogy(dates_num, cum_returns, color=COLORS["blue"], linewidth=0.5)
 ax2.set_ylabel("Cumulative Return\n(log scale)")
 ax2.set_xlim(dates_num[0], dates_num[-1])
 ax2.xaxis.set_visible(False)
@@ -1070,13 +1089,13 @@ ax2.fill_between(
     cum_returns.max(),
     where=high_vol_mask,
     alpha=0.2,
-    color="#404040",
+    color=COLORS["neutral"],
 )
 
 # Panel 3: Rolling volatility (21-day)
 ax3 = axes[2]
 roll_vol = pd.Series(sp500_returns).rolling(21).std() * np.sqrt(252) * 100
-ax3.plot(dates_num, roll_vol.values, "b-", linewidth=0.5, alpha=0.7)
+ax3.plot(dates_num, roll_vol.values, color=COLORS["blue"], linewidth=0.5, alpha=0.7)
 ax3.axhline(
     roll_vol.median(),
     color="gray",
@@ -1091,7 +1110,9 @@ ax3.legend(loc="upper right", fontsize=8)
 ax3.grid(True, alpha=0.3)
 
 # Shade high-vol periods
-ax3.fill_between(dates_num, 0, roll_vol.max(), where=high_vol_mask, alpha=0.2, color="#404040")
+ax3.fill_between(
+    dates_num, 0, roll_vol.max(), where=high_vol_mask, alpha=0.2, color=COLORS["neutral"]
+)
 
 # Panel 4: Wasserstein centroids (quantile functions)
 ax4 = axes[3]
@@ -1099,14 +1120,14 @@ quantiles = np.linspace(0, 1, WINDOW_LEN)
 ax4.plot(
     quantiles,
     real_result.centroids[low_vol_cluster] * 100,
-    "#3498db",
+    color=COLORS["blue"],
     linewidth=2,
     label="Low-Vol Centroid",
 )
 ax4.plot(
     quantiles,
     real_result.centroids[high_vol_cluster] * 100,
-    "#e74c3c",
+    color=COLORS["copper"],
     linewidth=2,
     label="High-Vol Centroid",
 )

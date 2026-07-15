@@ -36,7 +36,7 @@
 #
 # This notebook requires Form 4 filings downloaded via:
 # ```bash
-# python data/equities/positioning/form4_download.py --ticker TSLA --count 20
+# uv run python data/equities/positioning/form4_download.py --ticker TSLA --count 20
 # ```
 #
 # ## Cross-References
@@ -56,9 +56,12 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import plotly.graph_objects as go
 import polars as pl
+from plotly.subplots import make_subplots
 
 from utils import DATA_DIR
+from utils.style import COLORS  # importing utils.style activates the ml4t Plotly template
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -80,17 +83,20 @@ FORM4_DIR = DATA_DIR / "equities" / "positioning" / "form4"
 if not FORM4_DIR.exists() or not any(FORM4_DIR.iterdir()):
     raise FileNotFoundError(
         f"No Form 4 filings under {FORM4_DIR}. "
-        "Run: python data/equities/positioning/form4_download.py --ticker TSLA --count 20"
+        "Run: uv run python data/equities/positioning/form4_download.py --ticker TSLA --count 20"
     )
 
 tickers = sorted(d.name for d in FORM4_DIR.iterdir() if d.is_dir())
+if MAX_SYMBOLS > 0:  # CI/Papermill knob: cap the number of issuers processed
+    tickers = tickers[:MAX_SYMBOLS]
 for ticker in tickers:
     n = len(list((FORM4_DIR / ticker).rglob("*.xml")))
     print(f"  {ticker.upper()}: {n} filings")
 
 # %%
-# Enumerate every filing on disk; sample the first three to inspect file sizes.
-downloaded = sorted(FORM4_DIR.rglob("*.xml"))
+# Enumerate every filing on disk (restricted to the selected issuers); sample the
+# first three to inspect file sizes.
+downloaded = sorted(f for t in tickers for f in (FORM4_DIR / t).rglob("*.xml"))
 print(f"Total filings found: {len(downloaded)}")
 for f in downloaded[:3]:
     print(f"  {f.relative_to(FORM4_DIR)} ({f.stat().st_size / 1024:.1f} KB)")
@@ -197,6 +203,7 @@ if result["transactions"]:
 # | D | Disposition to issuer |
 # | F | Payment of tax via shares |
 # | C | Conversion of derivative |
+# | I | Discretionary transaction |
 
 # %%
 # Transaction code mapping
@@ -244,31 +251,67 @@ df = pl.DataFrame(all_transactions).with_columns(
 df
 
 # %%
-# Aggregate by transaction type to surface activity composition.
+# Aggregate by transaction type, ordered by share volume so the dominant category leads.
 summary = (
     df.group_by("transaction_type")
     .agg(
         pl.len().alias("count"),
         pl.col("shares").sum().alias("total_shares"),
     )
-    .sort("count", descending=True)
+    .sort("total_shares", descending=True)
 )
-summary
+
+# %% [markdown]
+# The two panels below tell different stories. By *filing count*, sales are the most common
+# insider event; by *share volume*, a smaller number of open-market purchases dominates —
+# the first sign that trade frequency and economic weight are not the same thing.
+
+# %%
+# Highlight the leading (largest-volume) category; keep the rest neutral.
+types = summary["transaction_type"].to_list()
+bar_colors = [COLORS["amber"] if i == 0 else COLORS["slate"] for i in range(len(types))]
+
+fig = make_subplots(
+    rows=1,
+    cols=2,
+    shared_yaxes=True,
+    subplot_titles=("Number of filings", "Total shares"),
+    horizontal_spacing=0.08,
+)
+fig.add_trace(
+    go.Bar(y=types, x=summary["count"], orientation="h", marker_color=bar_colors),
+    row=1,
+    col=1,
+)
+fig.add_trace(
+    go.Bar(y=types, x=summary["total_shares"], orientation="h", marker_color=bar_colors),
+    row=1,
+    col=2,
+)
+fig.update_yaxes(autorange="reversed")
+fig.update_xaxes(title_text="Filings", row=1, col=1)
+fig.update_xaxes(title_text="Shares", row=1, col=2)
+fig.update_layout(
+    title="TSLA insiders sell more often, but purchases move far more shares",
+    showlegend=False,
+    height=340,
+)
+fig.show()
 
 # %% [markdown]
 # ---
 # ## Part 4: Insider Activity Patterns
 #
-# Analyze patterns in insider buying vs selling.
+# We now aggregate open-market purchases (P) and sales (S) by individual insider to see who
+# is transacting and in what dollar amount.
+#
+# Form 4 occasionally reports a sale with `price = 0.0` as a placeholder (for example, a
+# planned disposition whose executed price is filed separately). Summing those rows into a
+# dollar total would conflate priced trades with unreported ones, so we keep them apart:
+# `total_value` is computed only on rows with a positive price, while `placeholder_trades`
+# and `placeholder_shares` track the share volume reported without a price.
 
 # %%
-# Aggregate open-market purchases (P) and sales (S) by insider.
-# Form 4 sometimes reports a sale with `price = 0.0` as a placeholder (e.g., a
-# planned disposition where the executed price is filed separately); summing
-# those rows into total dollar value would conflate priced trades with
-# unreported ones. We split the count: `total_value` is computed only on rows
-# with a positive price, and `placeholder_trades` / `placeholder_shares` track
-# the share volume reported without a price.
 market_trades = df.filter(pl.col("code").is_in(["P", "S"]))
 priced = pl.col("price") > 0
 by_owner = (
@@ -286,13 +329,44 @@ by_owner = (
     )
     .sort("total_value", descending=True)
 )
-by_owner.head(10)
+by_owner
+
+# %% [markdown]
+# Charting the priced dollar value per insider makes the asymmetry unmistakable: a single
+# buyer accounts for essentially all of the open-market purchase value, while the sellers -
+# even added together - transact an order of magnitude less. Bars are colored by direction;
+# Kimbal Musk's lone reported sale carried no filed price, so it registers as a placeholder
+# with zero priced value.
+
+# %%
+# One horizontal bar per insider, ordered by priced dollar value, colored by direction.
+labels = [f"{o} ({t})" for o, t in zip(by_owner["owner"], by_owner["transaction_type"])]
+value_colors = [
+    COLORS["amber"] if t == "Purchase" else COLORS["slate"] for t in by_owner["transaction_type"]
+]
+
+fig = go.Figure(
+    go.Bar(
+        y=labels,
+        x=by_owner["total_value"] / 1e6,
+        orientation="h",
+        marker_color=value_colors,
+    )
+)
+fig.update_yaxes(autorange="reversed")
+fig.update_layout(
+    title="One TSLA insider's purchases outweigh every reporter's sales combined",
+    xaxis_title="Priced transaction value (USD millions)",
+    height=360,
+    margin=dict(l=210),
+)
+fig.show()
 
 # %% [markdown]
 # ---
 # ## Key Takeaways
 #
-# 1. Form 4 filings are XML documents with a small, stable schema (`issuerName`, `rptOwnerName`, `officerTitle`, and one or more transaction blocks). A few hundred lines of regex extract them into a flat panel.
+# 1. Form 4 filings are XML documents with a small, stable schema (`issuerName`, `rptOwnerName`, `officerTitle`, and one or more transaction blocks). A handful of regular expressions extract them into a flat panel.
 # 2. The transaction-code dictionary is the load-bearing piece: open-market purchases (P) and sales (S) are the only signals tied directly to insider conviction; option exercises (M/X), grants (A), tax payments (F), and gifts (G) are noise unless explicitly modelled.
 # 3. Aggregating by insider × transaction type surfaces the dollar-weighted activity pattern — in the TSLA sample, Elon Musk's 12 purchases dwarf the cumulative selling activity of every other reporter.
 # 4. **For ML features**: net insider buying/selling ratio, purchase-to-sale dollar ratio, and cluster detection (multiple insiders transacting together) are the natural primitives built on top of this DataFrame.

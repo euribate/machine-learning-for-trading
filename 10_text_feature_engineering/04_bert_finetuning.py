@@ -24,17 +24,18 @@
 #
 # ## Purpose
 # This notebook demonstrates the complete fine-tuning workflow for financial
-# sentiment classification using the Hugging Face Trainer API. We measure how
-# fine-tuning changes accuracy versus the pre-trained-checkpoint result reported
-# in NB03, and compare a domain-specific checkpoint (FinBERT) to two general
-# checkpoints (DeBERTa-v3, ModernBERT) on the same PhraseBank split.
+# sentiment classification using the Hugging Face Trainer API. We fine-tune a
+# domain-specific checkpoint (FinBERT) alongside two general checkpoints
+# (DeBERTa-v3, ModernBERT) on the same PhraseBank subset and compare them. See
+# the "Scope" note in the takeaways on why the FinBERT number here is not a clean
+# held-out measurement of the fine-tuning effect.
 #
 # ## Learning Objectives
 # After completing this notebook, you will be able to:
 # - Fine-tune a pre-trained Transformer for sequence classification
 # - Use the Hugging Face Trainer API with custom metrics
 # - Compare domain-specific vs general-purpose pre-trained models
-# - Interpret training dynamics (loss curves, early stopping)
+# - Read the Trainer's per-epoch training/validation metrics and early-stopping behavior
 # - Evaluate models with accuracy, F1, and confusion matrices
 #
 # ## Cross-References
@@ -47,7 +48,7 @@
 # - **Memory**: ~4GB GPU memory for FinBERT
 
 # %%
-"""Transformer Fine-Tuning — fine-tune FinBERT, DeBERTa-v3, and ModernBERT for financial sentiment classification."""
+"""Transformer Fine-Tuning - fine-tune FinBERT, DeBERTa-v3, and ModernBERT for financial sentiment classification."""
 
 import json
 import time
@@ -85,7 +86,7 @@ SEED = 42
 MAX_TRAIN_STEPS = -1  # -1 = train full epochs
 
 # %%
-# Reproducibility — set_global_seeds covers Python random / NumPy / Torch.
+# Reproducibility - set_global_seeds covers Python random / NumPy / Torch.
 # transformers Trainer uses its own RNG that needs explicit seeding.
 set_global_seeds(SEED)
 set_transformers_seed(SEED)
@@ -200,7 +201,7 @@ label2id = {"negative": 0, "neutral": 1, "positive": 2}
 
 # %% [markdown]
 # ### Tokenization
-# Tokenize inputs without padding — `DataCollatorWithPadding` handles dynamic padding per batch.
+# Tokenize inputs without padding - `DataCollatorWithPadding` handles dynamic padding per batch.
 
 
 # %%
@@ -215,7 +216,7 @@ def tokenize_function(examples, tokenizer, max_length=128):
 
 # %% [markdown]
 # ### Metrics Computation
-# Custom metric function for the Trainer API — computes accuracy and macro F1.
+# Custom metric function for the Trainer API - computes accuracy and macro F1.
 
 # %%
 accuracy_metric = evaluate.load("accuracy")
@@ -473,20 +474,28 @@ plt.show()
 # - FinBERT fine-tuned: accuracy 97.4%, F1 (macro) 0.958
 # - DeBERTa-v3 fine-tuned: accuracy 95.3%, F1 (macro) 0.939
 # - ModernBERT fine-tuned: accuracy 95.9%, F1 (macro) 0.953
-# - FinBERT pre-trained vs fine-tuned on this PhraseBank subset: 93.2% (NB03) → 97.4%
-# - Training time per model on RTX 3090: 13–17s at batch size 16
+# - Training time per model on RTX 3090: 13-17s at batch size 16
 #
-# ### Fine-tuning effect on FinBERT
-# Fine-tuning on the ~1,600-sentence training split changes FinBERT's accuracy on
-# the PhraseBank test set from 93.2% (the pre-trained FinBERT-tone checkpoint
-# measured in NB03 on the same `sentences_allagree` split) to 97.4%. The
-# pre-trained checkpoint already performs well — PhraseBank is in-domain for it —
-# and the fine-tuning step recovers most of the remaining headroom.
+# ### Why the FinBERT accuracy here is not a clean fine-tuning gain
+# It is tempting to read the 93.2% pre-trained result from NB03 next to the 97.4%
+# here as one model's before-and-after. It is not, for two reasons. First, they
+# are different checkpoints: NB03 measures `yiyanghkust/finbert-tone` (trained on
+# analyst reports), while this notebook fine-tunes `ProsusAI/finbert`. Second, and
+# more important, `ProsusAI/finbert` was itself fine-tuned on the *entire*
+# Financial PhraseBank - the very corpus our test split is drawn from. So its
+# 97.4% is measured on sentences the base model has almost certainly already seen;
+# it overstates true held-out performance and cannot be attributed cleanly to our
+# fine-tuning step. The honest fine-tuning demonstrations in this run are
+# **DeBERTa-v3 (95.3%)** and **ModernBERT (95.9%)**: both start from general
+# base checkpoints that never saw PhraseBank, so their scores are genuine
+# held-out measurements of what fine-tuning buys on this task.
 #
 # ### Patterns in the run
-# - FinBERT has both the highest accuracy (97.4%) and the highest macro F1
-#   (0.958). Differences between the three fine-tuned models are within a few
-#   percentage points on this PhraseBank test set.
+# - FinBERT posts the highest raw accuracy (97.4%) and macro F1 (0.958), but per
+#   the caveat above that number is inflated by prior exposure to PhraseBank, so
+#   it is not a fair head-to-head. Among the two clean fine-tunes, ModernBERT
+#   (95.9%) edges DeBERTa-v3 (95.3%); all three sit within a few percentage points
+#   on this test set.
 # - DeBERTa-v3 finishes at 95.3% accuracy / 0.939 F1; its disentangled-attention
 #   design targets longer contexts that this single-sentence task does not
 #   exercise.

@@ -62,8 +62,9 @@ RUN /opt/ml4t/bin/pip install --no-cache-dir pip setuptools wheel && \
     fi
 RUN /opt/ml4t/bin/pip freeze | grep -E '^(torch|torchaudio|torchvision)==' > /tmp/ml4t-constraints.txt
 
-# Install ml4t libraries from PyPI
-# --pre allows pre-release versions
+# Pre-install the ml4t libraries so they land in their own cached layer. Exact
+# versions are enforced by the uv.lock-derived constraint applied to the resolve
+# step below, so this only needs the lower bounds (--pre allows the pre-only builds).
 RUN /opt/ml4t/bin/pip install --no-cache-dir --pre \
     "ml4t-data>=0.1.0b15" \
     "ml4t-diagnostic>=0.1.0b19" \
@@ -89,7 +90,23 @@ ENV PATH="${PATH:+${PATH}:}/usr/local/cuda-12.6/bin"
 # NOW copy pyproject.toml (changes here only rebuild deps, not PyTorch)
 # Uses root pyproject.toml — single source of truth for all dependencies.
 WORKDIR /build
-COPY pyproject.toml /build/
+COPY pyproject.toml uv.lock /build/
+
+# Derive a fully-pinned constraint from uv.lock so the resolve below reproduces the
+# locked environment readers get from `uv sync` (single source of truth: uv.lock).
+# Without it, `uv pip install` free-resolves to the latest compatible release at build
+# time and drifts off the lock - e.g. litellm 1.92.0 pulls a Rust extension (pyo3-ffi)
+# that fails to build on Python 3.14, and the ml4t libs float past their tested pins.
+# The torch stack is excluded because it has a dedicated cu128 build path: the image
+# installs torch from the CUDA index (a newer build than the lock's generic torch), so
+# torch and the deps its wheel pins strictly (nvidia-*, triton, setuptools<82) cannot be
+# held to the lock's torch-2.10.0-consistent versions. torch/torchvision/torchaudio +
+# lightgbm (CUDA-built separately) are excluded too. Everything else is pinned to the
+# lock. Generated BEFORE the strip so uv.lock still matches pyproject.toml for --frozen.
+RUN cd /build && uv export --frozen --no-emit-project --no-hashes --format requirements-txt \
+      | grep -iE '^[a-z0-9._-]+==' \
+      | grep -viE '^(torch|torchvision|torchaudio|lightgbm|triton|setuptools)==|^nvidia-' \
+      > /tmp/locked-constraints.txt
 
 # Remove packages that need special handling from pyproject copy:
 # - lightgbm: installed separately with CUDA build on amd64
@@ -104,14 +121,15 @@ RUN sed -i '/"lightgbm/d; /"torch>=/d' /build/pyproject.toml
 # preinstalled PyTorch stack needed for CUDA/signatory compatibility.
 # Use uv for resolution (handles packages that mark Requires-Python <3.14
 # but actually work fine, like dowhy and granite-tsfm).
-# --override lets uv resolve freely while keeping torch CUDA pins.
+# --constraint pins every package to its uv.lock version (reproducible, no drift).
+# --override keeps the preinstalled cu128 torch stack (excluded from the constraint).
 # Force cvxpy>=1.5 for numpy 2.x C API compat (riskfolio-lib pins 1.4).
-# --prerelease=if-necessary-or-explicit mirrors the [tool.uv] policy used by
-# uv.lock, so the image resolves the same STABLE versions we test against rather
-# than gratuitous prereleases (e.g. scipy 1.18rc, pydantic 2.14a, matplotlib 3.11rc).
+# --prerelease=if-necessary-or-explicit allows the explicitly-pinned pre-only builds
+# (e.g. the ml4t libs) while otherwise preferring the stable versions in the lock.
 RUN echo 'cvxpy>=1.5' >> /tmp/ml4t-constraints.txt && \
     uv pip install --python /opt/ml4t/bin/python --no-cache \
     --prerelease=if-necessary-or-explicit \
+    --constraint /tmp/locked-constraints.txt \
     --override /tmp/ml4t-constraints.txt /build
 
 # LightGBM: two deterministic paths, no fallbacks within a platform

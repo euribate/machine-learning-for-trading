@@ -60,6 +60,11 @@ from utils import ML4T_DATA_PATH
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
+# Minimum outright price for front-month selection. CME lists calendar spreads
+# (which trade at the ~$50–100 inter-month difference) alongside outright
+# contracts; this threshold keeps a high-volume spread from being mistaken for
+# the front month. Raise it for higher-priced indices, lower it for cheaper ones.
+MIN_OUTRIGHT_PRICE = 500.0
 
 # %% [markdown]
 # ## 1. Understanding the Data
@@ -237,7 +242,7 @@ def identify_front_month(
 
 
 # %%
-front_months = identify_front_month(es_individual)
+front_months = identify_front_month(es_individual, min_outright_price=MIN_OUTRIGHT_PRICE)
 print("Front month identification (2024 sample):")
 front_months.filter(pl.col("timestamp") >= datetime(2024, 1, 1, tzinfo=UTC)).head(20)
 
@@ -654,10 +659,10 @@ fig.show()
 
 
 # %%
-def construct_and_validate(product: str) -> dict:
+def construct_and_validate(product: str, min_outright_price: float = 500.0) -> dict:
     """Construct a raw continuous series and validate it against the vendor continuous."""
     individual = load_cme_futures(products=[product], frequency="hourly", continuous=False)
-    fronts = identify_front_month(individual)
+    fronts = identify_front_month(individual, min_outright_price=min_outright_price)
     continuous_raw = create_continuous_raw(individual, fronts)
     databento = load_cme_futures(
         products=[product], tenors=[0], frequency="hourly", continuous=True
@@ -679,7 +684,7 @@ def construct_and_validate(product: str) -> dict:
 
 
 # %%
-validation_summary = pl.DataFrame([construct_and_validate("ES")])
+validation_summary = pl.DataFrame([construct_and_validate("ES", MIN_OUTRIGHT_PRICE)])
 print("Construction-vs-vendor validation (ES):")
 validation_summary
 

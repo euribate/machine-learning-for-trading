@@ -1266,9 +1266,9 @@ if len(factor_with_returns) > 100:
     spread = q5_ret - q1_ret
 
     print("\nLong-Short Spread (Q5 - Q1):")
-    # Decimal returns → bps (×10,000), so a -0.000863 spread is -8.63 bps/day.
-    # Express the annualized figure as a percentage; -21.8% annualized is more
-    # readable than -2,175 bps.
+    # Decimal returns → bps (×10,000), so a -0.000874 spread is -8.74 bps/day.
+    # Express the annualized figure as a percentage; -22.0% annualized is more
+    # readable than -2,200 bps.
     print(f"  1-day: {spread * 10000:.2f} bps")
     print(f"  Annualized: {spread * 252 * 100:.2f}%")
 else:
@@ -1345,9 +1345,9 @@ print(high_coverage.head(10))
 #    vectors that capture semantic meaning beyond keywords.
 #
 # 2. **Direction step**: Raw `news_surprise` (semantic deviation) alone yields a
-#    1-day cross-sectional IC of 0.0025 (ICIR 0.01, t-stat 0.26, n=867 dates).
+#    1-day cross-sectional IC of 0.0026 (ICIR 0.01, t-stat 0.27, n=867 dates).
 #    Multiplying by `sign(sentiment)` to form `weighted_surprise = surprise ×
-#    sign(sentiment)` raises 1-day IC to 0.0129 (ICIR 0.04, t-stat 1.30). The
+#    sign(sentiment)` raises 1-day IC to 0.0127 (ICIR 0.04, t-stat 1.29). The
 #    directional construction moves IC and t-stat up, but the t-stat is below
 #    any conventional significance threshold on this 50-ticker FNSPID subset
 #    (2009-2017).
@@ -1363,10 +1363,10 @@ print(high_coverage.head(10))
 #    on this sample; the notebook does not establish tradeability.
 #
 # 5. **Quintile spread is wrong-signed**: Sorting by `weighted_surprise` into
-#    quintiles, the 1-day forward returns are Q1 0.001002, Q2 0.000461,
+#    quintiles, the 1-day forward returns are Q1 0.001012, Q2 0.000454,
 #    Q3 0.000462, Q4 0.001156, Q5 0.000139. The predicted bullish quintile
 #    (Q5) earns LESS than the predicted bearish quintile (Q1) — the Q5−Q1
-#    spread is −8.63 bps/day (≈ −21.8% annualized). The bullish/bearish
+#    spread is −8.74 bps/day (≈ −22.0% annualized). The bullish/bearish
 #    framing implied by `weighted_surprise` is **not** confirmed by the
 #    quintile ordering on this sample. The signal is not tradeable as
 #    constructed.
@@ -1514,10 +1514,10 @@ print(f"\nResults saved to: {results_file}")
 # This notebook constructed and evaluated news-based alpha signals from FNSPID
 # data on a 50-ticker subset spanning 2009-2017. Daily cross-sectional IC on
 # 1-day forward returns is 0.0025 (ICIR 0.01, t-stat 0.26) for `news_surprise`
-# and 0.0129 (ICIR 0.04, t-stat 1.30) for `weighted_surprise = surprise ×
+# and 0.0127 (ICIR 0.04, t-stat 1.29) for `weighted_surprise = surprise ×
 # sign(sentiment)`. The directional transformation moves IC and t-stat up,
 # but the t-stat does not clear any conventional significance threshold, and
 # the 1-day quintile spread is wrong-signed: Q5 (predicted bullish) 0.000139
-# vs Q1 (predicted bearish) 0.001002. The signal is **not** tradeable as
+# vs Q1 (predicted bearish) 0.001012. The signal is **not** tradeable as
 # constructed on this sample. `08_text_feature_evaluation` evaluates the
 # same signal family across a wider horizon set.

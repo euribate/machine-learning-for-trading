@@ -28,7 +28,7 @@
 # > ```
 #
 # ## Purpose
-# This notebook demonstrates how Word2Vec—the foundational NLP embedding method—
+# This notebook demonstrates how Word2Vec - the foundational NLP embedding method -
 # extends beyond text to financial assets. Just as words appearing in similar
 # contexts have similar meanings, stocks appearing in similar portfolios may
 # share fundamental characteristics.
@@ -59,7 +59,7 @@
 #   (downloaded via `data/equities/positioning/13f_download.py --mode bulk --quarters 2024Q3`).
 
 # %%
-"""Asset Embeddings: Word2Vec Applied to Portfolios — train stock embeddings from institutional 13F holdings data."""
+"""Asset Embeddings: Word2Vec Applied to Portfolios - train stock embeddings from institutional 13F holdings data."""
 
 import json
 import warnings
@@ -75,17 +75,18 @@ from data import load_13f_stock_features
 from utils.config import ML4T_DATA_PATH
 from utils.paths import get_chapter_dir
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS
 
 warnings.filterwarnings("ignore")
 
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Production defaults - Papermill injects overrides for CI
 SEED = 42
 MAX_INSTITUTIONS = 500  # top-K institutions by holdings count from 2024Q3 bulk filing
 QUARTER = "2024Q3"
 
 # %%
-# Reproducibility — single source of seeds for Python random, NumPy, and (if installed) Torch.
+# Reproducibility - single source of seeds for Python random, NumPy, and (if installed) Torch.
 set_global_seeds(SEED)
 
 CONFIG = {
@@ -134,7 +135,7 @@ print("=" * 70)
 #
 # Every institutional investor managing over $100M must file quarterly 13F-HR
 # disclosures with the SEC. We use the bulk 2024Q3 filing window and select the
-# largest 500 institutions by number of holdings — enough portfolios to give
+# largest 500 institutions by number of holdings - enough portfolios to give
 # Word2Vec a meaningful co-occurrence signal, while keeping training tractable.
 
 # %%
@@ -153,7 +154,7 @@ print(
     f"Loaded: {holdings_full.height:,} holdings across {holdings_full['cik'].n_unique():,} institutions"
 )
 
-# Pick the top-K institutions by holdings count — this favours diversified funds
+# Pick the top-K institutions by holdings count - this favours diversified funds
 # whose portfolios provide the richest co-occurrence signal.
 institution_sizes = holdings_full.group_by("cik").len().sort("len", descending=True)
 selected_ciks = institution_sizes.head(MAX_INSTITUTIONS)["cik"].to_list()
@@ -211,7 +212,7 @@ sentence_lengths = [len(s) for s in sentences]
 print(f"Number of portfolios (institutions): {len(sentences):,}")
 print(f"Total stock-position pairs:        {sum(sentence_lengths):,}")
 print(
-    f"Portfolio size — min / median / max: {min(sentence_lengths)} / "
+    f"Portfolio size - min / median / max: {min(sentence_lengths)} / "
     f"{int(np.median(sentence_lengths))} / {max(sentence_lengths)}"
 )
 
@@ -223,7 +224,7 @@ preview_rows = [
     {"position": i + 1, "cusip": cusip, "issuer": cusip_to_name.get(cusip, "Unknown")[:40]}
     for i, cusip in enumerate(sentences[0][:10])
 ]
-print(f"\nPreview portfolio: {preview_name} (CIK {preview_cik}) — top-10 positions")
+print(f"\nPreview portfolio: {preview_name} (CIK {preview_cik}) - top-10 positions")
 pl.DataFrame(preview_rows)
 
 # %% [markdown]
@@ -260,7 +261,7 @@ model = Word2Vec(
 print(f"Vocabulary size (stocks): {len(model.wv):,}")
 print(f"Embedding dimension: {model.wv.vector_size}")
 
-# How widely each in-vocab stock is held — used downstream to disambiguate
+# How widely each in-vocab stock is held - used downstream to disambiguate
 # name searches and to pick the most-held stocks for the t-SNE plot.
 occurrence_counts: dict[str, int] = {c: 0 for c in model.wv.key_to_index}
 for sentence in sentences:
@@ -279,7 +280,7 @@ for sentence in sentences:
 # context (AMEX position 2, BAC position 4).
 #
 # **Result**: Stocks that appear in similar positions across many portfolios
-# get similar embeddings—they share investment characteristics valued by
+# get similar embeddings-they share investment characteristics valued by
 # institutional investors.
 #
 # Gabaix et al. (2025) note: "Investors assign similar portfolio weights to
@@ -302,8 +303,14 @@ def neighbours_frame(query: str, top_k: int = 10) -> pl.DataFrame:
         cusip = query
     else:
         # Whole-word match against issuer name to avoid PINEAPPLE matching "APPLE".
+        # Normalize punctuation to spaces first so a space query like "COCA COLA"
+        # also matches hyphenated issuers ("COCA-COLA CO"); the \b guard is kept.
         pattern = re.compile(rf"\b{re.escape(query.upper())}\b")
-        matching = [c for c, n in cusip_to_name.items() if n and pattern.search(n.upper())]
+
+        def _norm(name: str) -> str:
+            return re.sub(r"[^A-Z0-9]+", " ", name.upper())
+
+        matching = [c for c, n in cusip_to_name.items() if n and pattern.search(_norm(n))]
         if not matching:
             return pl.DataFrame(
                 {
@@ -392,7 +399,7 @@ embeddings_2d = tsne.fit_transform(subset_embeddings)
 fig, ax = plt.subplots(figsize=(12, 10))
 
 # Plot all points
-ax.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.5, s=20, c="#64748b")
+ax.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], alpha=0.5, s=20, c=COLORS["neutral"])
 
 # Highlight recognizable stocks
 highlight_keywords = [
@@ -421,7 +428,7 @@ y_min, y_max = embeddings_2d[:, 1].min(), embeddings_2d[:, 1].max()
 n_h = max(len(highlighted), 1)
 for slot, (i, name) in enumerate(highlighted):
     x_pt, y_pt = embeddings_2d[i, 0], embeddings_2d[i, 1]
-    ax.scatter(x_pt, y_pt, s=100, c="#ef4444", zorder=5)
+    ax.scatter(x_pt, y_pt, s=100, c=COLORS["amber"], zorder=5)
     short_name = name[:20] + "..." if len(name) > 20 else name
     label_x = x_max + 0.10 * (x_max - embeddings_2d[:, 0].min())
     label_y = y_max - slot * (y_max - y_min) / max(n_h - 1, 1)
@@ -433,7 +440,7 @@ for slot, (i, name) in enumerate(highlighted):
         alpha=0.9,
         ha="left",
         va="center",
-        arrowprops=dict(arrowstyle="-", color="#ef4444", lw=0.6, alpha=0.6),
+        arrowprops=dict(arrowstyle="-", color=COLORS["amber"], lw=0.6, alpha=0.6),
     )
 
 ax.set_xlabel("t-SNE Dimension 1")
@@ -756,7 +763,7 @@ print("\nSUMMARY")
 print(f"  Word2Vec Hits@5 (avg over position buckets): {avg_hits5:.1%}")
 print(f"  Random baseline Hits@5:                      {random_hits5:.4%}")
 print(
-    f"  Improvement over random: {improvement:.0f}x [95% CI: {improvement_lower:.0f}x – {improvement_upper:.0f}x]"
+    f"  Improvement over random: {improvement:.0f}x [95% CI: {improvement_lower:.0f}x - {improvement_upper:.0f}x]"
 )
 
 # %%
@@ -771,9 +778,11 @@ hits10 = [m["hits@10"] for m in benchmark_results.values()]
 ax = axes[0]
 x = np.arange(len(labels))
 width = 0.35
-ax.bar(x - width / 2, hits5, width, label="Hits@5", color="#3b82f6")
-ax.bar(x + width / 2, hits10, width, label="Hits@10", color="#10b981")
-ax.axhline(y=random_hits5, color="red", linestyle="--", label=f"Random@5 ({random_hits5:.2%})")
+ax.bar(x - width / 2, hits5, width, label="Hits@5", color=COLORS["blue"])
+ax.bar(x + width / 2, hits10, width, label="Hits@10", color=COLORS["amber"])
+ax.axhline(
+    y=random_hits5, color=COLORS["neutral"], linestyle="--", label=f"Random@5 ({random_hits5:.2%})"
+)
 ax.set_xlabel("Position Range")
 ax.set_ylabel("Accuracy")
 ax.set_title("Masked Asset Prediction Accuracy")
@@ -785,7 +794,7 @@ ax.set_ylim(0, max(max(hits10), 0.01) * 1.3)
 # Right: MRR by position range
 mrrs = [m["mrr"] for m in benchmark_results.values()]
 ax = axes[1]
-ax.bar(x, mrrs, color="#8b5cf6")
+ax.bar(x, mrrs, color=COLORS["blue"])
 ax.set_xlabel("Position Range")
 ax.set_ylabel("Mean Reciprocal Rank")
 ax.set_title("Mean Reciprocal Rank by Position")
@@ -804,10 +813,10 @@ plt.show()
 #
 # Two patterns are worth checking against the table above:
 #
-# 1. The position-bucket effect — top positions (the largest holdings) are more
+# 1. The position-bucket effect - top positions (the largest holdings) are more
 #    consistently held across funds, so their context is predictive; lower
 #    positions are noisier and Hits@k typically falls.
-# 2. The lift over the analytical random baseline (`5 / vocab_size`) — even a
+# 2. The lift over the analytical random baseline (`5 / vocab_size`) - even a
 #    single-quarter Word2Vec model on 500 portfolios should be one-to-two
 #    orders of magnitude above random, well outside the bootstrap CI.
 #
@@ -826,7 +835,7 @@ plt.show()
 # Their key findings:
 # - **4D embeddings explain >50% of valuation variation** (vs 15% for characteristics)
 # - Word2Vec excels at the **managed portfolio benchmark** (predicting masked assets)
-# - Text embeddings from OpenAI/Cohere perform **poorly**—portfolio data captures
+# - Text embeddings from OpenAI/Cohere perform **poorly**-portfolio data captures
 #   information that company descriptions cannot
 #
 # Our implementation demonstrates the Word2Vec approach, showing how NLP methods

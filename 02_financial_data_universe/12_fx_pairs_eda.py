@@ -41,14 +41,16 @@
 # %%
 """FX Pairs — Exploratory data analysis of OANDA currency pair data."""
 
+import plotly.graph_objects as go
 import polars as pl
 
 from data import load_fx_pairs
 from utils.data_quality import check_ohlc_invariants, per_asset_stats
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
-# (No tunable knobs: this notebook EDAs the full 12-pair universe via the
+# (No tunable knobs: this notebook EDAs the full 20-pair universe via the
 # canonical load_fx_pairs() API; there is no MAX_SYMBOLS / START_DATE knob to expose.)
 
 # %% [markdown]
@@ -112,9 +114,42 @@ pair_stats = per_asset_stats(
 pair_stats.sort("avg_volume", descending=True)
 
 # %% [markdown]
+# ### Liquidity is venue-specific
+#
+# Ranking pairs by average indicative volume shows something that looks wrong at
+# first: the global majors (EUR/USD, USD/JPY) are *not* at the top. That is
+# correct — this is OANDA's retail flow, not the interbank tape. The largest
+# interbank markets are simply not visible to a single retail venue. Read this as
+# a relative liquidity indicator on this venue, nothing more.
+
+# %%
+vol_rank = (
+    fx.group_by("symbol")
+    .agg(pl.col("volume").mean().alias("avg_volume"))
+    .sort("avg_volume", descending=True)
+)
+
+fig = go.Figure(
+    go.Bar(
+        x=vol_rank["avg_volume"].to_list(),
+        y=vol_rank["symbol"].to_list(),
+        orientation="h",
+        marker_color=COLORS["slate"],
+    )
+)
+fig.update_layout(
+    title="Average indicative volume per 4h bar, by pair (OANDA retail flow)",
+    xaxis_title="Indicative volume / 4h",
+    yaxis=dict(autorange="reversed"),
+    height=520,
+)
+fig.show()
+
+# %% [markdown]
 # ## 3. Quote Conventions
 #
-# FX pairs follow **BASE/QUOTE** convention:
+# FX pairs follow **BASE/QUOTE** convention: the price is units of QUOTE per one
+# unit of BASE.
 #
 # | Pair | Interpretation | USD Strength |
 # |------|----------------|--------------|
@@ -122,29 +157,37 @@ pair_stats.sort("avg_volume", descending=True)
 # | USD/JPY = 150 | 1 USD costs 150 JPY | Up = USD stronger |
 # | EUR/GBP = 0.86 | 1 EUR costs 0.86 GBP | Cross rate (no USD) |
 #
-# To create a consistent "USD index", you must **invert** EUR/USD and GBP/USD.
+# Rather than hand-label a subset, classify **all** pairs by rule: *Direct* if USD
+# is the quote (price = USD per base, so invert for a USD-strength composite),
+# *Indirect* if USD is the base (price already reads as USD strength), and *Cross*
+# if USD does not appear.
+
 
 # %%
-# Quote convention classification (using canonical symbols).
-QUOTE_CONVENTIONS = {
-    "EURUSD": ("Direct", "USD per EUR", "invert for USD strength"),
-    "GBPUSD": ("Direct", "USD per GBP", "invert for USD strength"),
-    "AUDUSD": ("Direct", "USD per AUD", "invert for USD strength"),
-    "NZDUSD": ("Direct", "USD per NZD", "invert for USD strength"),
-    "USDJPY": ("Indirect", "JPY per USD", "direct USD strength"),
-    "USDCHF": ("Indirect", "CHF per USD", "direct USD strength"),
-    "USDCAD": ("Indirect", "CAD per USD", "direct USD strength"),
-    "EURGBP": ("Cross", "GBP per EUR", "no USD"),
-    "EURJPY": ("Cross", "JPY per EUR", "no USD"),
-}
+def classify_pair(sym: str) -> tuple[str, str]:
+    """Classify a canonical FX symbol (e.g. 'EURUSD') by USD role."""
+    base, quote = sym[:3], sym[3:]
+    if quote == "USD":
+        return "Direct", "invert for USD strength"
+    if base == "USD":
+        return "Indirect", "direct USD strength"
+    return "Cross", "no USD"
+
 
 quote_conventions = pl.DataFrame(
     [
-        {"symbol": p, "convention": c, "meaning": m, "usd_strength": n}
-        for p, (c, m, n) in QUOTE_CONVENTIONS.items()
-        if p in pairs
+        {
+            "symbol": p,
+            "convention": classify_pair(p)[0],
+            "meaning": f"{p[3:]} per {p[:3]}",
+            "usd_strength": classify_pair(p)[1],
+        }
+        for p in pairs
     ]
-)
+).sort("convention", "symbol")
+
+print(f"Pairs classified: {quote_conventions.height} of {len(pairs)}")
+print(quote_conventions["convention"].value_counts().sort("convention"))
 quote_conventions
 
 # %% [markdown]
@@ -165,6 +208,44 @@ eurusd_gaps = eurusd.with_columns(
 
 large_gaps = eurusd_gaps.filter(pl.col("hours_since_prev") > 24)
 print(f"\nGaps > 24 hours (EURUSD): {len(large_gaps)} (should be weekends only)")
+
+# %% [markdown]
+# The bar-to-bar gap distribution is the calendar made visible: a dominant spike
+# at the normal 4-hour cadence, and a second cluster around the weekend close
+# (Friday evening → Sunday evening). There is nothing in between — FX trades 24/5,
+# not 24/7, and the ~750 weekend gaps line up with ~15 years of weekends.
+
+# %%
+gap_hours = eurusd_gaps.drop_nulls("hours_since_prev")["hours_since_prev"].to_list()
+
+fig = go.Figure()
+fig.add_trace(
+    go.Histogram(
+        x=gap_hours,
+        xbins=dict(start=0, end=72, size=2),
+        marker_color=COLORS["slate"],
+    )
+)
+fig.add_vline(x=4, line_color=COLORS["amber"], line_width=1)
+fig.add_annotation(
+    x=4,
+    y=1,
+    xref="x",
+    yref="paper",
+    text="4h cadence",
+    showarrow=False,
+    xanchor="left",
+    yanchor="top",
+    font=dict(color=COLORS["amber"]),
+)
+fig.update_layout(
+    title="EURUSD hours between bars (spike at 4h, weekend cluster ~48–65h)",
+    xaxis_title="Hours since previous bar",
+    yaxis_title="Bars",
+    yaxis_type="log",
+    height=420,
+)
+fig.show()
 
 # %% [markdown]
 # ## 5. Daily Aggregation
@@ -201,7 +282,7 @@ fx_daily.filter(pl.col("symbol") == "EURUSD").tail(5)
 #
 # ### Quantitative Findings
 # - **Panel scale**: 478,640 4h observations across 20 currency pairs spanning
-#   2011-01-02 → 2025-12-31. Each pair has ~23,920–23,945 4h bars.
+#   2011-01-02 → 2025-12-31. Each pair has ~23,920–23,950 4h bars.
 # - **Liquidity tiers (by indicative OANDA volume)**: GBPAUD, GBPJPY, EURCAD,
 #   GBPCHF and CHFJPY top the table at 18k–28k contracts/4h; the bottom of
 #   the universe (NZDUSD, EURCHF, EURGBP, AUDUSD, USDCHF) sits at 5k–7k.
@@ -211,7 +292,7 @@ fx_daily.filter(pl.col("symbol") == "EURUSD").tail(5)
 # - **OHLC integrity**: 100% of 4h bars satisfy all six invariants
 #   (high ≥ low/open/close, low ≤ open/close, volume ≥ 0).
 # - **Session gaps**: 747 EURUSD inter-bar gaps exceed 24 h, matching the
-#   ~770 weekend closes over 14 years — confirming the 24/5 calendar.
+#   ~780 weekend closes over the ~15-year span — confirming the 24/5 calendar.
 # - **Daily roll-up**: UTC-boundary aggregation produces 94,642 daily rows
 #   across the panel (≈4,732 trading days × 20 pairs).
 #

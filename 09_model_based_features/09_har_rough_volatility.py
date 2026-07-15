@@ -465,7 +465,12 @@ har_forecast = X_test @ np.array(
 )
 
 # %%
-# GARCH(1,1) forecast
+# GARCH(1,1) one-step-ahead out-of-sample forecast.
+# GARCH parameters are estimated on the training window only (via last_obs), to
+# match HAR, whose coefficients are also fit on training data. The forecast then
+# rolls one step ahead across the test period: each day's conditional-variance
+# forecast conditions on the realized return history through the prior day, so
+# the comparison is genuinely out-of-sample.
 returns_pct = spy_rv["log_return"].to_numpy() * 100  # Scale for GARCH
 returns_pd = pd.Series(
     returns_pct,
@@ -473,22 +478,23 @@ returns_pd = pd.Series(
     name="returns",
 )
 
-garch_model = arch_model(returns_pd.iloc[: n_train + 22], mean="Constant", vol="GARCH", p=1, q=1)
-garch_fit = garch_model.fit(disp="off")
-garch_cond_vol = garch_fit.conditional_volatility * np.sqrt(252) / 100  # Annualized, unscale
-
-# Align lengths for comparison
 test_rv = test_data["rv_target"].to_numpy()
 test_dates = test_data["timestamp"].to_list()
 
-# GARCH forecast is from the same period
-garch_test = garch_cond_vol.values[-len(test_rv) :]
-if len(garch_test) < len(test_rv):
-    # Pad with last value if needed
-    garch_test = np.pad(garch_test, (len(test_rv) - len(garch_test), 0), mode="edge")
-garch_test = garch_test[: len(test_rv)]
+# Split date = first test observation; parameters use only data strictly before it
+split_ts = pd.Timestamp(test_dates[0])
+garch_model = arch_model(returns_pd, mean="Constant", vol="GARCH", p=1, q=1)
+garch_fit = garch_model.fit(disp="off", last_obs=split_ts)
 
-# Compute RMSE
+# Forecast origins start at the last training day so that row t (horizon 1)
+# forecasts day t+1: origins then map one-to-one onto the test dates. Annualize
+# the forecast standard deviation and unscale the earlier ×100.
+forecast_start = returns_pd.index[returns_pd.index.get_loc(split_ts) - 1]
+garch_forecast = garch_fit.forecast(horizon=1, start=forecast_start, reindex=False)
+garch_test = np.sqrt(garch_forecast.variance["h.1"].to_numpy()) * np.sqrt(252) / 100
+garch_test = garch_test[: len(test_rv)]  # drop final origin (forecasts past the test window)
+
+# Compute RMSE / MAE
 rmse_har = np.sqrt(np.mean((har_forecast - test_rv) ** 2))
 rmse_garch = np.sqrt(np.mean((garch_test - test_rv) ** 2))
 mae_har = np.mean(np.abs(har_forecast - test_rv))
@@ -527,6 +533,19 @@ ax.legend()
 
 plt.tight_layout()
 plt.show()
+
+# %% [markdown]
+# Both series are genuine out-of-sample forecasts: HAR coefficients and GARCH
+# parameters are estimated on the training window only, and each GARCH forecast
+# conditions on returns through the prior day. Over the test period the HAR
+# forecast tracks realized volatility more closely, with one-step-ahead RMSE of
+# about 0.061 against 0.084 for GARCH and MAE of about 0.041 against 0.064. HAR's
+# multi-horizon regressors track the level and persistence of realized volatility
+# directly, whereas GARCH represents close-to-close return variance through a
+# single exponential decay and adjusts more slowly. The two estimators also
+# target slightly different quantities (range-based Garman-Klass RV versus
+# close-to-close return volatility), which lifts the GARCH forecast to a somewhat
+# higher average level.
 
 # %% [markdown]
 # ### Rolling HAR Estimation

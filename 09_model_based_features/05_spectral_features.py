@@ -302,7 +302,9 @@ def rolling_fft_features(
     - spectral_energy: Total power (excluding DC)
     - dominant_period: Period of peak frequency (in samples)
     - spectral_entropy: Entropy of normalized power spectrum
-    - low_freq_ratio: Fraction of energy below 1/21 cycles/sample
+    - low_freq_ratio: Fraction of energy in periods longer than window/3
+      (frequencies below 3/window cycles/sample — the slowest resolvable
+      oscillations, well-defined for every window length)
     - energy at target periods: Power near specific calendar frequencies
     """
     if target_periods is None:
@@ -343,8 +345,11 @@ def rolling_fft_features(
             p_norm = p_norm[p_norm > 0]
             spectral_entropy[t] = -np.sum(p_norm * np.log(p_norm))
 
-        # Low-frequency ratio: energy below 1/21 cycles/sample (monthly+)
-        low_mask = (freqs > 0) & (freqs < 1.0 / 21)
+        # Low-frequency ratio: energy in the slowest resolvable oscillations,
+        # defined window-relative as periods longer than window/3 (freq < 3/window).
+        # This band is non-degenerate for every window; at window=63 it coincides
+        # with the monthly cutoff 1/21.
+        low_mask = (freqs > 0) & (freqs < 3.0 / window)
         if low_mask.any() and total_power > 0:
             low_freq_ratio[t] = np.sum(power[low_mask]) / total_power
 
@@ -620,7 +625,7 @@ display(ic_df)
 # | `spectral_energy` | Rolling FFT | Total power (excl. DC) | Daily |
 # | `dominant_period` | Rolling FFT | Period of peak frequency | Daily |
 # | `spectral_entropy` | Rolling FFT | Normalized spectrum entropy | Daily |
-# | `low_freq_ratio` | Rolling FFT | Energy below 1/21 cycles/sample | Daily |
+# | `low_freq_ratio` | Rolling FFT | Energy in periods longer than window/3 | Daily |
 # | `energy_period_5` | Rolling FFT | Power near weekly frequency | Daily |
 # | `energy_period_21` | Rolling FFT | Power near monthly frequency | Daily |
 #

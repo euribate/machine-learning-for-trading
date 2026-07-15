@@ -84,6 +84,7 @@ from plotly.subplots import make_subplots
 from data import load_cme_futures, load_crypto_perps, load_etfs
 from utils.paths import get_chapter_dir
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # activates the ml4t Plotly template + house palette
 
 warnings.filterwarnings("ignore")
 
@@ -379,7 +380,7 @@ if spy_mfe_mae is not None:
     fig = make_subplots(
         rows=1,
         cols=2,
-        subplot_titles=["Maximum Favorable Excursion (MFE)", "Maximum Adverse Excursion (MAE)"],
+        subplot_titles=["Favorable (MFE)", "Adverse (MAE)"],
     )
 
     # MFE histogram
@@ -388,7 +389,7 @@ if spy_mfe_mae is not None:
             x=spy_mfe_mae["mfe_pct"].to_numpy(),
             nbinsx=50,
             name="MFE",
-            marker_color="#3b82f6",
+            marker_color=COLORS["positive"],
         ),
         row=1,
         col=1,
@@ -400,14 +401,14 @@ if spy_mfe_mae is not None:
             x=spy_mfe_mae["mae_pct"].to_numpy(),
             nbinsx=50,
             name="MAE",
-            marker_color="#f97316",
+            marker_color=COLORS["negative"],
         ),
         row=1,
         col=2,
     )
 
     fig.update_layout(
-        title=f"SPY MFE/MAE Distribution ({etf_horizon}d Horizon)",
+        title=f"SPY {etf_horizon}-day favorable moves (median 3.1%) run wider than adverse (2.1%)",
         showlegend=False,
         height=400,
     )
@@ -470,7 +471,7 @@ if btc_mfe_mae is not None:
     fig = make_subplots(
         rows=1,
         cols=2,
-        subplot_titles=["Maximum Favorable Excursion (MFE)", "Maximum Adverse Excursion (MAE)"],
+        subplot_titles=["Favorable (MFE)", "Adverse (MAE)"],
     )
 
     # MFE histogram
@@ -479,7 +480,7 @@ if btc_mfe_mae is not None:
             x=btc_mfe_mae["mfe_pct"].to_numpy(),
             nbinsx=50,
             name="MFE",
-            marker_color="#3b82f6",
+            marker_color=COLORS["positive"],
         ),
         row=1,
         col=1,
@@ -491,7 +492,7 @@ if btc_mfe_mae is not None:
             x=btc_mfe_mae["mae_pct"].to_numpy(),
             nbinsx=50,
             name="MAE",
-            marker_color="#f97316",
+            marker_color=COLORS["negative"],
         ),
         row=1,
         col=2,
@@ -501,14 +502,24 @@ if btc_mfe_mae is not None:
 if btc_mfe_mae is not None:
     # Add barrier reference lines (2% from typical crypto settings)
     fig.add_vline(
-        x=2.0, line_dash="dash", line_color="blue", row=1, col=1, annotation_text="2% barrier"
+        x=2.0,
+        line_dash="dash",
+        line_color=COLORS["copper"],
+        row=1,
+        col=1,
+        annotation_text="2% barrier",
     )
     fig.add_vline(
-        x=2.0, line_dash="dash", line_color="blue", row=1, col=2, annotation_text="2% barrier"
+        x=2.0,
+        line_dash="dash",
+        line_color=COLORS["copper"],
+        row=1,
+        col=2,
+        annotation_text="2% barrier",
     )
 
     fig.update_layout(
-        title=f"BTC MFE/MAE Distribution ({crypto_horizon}h Horizon)",
+        title=f"Most BTC {crypto_horizon}-hour excursions stay under the 2% barrier",
         showlegend=False,
         height=400,
     )
@@ -547,9 +558,19 @@ try:
     print(f"ES futures data: {len(es):,} bars")
     print(f"Date range: {es['timestamp'].min()} to {es['timestamp'].max()}")
 
-    # Compute MFE/MAE for 21-day horizon
+    # Compute MFE/MAE for 21-day horizon. Excursions ride the roll-adjusted
+    # series (adj_*) so roll gaps don't register as favorable/adverse moves.
     futures_horizon = 21
-    es_mfe_mae = compute_mfe_mae(es, "timestamp", "close", futures_horizon, unit="pct", side=1)
+    es_mfe_mae = compute_mfe_mae(
+        es,
+        "timestamp",
+        "adj_close",
+        futures_horizon,
+        high_col="adj_high",
+        low_col="adj_low",
+        unit="pct",
+        side=1,
+    )
 
     # Summary statistics
     print(f"\nES MFE/MAE Statistics (21d horizon, n={len(es_mfe_mae):,}):")
@@ -586,21 +607,23 @@ if spy_mfe_mae is not None:
             x=sample["mae_pct"].to_numpy(),
             y=sample["mfe_pct"].to_numpy(),
             mode="markers",
-            marker=dict(size=5, opacity=0.3, color="#636363"),
+            marker=dict(size=5, opacity=0.3, color=COLORS["neutral"]),
             name="Observations",
         )
     )
 
 # %%
 if spy_mfe_mae is not None:
-    # Colorblind-safe palette with distinct line styles for percentile levels
+    # House palette with distinct line styles for percentile levels; the
+    # yshift staggers the three MAE (vertical) labels so they don't collide
+    # along the top axis.
     pctl_styles = [
-        (50, "#2166ac", "solid", "p50"),
-        (75, "#d6604d", "dash", "p75"),
-        (90, "#1a1a1a", "dot", "p90"),
+        (50, COLORS["blue"], "solid", "p50", 0),
+        (75, COLORS["copper"], "dash", "p75", -16),
+        (90, COLORS["neutral"], "dot", "p90", -32),
     ]
 
-    for pctl, color, dash, label in pctl_styles:
+    for pctl, color, dash, label, yshift in pctl_styles:
         mae_val = float(spy_mfe_mae["mae_pct"].quantile(pctl / 100))
         mfe_val = float(spy_mfe_mae["mfe_pct"].quantile(pctl / 100))
 
@@ -622,10 +645,11 @@ if spy_mfe_mae is not None:
             line_width=1.5,
             annotation_text=f"MAE {label}: {mae_val:.1f}%",
             annotation_font_size=10,
+            annotation_yshift=yshift,
         )
 
     fig.update_layout(
-        title="MFE vs MAE with Percentile Barriers (SPY 21d)",
+        title="SPY 21-day excursions concentrate below the 75th-percentile barriers",
         xaxis_title="Maximum Adverse Excursion (%)",
         yaxis_title="Maximum Favorable Excursion (%)",
         xaxis_range=[0, x_max],
@@ -846,11 +870,14 @@ if spy is not None:
 
 # %% [markdown]
 # Two conventions appear in the table above. The manual MFE/MAE block (Section 3)
-# clips both excursions to be non-negative — adverse moves report as positive
+# clips both excursions to be non-negative - adverse moves report as positive
 # percentages. The `analyze_excursions` library reports adverse excursions as
 # *signed* deviations (negative when the price drops below entry), which is why
 # `mae_p50_pct` shows negative values. Both conventions are valid; barrier
-# calibration only needs the magnitude, so absolute values agree across the two.
+# calibration only needs the magnitude. The two are close but not identical: the
+# library measures excursions on close prices, while the manual block uses
+# intraday high/low, so the manual magnitudes run wider (quantified in the
+# comparison below).
 
 # %%
 # Compare manual single-horizon vs library multi-horizon

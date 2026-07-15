@@ -1,12 +1,12 @@
 # ---
 # jupyter:
 #   jupytext:
-#     cell_metadata_filter: -all
+#     cell_metadata_filter: tags,-all
 #     text_representation:
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.1
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -71,13 +71,14 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import polars as pl
 
 from data import load_nasdaq100_bars
 from utils.data_quality import check_ohlc_invariants, describe_coverage, null_rate, per_asset_stats
-
-# Polars display configuration
+from utils.style import COLORS, FIGSIZE, add_message_title
 
 # %% tags=["parameters"]
 # Always limit data to avoid OOM (full NASDAQ-100 is ~50M rows)
@@ -142,7 +143,7 @@ for i, (col, dtype) in enumerate(df.schema.items()):
 # %%
 # Column families — quote OHLC
 COLUMN_FAMILIES = {
-    "Identifiers": ["timestamp", "symbol", "time", "timestamp", "year", "month"],
+    "Identifiers": ["date", "symbol", "time", "timestamp", "year", "month"],
     "Quote OHLC (Prices)": [
         "open_bid_price",
         "open_ask_price",
@@ -321,18 +322,38 @@ df_sessions = df.with_columns(
     .alias("session")
 )
 
+session_order = ["Pre-market", "Regular", "Post-market"]
 session_nulls = (
     df_sessions.group_by("session")
     .agg(
         pl.len().alias("bars"),
         pl.col("last_trade_price").is_null().mean().alias("null_rate"),
     )
+    .with_columns(pl.col("session").cast(pl.Enum(session_order)))
     .sort("session")
 )
 
-print("\n=== Trade Null Rates by Session ===")
-for row in session_nulls.iter_rows(named=True):
-    print(f"  {row['session']}: {row['null_rate'] * 100:.1f}% null ({row['bars']:,} bars)")
+# %% [markdown]
+# The share of bars with no trade is a session fingerprint: extended-hours bars are
+# mostly empty, while regular-hours bars almost always trade.
+
+# %%
+fig, ax = plt.subplots(figsize=FIGSIZE["single"])
+sessions = session_nulls["session"].to_list()
+null_pct = (session_nulls["null_rate"] * 100).to_numpy()
+bars = ax.bar(sessions, null_pct, color=COLORS["slate"])
+bars[null_pct.argmax()].set_color(COLORS["amber"])
+for x, v in zip(sessions, null_pct):
+    ax.text(x, v + 1, f"{v:.1f}%", ha="center", va="bottom", fontsize=9, color=COLORS["neutral"])
+ax.set_ylabel("Bars with no trade (%)")
+ax.set_xlabel("Trading session")
+ax.set_ylim(0, 100)
+add_message_title(
+    ax,
+    "Missing trades concentrate in the pre- and post-market",
+    subtitle="Share of minute bars with a null last trade price, by session",
+)
+plt.show()
 
 # %% [markdown]
 # ## 4. Data Quality: OHLC Invariants
@@ -396,16 +417,30 @@ df = df.with_columns(
     .alias("spread_bps"),
 )
 
-print("\n=== Spread Distribution (bps) ===")
-print(
-    df.select(
-        pl.col("spread_bps").min().alias("min"),
-        pl.col("spread_bps").quantile(0.25).alias("q25"),
-        pl.col("spread_bps").median().alias("median"),
-        pl.col("spread_bps").quantile(0.75).alias("q75"),
-        pl.col("spread_bps").max().alias("max"),
-    )
+# %% [markdown]
+# The spread distribution is heavy-tailed, so an ECDF reads better than a histogram:
+# most bars sit at a few basis points, with a long tail from illiquid extended-hours bars.
+
+# %%
+spread = df.select(pl.col("spread_bps").drop_nulls().drop_nans()).to_series().to_numpy()
+p99 = np.quantile(spread, 0.99)
+spread_sorted = np.sort(spread)
+ecdf = np.arange(1, len(spread_sorted) + 1) / len(spread_sorted)
+median = float(np.median(spread))
+
+fig, ax = plt.subplots(figsize=FIGSIZE["single"])
+ax.plot(spread_sorted, ecdf, color=COLORS["blue"], linewidth=1.5)
+ax.axvline(median, color=COLORS["neutral"], linestyle="--", linewidth=1)
+ax.text(median, 0.05, f"median {median:.1f} bps", color=COLORS["neutral"], fontsize=9)
+ax.set_xlim(0, p99)
+ax.set_xlabel("Quoted spread (bps)")
+ax.set_ylabel("Cumulative share of bars")
+add_message_title(
+    ax,
+    "Most minute bars quote a tight spread of a few basis points",
+    subtitle=f"Empirical CDF of quoted spread; x-axis clipped at the 99th pct ({p99:.0f} bps)",
 )
+plt.show()
 
 # %% [markdown]
 # ## 6. Trade OHLC: Actual Executions
@@ -501,13 +536,51 @@ available_buckets = [c for c in bucket_cols if c in df.columns]
 
 if available_buckets:
     bucket_stats = df.select([pl.col(c).sum().alias(c) for c in available_buckets])
-
-    print("=== Trade Bucket Volume Distribution ===")
     total = sum(bucket_stats.row(0))
-    for col in available_buckets:
-        vol = bucket_stats[col][0]
-        pct = 100 * vol / total if total > 0 else 0
-        print(f"  {col}: {vol:,} shares ({pct:.1f}%)")
+    bucket_pct = {c: 100 * bucket_stats[c][0] / total for c in available_buckets}
+
+# %% [markdown]
+# Charting the buckets from seller-aggressive (at bid) to buyer-aggressive (at ask) shows
+# how volume splits across the spread. A near-symmetric split around the midpoint is the
+# baseline; a persistent tilt toward the ask or the bid is the tradable signal.
+
+# %%
+order = ["trade_at_bid", "trade_at_bid_mid", "trade_at_mid", "trade_at_mid_ask", "trade_at_ask"]
+order = [c for c in order if c in bucket_pct]
+labels = [c.replace("trade_at_", "").replace("_", "-") for c in order]
+values = [bucket_pct[c] for c in order]
+
+fig, ax = plt.subplots(figsize=FIGSIZE["single"])
+colors = [
+    COLORS["negative"],
+    COLORS["copper"],
+    COLORS["neutral"],
+    COLORS["amber"],
+    COLORS["positive"],
+]
+ax.barh(labels, values, color=colors[: len(order)])
+for y, v in enumerate(values):
+    ax.text(v + 0.3, y, f"{v:.1f}%", va="center", fontsize=9, color=COLORS["neutral"])
+ax.set_xlabel("Share of classified trade volume (%)")
+ax.set_ylabel("Execution location vs NBBO")
+ax.invert_yaxis()
+add_message_title(
+    ax,
+    "Trade volume splits roughly symmetrically around the midpoint",
+    subtitle="Aggressor buckets ordered seller-aggressive (bid) to buyer-aggressive (ask)",
+)
+plt.show()
+
+# %% [markdown]
+# ### Order Flow Imbalance
+#
+# Aggregating the buy- and sell-aggressor buckets into a single signed ratio gives the
+# order flow imbalance:
+#
+# $$\text{OFI} = \frac{V_\text{buy} - V_\text{sell}}{V_\text{buy} + V_\text{sell}}$$
+#
+# where $V_\text{buy}$ is volume executed at or above the midpoint and $V_\text{sell}$ is
+# volume at or below it. OFI ranges from $-1$ (all sellers) to $+1$ (all buyers).
 
 # %%
 # Compute Order Flow Imbalance (OFI)
@@ -529,9 +602,7 @@ if all(
         .alias("order_flow_imbalance"),
     )
 
-    print("\n=== Order Flow Imbalance (OFI) ===")
-    print("OFI = (buy_aggressor - sell_aggressor) / (buy_aggressor + sell_aggressor)")
-    print("Range: -1 (all sellers) to +1 (all buyers)\n")
+    print("=== Order Flow Imbalance (OFI) ===")
     print(
         df.select(
             pl.col("order_flow_imbalance").mean().alias("mean"),
@@ -708,20 +779,7 @@ if "finra_volume" in df.columns:
             (pl.col("finra_volume").sum() / pl.col("total_volume").sum()).alias("finra_share"),
         )
     )
-
-    # FINRA share by hour (intraday pattern)
-    df_rth = df.filter((pl.col("timestamp").dt.hour() >= 10) & (pl.col("timestamp").dt.hour() < 16))
-
-    hourly_finra = (
-        df_rth.with_columns(pl.col("timestamp").dt.hour().alias("hour"))
-        .group_by("hour")
-        .agg(pl.col("finra_share").mean().alias("avg_finra_share"))
-        .sort("hour")
-    )
-
-    print("\n=== FINRA Share by Hour (RTH) ===")
-    for row in hourly_finra.iter_rows(named=True):
-        print(f"  {row['hour']:02d}:00: {row['avg_finra_share'] * 100:.1f}%")
+    # The intraday shape of the FINRA share is charted in section 14.
 
 # %% [markdown]
 # ## 11. Spread: Liquidity Conditions
@@ -747,24 +805,7 @@ if "min_spread" in df.columns:
             (pl.col("min_spread") == 0).mean().alias("locked_market_rate"),
         )
     )
-
-    # Spread by hour
-    hourly_spread = (
-        df_rth.with_columns(pl.col("timestamp").dt.hour().alias("hour"))
-        .group_by("hour")
-        .agg(
-            pl.col("spread_bps").mean().alias("avg_spread_bps"),
-            (pl.col("min_spread") == 0).mean().alias("locked_rate"),
-        )
-        .sort("hour")
-    )
-
-    print("\n=== Spread by Hour (RTH) ===")
-    for row in hourly_spread.iter_rows(named=True):
-        print(
-            f"  {row['hour']:02d}:00: {row['avg_spread_bps']:.1f} bps, "
-            f"{row['locked_rate'] * 100:.2f}% locked"
-        )
+    # The intraday spread curve is charted in section 14.
 
 # %% [markdown]
 # ## 12. VWAP and Time-Weighted Prices
@@ -830,66 +871,84 @@ df_day = (
 print(f"=== Deep Dive: {top_symbol} on {top_day} ({df_day.height:,} bars) ===")
 
 # %%
-# Multi-panel microstructure dashboard
-fig, axes = plt.subplots(nrows=5, ncols=1, figsize=(14, 12), sharex=True)
+# Multi-panel microstructure dashboard: one row per mechanism, shared time axis
+fig, axes = plt.subplots(nrows=5, ncols=1, figsize=(FIGSIZE["single"][0], 9), sharex=True)
 
 ts = df_day["timestamp"].to_numpy()
 
-# Panel 1: Price
+# Panel 1: Price vs midpoint
 if "last_trade_price" in df_day.columns:
-    axes[0].plot(ts, df_day["last_trade_price"].to_numpy(), label="Last Trade", linewidth=1)
+    axes[0].plot(
+        ts,
+        df_day["last_trade_price"].to_numpy(),
+        color=COLORS["blue"],
+        linewidth=1,
+        label="Last trade",
+    )
 if "mid_price" in df_day.columns:
-    axes[0].plot(ts, df_day["mid_price"].to_numpy(), label="Midpoint", alpha=0.7, linestyle="--")
+    axes[0].plot(
+        ts,
+        df_day["mid_price"].to_numpy(),
+        color=COLORS["neutral"],
+        alpha=0.8,
+        linewidth=1,
+        linestyle="--",
+        label="Midpoint",
+    )
 axes[0].set_ylabel("Price ($)")
 axes[0].legend(loc="upper left")
-axes[0].set_title(f"{top_symbol} - {top_day} - Microstructure Dashboard")
+add_message_title(
+    axes[0],
+    f"A single session in five microstructure views: {top_symbol} on {top_day}",
+    subtitle="Price, spread, volume, order-flow imbalance, and tick direction share one clock",
+)
 
 # Panel 2: Spread
 if "spread_bps" in df_day.columns:
-    axes[1].fill_between(ts, df_day["spread_bps"].to_numpy(), color="orange", alpha=0.5)
+    axes[1].fill_between(ts, df_day["spread_bps"].to_numpy(), color=COLORS["amber"], alpha=0.6)
     axes[1].set_ylabel("Spread (bps)")
 
-# Panel 3: Volume
+# Panel 3: Volume (exchange vs off-exchange)
 if "volume" in df_day.columns and "finra_volume" in df_day.columns:
-    axes[2].bar(ts, df_day["volume"].to_numpy(), width=0.0005, label="Exchange", color="steelblue")
+    axes[2].bar(
+        ts, df_day["volume"].to_numpy(), width=0.0005, label="Exchange", color=COLORS["blue"]
+    )
     axes[2].bar(
         ts,
         df_day["finra_volume"].to_numpy(),
         width=0.0005,
         bottom=df_day["volume"].to_numpy(),
-        label="FINRA",
-        color="purple",
-        alpha=0.7,
+        label="Off-exchange (FINRA)",
+        color=COLORS["copper"],
+        alpha=0.9,
     )
-    axes[2].set_ylabel("Volume")
+    axes[2].set_ylabel("Volume (shares, log)")
     axes[2].set_yscale("log")
     axes[2].legend(loc="upper right")
 
-# Panel 4: OFI
+# Panel 4: OFI (green when buyers dominate, red when sellers do)
 if "order_flow_imbalance" in df_day.columns:
     ofi = df_day["order_flow_imbalance"].to_numpy()
-    colors = ["green" if x > 0 else "red" for x in ofi]
-    axes[3].bar(ts, ofi, width=0.0005, color=colors, alpha=0.7)
-    axes[3].set_ylabel("OFI")
-    axes[3].axhline(y=0, color="gray", linestyle="--", alpha=0.5)
+    bar_colors = [COLORS["positive"] if x > 0 else COLORS["negative"] for x in ofi]
+    axes[3].bar(ts, ofi, width=0.0005, color=bar_colors, alpha=0.8)
+    axes[3].set_ylabel("OFI (-1 to +1)")
+    axes[3].axhline(y=0, color=COLORS["neutral"], linestyle="--", alpha=0.5)
     axes[3].set_ylim(-1, 1)
 
 # Panel 5: Uptick ratio
 if "uptick_ratio" in df_day.columns:
-    axes[4].plot(ts, df_day["uptick_ratio"].to_numpy(), color="green", alpha=0.7)
-    axes[4].set_ylabel("Uptick Ratio")
-    axes[4].axhline(y=0.5, color="gray", linestyle="--", alpha=0.5)
+    axes[4].plot(ts, df_day["uptick_ratio"].to_numpy(), color=COLORS["blue"], alpha=0.9)
+    axes[4].set_ylabel("Uptick ratio")
+    axes[4].axhline(y=0.5, color=COLORS["neutral"], linestyle="--", alpha=0.5)
     axes[4].set_ylim(0, 1)
     axes[4].set_xlabel("Time (ET)")
 
+# Single session: label the shared x-axis every 2 hours as HH:MM (sharex propagates to all panels)
+axes[4].xaxis.set_major_locator(mdates.HourLocator(interval=2))
+axes[4].xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
 plt.tight_layout()
 plt.show()
-
-# Clean up large arrays to free memory
-del ts, fig, axes
-import gc
-
-gc.collect()
 
 # %% [markdown]
 # ## 14. Intraday Patterns
@@ -916,43 +975,48 @@ df_rth_hours = (
 )
 
 # %%
-fig, axes = plt.subplots(2, 2, figsize=(14, 8))
+fig, axes = plt.subplots(2, 2, figsize=FIGSIZE["dashboard_2x2"])
 
 hours = df_rth_hours["hour"].to_numpy()
 
 # Spread pattern
-axes[0, 0].plot(hours, df_rth_hours["avg_spread"].to_numpy(), marker="o", color="orange")
+axes[0, 0].plot(hours, df_rth_hours["avg_spread"].to_numpy(), marker="o", color=COLORS["amber"])
 axes[0, 0].set_xlabel("Hour (ET)")
 axes[0, 0].set_ylabel("Spread (bps)")
-axes[0, 0].set_title("Average Spread by Hour")
-axes[0, 0].grid(True, alpha=0.3)
+axes[0, 0].set_title("Average quoted spread", loc="left", color=COLORS["blue"])
 
 # Volume pattern
-axes[0, 1].bar(hours, df_rth_hours["total_volume"].to_numpy() / 1e9, color="steelblue")
+axes[0, 1].bar(hours, df_rth_hours["total_volume"].to_numpy() / 1e9, color=COLORS["blue"])
 axes[0, 1].set_xlabel("Hour (ET)")
-axes[0, 1].set_ylabel("Volume (Billions)")
-axes[0, 1].set_title("Total Volume by Hour")
-axes[0, 1].grid(True, alpha=0.3)
+axes[0, 1].set_ylabel("Exchange volume (billion shares)")
+axes[0, 1].set_title("Traded volume", loc="left", color=COLORS["blue"])
 
 # FINRA share pattern
 if "finra_share" in df.columns:
     axes[1, 0].plot(
-        hours, df_rth_hours["avg_finra_share"].to_numpy() * 100, marker="o", color="purple"
+        hours, df_rth_hours["avg_finra_share"].to_numpy() * 100, marker="o", color=COLORS["copper"]
     )
     axes[1, 0].set_xlabel("Hour (ET)")
-    axes[1, 0].set_ylabel("FINRA Share (%)")
-    axes[1, 0].set_title("Off-Exchange Activity by Hour")
-    axes[1, 0].grid(True, alpha=0.3)
+    axes[1, 0].set_ylabel("Off-exchange share (%)")
+    axes[1, 0].set_title("Off-exchange (FINRA) share", loc="left", color=COLORS["blue"])
 
 # OFI volatility pattern
 if "order_flow_imbalance" in df.columns:
-    axes[1, 1].plot(hours, df_rth_hours["ofi_volatility"].to_numpy(), marker="o", color="green")
+    axes[1, 1].plot(
+        hours, df_rth_hours["ofi_volatility"].to_numpy(), marker="o", color=COLORS["positive"]
+    )
     axes[1, 1].set_xlabel("Hour (ET)")
-    axes[1, 1].set_ylabel("OFI Std Dev")
-    axes[1, 1].set_title("Order Flow Imbalance Volatility by Hour")
-    axes[1, 1].grid(True, alpha=0.3)
+    axes[1, 1].set_ylabel("OFI standard deviation")
+    axes[1, 1].set_title("Order-flow imbalance volatility", loc="left", color=COLORS["blue"])
 
-plt.suptitle("Intraday Microstructure Patterns", fontsize=14)
+fig.suptitle(
+    "Spread, volume, and off-exchange share each follow their own intraday clock",
+    x=0.01,
+    ha="left",
+    fontsize=13,
+    color=COLORS["blue"],
+    fontweight="semibold",
+)
 plt.tight_layout()
 plt.show()
 
@@ -1058,6 +1122,7 @@ plt.show()
 # ### Next Steps
 #
 # - **Ch3 `11_algoseek_taq_eda`**: TAQ tick-level data exploration
-# - **Ch8 `microstructure_features.py`**: Engineer alpha factors (Kyle's Lambda, VPIN)
+# - **Ch8 `08_financial_features/02_microstructure_features`**: Engineer alpha factors
+#   (Kyle's Lambda, VPIN)
 # - **Ch9**: Evaluate feature predictive power
 # - **Ch12**: Build ML models using microstructure features

@@ -101,6 +101,58 @@ df.group_by("symbol").len().rename({"len": "days"}).sort("symbol")
 df.head(10)
 
 # %% [markdown]
+# ### Data Integrity Check
+#
+# These KXFED contracts are thinly traded: only a handful of bars carry any volume, and
+# the rest are daily carry-forward snapshots. Two problems follow. First, some fields are
+# corrupt: a price of exactly 0 (open, low, or close) while the high still holds the prior
+# level is an ingestion artifact, since a live contract trades inside (0, 1) and never
+# prints a true zero the same day it closes near 0.9. Second, on a zero-volume day there
+# is no genuine intraday range at all, so a `low` far below the `close` is stale rather
+# than traded. The one reliable field is `close` (the implied probability). We therefore
+# carry the last valid close forward within each contract and rebuild every non-traded
+# bar as a flat snapshot at that close, keeping raw OHLC only where the bar actually
+# traded. Left unhandled, these artifacts inflate both the close-price range (misranking a
+# near-certain contract as "most active") and the intraday range shown in Section 6.
+
+# %%
+traded = pl.col("volume") > 0
+
+# Report the clearest ingestion artifacts: a price field of exactly 0 with a positive high.
+zero_price_mask = (pl.col("high") > 0.0) & (
+    (pl.col("open") == 0.0) | (pl.col("low") == 0.0) | (pl.col("close") == 0.0)
+)
+artifact_bars = (
+    df.filter(zero_price_mask)
+    .select("timestamp", "symbol", "open", "high", "low", "close", "volume")
+    .sort("timestamp", "symbol")
+)
+print(f"Zero-price artifact bars (a price field of 0 with a positive high): {artifact_bars.height}")
+print(f"Genuinely traded bars (volume > 0): {df.filter(traded).height} of {df.height}")
+
+# Repair: null any close that collapsed to 0, carry the last valid close forward (and
+# backward for a leading gap) within each contract, then rebuild every non-traded bar as
+# a flat snapshot at that close so no spurious intraday range survives.
+df = (
+    df.sort("symbol", "timestamp")
+    .with_columns(
+        pl.when((pl.col("close") == 0.0) & (pl.col("high") > 0.0))
+        .then(None)
+        .otherwise(pl.col("close"))
+        .alias("close")
+    )
+    .with_columns(pl.col("close").forward_fill().over("symbol").alias("close"))
+    .with_columns(pl.col("close").backward_fill().over("symbol").alias("close"))
+    .with_columns(
+        pl.when(traded).then(pl.col("open")).otherwise(pl.col("close")).alias("open"),
+        pl.when(traded).then(pl.col("high")).otherwise(pl.col("close")).alias("high"),
+        pl.when(traded).then(pl.col("low")).otherwise(pl.col("close")).alias("low"),
+    )
+)
+
+artifact_bars
+
+# %% [markdown]
 # ## 3. Contract Universe
 #
 # All contracts are from the KXFED (Federal Reserve) series, covering different
@@ -131,14 +183,15 @@ contracts
 # probabilities (less likely the rate exceeds a high level).
 
 # %%
-# Select contracts with the most price variation for visualization
+# Volume is near zero across these contracts, so "most active" means the widest range
+# in implied probability (on the cleaned data), which flags the genuine battleground
+# thresholds rather than a data glitch.
 price_range = (
     df.group_by("symbol")
     .agg((pl.col("close").max() - pl.col("close").min()).alias("range"))
     .sort("range", descending=True)
 )
 
-# Take top 3 most active contracts
 top_contracts = price_range.head(3)["symbol"].to_list()
 
 fig = go.Figure()
@@ -224,29 +277,45 @@ fig.update_layout(
 fig.show()
 
 # %% [markdown]
-# ## 6. Intraday Price Dynamics
+# ## 6. Day-over-Day Probability Dynamics
 #
-# The OHLCV data captures intraday price ranges. The difference between
-# high and low within a day reflects intraday uncertainty and information flow.
+# These markets trade on only a handful of days in the sample; the rest are zero-volume
+# carry-forward snapshots with no genuine intraday range. Intraday high/low is therefore
+# not a meaningful signal here. What moves is the day-over-day implied probability (the
+# `close` path), so we summarize each contract by how many days it actually traded and by
+# the volatility of its daily probability changes. Contracts whose threshold sits near the
+# expected rate show the largest daily moves.
 
 # %%
-# Add intraday range
-df_enriched = df.with_columns(
-    (pl.col("high") - pl.col("low")).alias("intraday_range"),
+df_enriched = df.sort("symbol", "timestamp").with_columns(
+    pl.col("close").diff().over("symbol").alias("prob_change"),
 )
 
-# Average intraday range by contract
-range_stats = (
+activity = (
     df_enriched.group_by("symbol")
     .agg(
-        pl.col("intraday_range").mean().alias("avg_range"),
-        pl.col("intraday_range").max().alias("max_range"),
-        pl.col("volume").mean().alias("avg_volume"),
+        (pl.col("volume") > 0).sum().alias("traded_days"),
+        pl.col("volume").sum().round(1).alias("total_volume"),
+        pl.col("prob_change").std().round(4).alias("daily_prob_vol"),
+        pl.col("prob_change").abs().max().round(4).alias("max_daily_move"),
     )
-    .sort("avg_range", descending=True)
+    .sort("daily_prob_vol", descending=True, nulls_last=True)
 )
 
-range_stats
+activity
+
+# %%
+ad = activity.to_pandas()
+fig = go.Figure(go.Bar(x=ad["symbol"], y=ad["daily_prob_vol"], marker_color=COLORS["blue"]))
+fig.update_layout(
+    title="Daily Probability Volatility by Contract",
+    xaxis_title="Contract",
+    yaxis_title="Std. of daily probability change",
+    template="plotly_white",
+    height=400,
+)
+fig.update_xaxes(tickangle=-45)
+fig.show()
 
 # %% [markdown]
 # ## 7. Event Indicators for ML
@@ -324,6 +393,13 @@ fig.show()
 
 # %% [markdown]
 # ## 8. Data Quality Assessment
+#
+# Two checks matter for prediction-market data: whether any bars were corrupt (caught
+# and repaired at load), and how much genuine price variation each contract carries.
+
+# %%
+print(f"Zero-price artifact bars caught and repaired at load: {artifact_bars.height}")
+artifact_bars
 
 # %%
 quality_df = (
@@ -337,10 +413,24 @@ quality_df = (
 )
 quality_df
 
+# %%
+qd = quality_df.to_pandas()
+fig = go.Figure(go.Bar(x=qd["symbol"], y=qd["price_range"], marker_color=COLORS["blue"]))
+fig.update_layout(
+    title="Close-Price Range by Contract (cleaned)",
+    xaxis_title="Contract",
+    yaxis_title="Close price range",
+    template="plotly_white",
+    height=400,
+)
+fig.update_xaxes(tickangle=-45)
+fig.show()
+
 # %% [markdown]
-# Most KXFED contracts show limited volume — Fed rate markets on Kalshi are
-# still maturing. The contracts with meaningful price variation (those near the
-# current rate threshold) are most useful as ML features.
+# After repairing the corrupt bars, price variation reflects real market movement.
+# Volume is near zero across the universe, so the range in implied probability, not
+# turnover, is the useful activity signal: contracts whose thresholds sit near the
+# expected rate move the most and carry the richest information for ML features.
 
 # %% [markdown]
 # ## 9. Save Enriched Data
@@ -368,6 +458,10 @@ print(f"Saved {len(kalshi_features)} observations to {output_file}")
 #
 # 4. **Liquidity caveat**: Economic event contracts are still early-stage;
 #    volume is thin compared to traditional derivatives markets
+#
+# 5. **Screen for corrupt bars first**: thin, carry-forward markets are prone to
+#    ingestion artifacts (a positive high with a zero close). Detect and repair them
+#    before ranking or feature engineering, or a single bad bar distorts both.
 #
 # **Next**: See [`13_polymarket_prediction_markets`](13_polymarket_prediction_markets.ipynb) for the higher-liquidity
 # crypto-based alternative and cross-platform comparison.

@@ -62,6 +62,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+import plotly.graph_objects as go
 import polars as pl
 import structlog
 
@@ -78,7 +79,17 @@ from ml4t.data.storage import HiveStorage
 from ml4t.data.storage.backend import StorageConfig
 from ml4t.data.universe import Universe
 
-from utils.paths import get_output_dir
+from utils.paths import REPO_ROOT, get_output_dir
+from utils.style import COLORS
+
+
+def _rel(path):
+    """Repo-relative display path (keeps absolute machine paths out of outputs)."""
+    try:
+        return path.relative_to(REPO_ROOT)
+    except ValueError:
+        return path
+
 
 # Working directory for this notebook's storage examples. Wipe any artifacts
 # from a previous run so the demo is fully reproducible.
@@ -87,7 +98,7 @@ if STORAGE_DIR.exists():
     shutil.rmtree(STORAGE_DIR)
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-print(f"Storage directory: {STORAGE_DIR}")
+print(f"Storage directory: {_rel(STORAGE_DIR)}")
 
 
 # %% tags=["parameters"]
@@ -147,7 +158,53 @@ etf_data = dm.batch_load(
 
 print(f"Combined: {etf_data.shape[0]:,} rows across {etf_data['symbol'].n_unique()} symbols")
 
-etf_data.group_by("symbol").len().sort("symbol")
+# The stacked frame is easier to read as a picture than as a row count. Rebase
+# each ETF's close to 100 at the first 2024 session and color by asset class:
+# the batch is one call, but the panel spans equities (SPY/QQQ/IWM), long bonds
+# (TLT), and gold (GLD). Color carries the asset class, not the ticker — the
+# three equity lines move as a bundle while bonds and gold pull away, which is
+# exactly the cross-asset dispersion a multi-asset loader exists to capture.
+etf_rebased = etf_data.sort("timestamp").with_columns(
+    (pl.col("close") / pl.col("close").first().over("symbol") * 100).alias("rebased")
+)
+
+etf_class = {
+    "SPY": "Equities",
+    "QQQ": "Equities",
+    "IWM": "Equities",
+    "TLT": "Long bonds",
+    "GLD": "Gold",
+}
+class_color = {"Equities": COLORS["blue"], "Long bonds": COLORS["copper"], "Gold": COLORS["amber"]}
+
+fig = go.Figure()
+seen: set[str] = set()
+for sym in etf_symbols:
+    s = etf_rebased.filter(pl.col("symbol") == sym)
+    cls = etf_class[sym]
+    fig.add_trace(
+        go.Scatter(
+            x=s["timestamp"].to_list(),
+            y=s["rebased"].to_list(),
+            mode="lines",
+            line=dict(color=class_color[cls], width=1.5),
+            name=cls,
+            legendgroup=cls,
+            showlegend=cls not in seen,
+            text=sym,
+            hovertemplate="%{text}: %{y:.1f}<extra></extra>",
+        )
+    )
+    seen.add(cls)
+fig.add_hline(y=100, line=dict(color=COLORS["neutral"], width=1, dash="dot"))
+fig.update_layout(
+    title="One batch_load call, three asset classes: 2024 total return (rebased to 100)",
+    xaxis_title="Date",
+    yaxis_title="Rebased close (Jan 2 2024 = 100)",
+    height=420,
+    legend_title="Asset class",
+)
+fig.show()
 
 # %% [markdown]
 # ---
@@ -292,6 +349,41 @@ for f in parquet_files[:8]:
     rel = f.relative_to(hive_root)
     size_kb = f.stat().st_size / 1024
     print(f"  {rel}  ({size_kb:.1f} KB)")
+
+# %% [markdown]
+# The two-year `AAPL` load lands as one Parquet file per calendar month — the
+# `partition_granularity="month"` setting above. A date-range query reads only
+# the months it needs (partition pruning); an incremental update writes only the
+# newest month. Each monthly file below holds ~21 trading days, so the sizes are
+# near-uniform, and every new month is a new partition, never a rewrite.
+
+# %%
+aapl_parts = []
+for f in parquet_files:
+    parts = f.relative_to(hive_root).parts
+    if not parts[0].endswith("AAPL"):
+        continue
+    year = int(parts[1].split("=")[1])
+    month = int(parts[2].split("=")[1])
+    aapl_parts.append({"period": f"{year}-{month:02d}", "size_kb": f.stat().st_size / 1024})
+
+aapl_sizes = pl.DataFrame(aapl_parts).sort("period")
+
+fig = go.Figure(
+    go.Bar(
+        x=aapl_sizes["period"].to_list(),
+        y=aapl_sizes["size_kb"].to_list(),
+        marker_color=COLORS["blue"],
+    )
+)
+fig.update_layout(
+    title=f"AAPL Hive storage: one Parquet partition per month ({len(aapl_sizes)} files)",
+    xaxis_title="Partition (year-month)",
+    yaxis_title="Partition size (KB)",
+    height=420,
+    showlegend=False,
+)
+fig.show()
 
 # %% [markdown]
 # ---

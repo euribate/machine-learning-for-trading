@@ -55,6 +55,7 @@ from statsforecast.models import AutoARIMA
 from data import load_etfs
 from utils.paths import get_case_study_dir
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -309,8 +310,8 @@ ax.fill_between(
     wf_dates,
     -2 * sv_features_df["vol_posterior_mean"],
     2 * sv_features_df["vol_posterior_mean"],
-    alpha=0.3,
-    color="red",
+    alpha=0.15,
+    color=COLORS["negative"],
     label="±2σ (filtered)",
 )
 ax.set_title("Returns with Walk-Forward Volatility Bands")
@@ -376,7 +377,12 @@ for ax, samples, label, title in zip(
     strict=False,
 ):
     ax.hist(samples, bins=30, density=True, alpha=0.7, edgecolor="white")
-    ax.axvline(samples.mean(), color="red", linestyle="--", label=f"Mean: {samples.mean():.2f}")
+    ax.axvline(
+        samples.mean(),
+        color=COLORS["negative"],
+        linestyle="--",
+        label=f"Mean: {samples.mean():.2f}",
+    )
     ax.set_xlabel(label)
     ax.set_title(title)
     ax.legend(fontsize=8)
@@ -421,8 +427,10 @@ plt.show()
 # %% [markdown]
 # ### Pre-ARIMA Diagnostics
 #
-# Before fitting, verify that log-volatility is stationary (confirming $d=0$)
-# and examine autocorrelation structure.
+# Before fitting, examine stationarity and autocorrelation structure. ADF and
+# Phillips-Perron reject a unit root while KPSS disagrees (consensus: likely
+# stationary, 0.67 agreement), so the differencing order is genuinely ambiguous.
+# We let AutoARIMA's AIC search settle it below — it selects a first difference.
 
 # %%
 log_rv = np.log(rv_gk.clip(lower=1e-8))
@@ -523,25 +531,34 @@ ax.plot(
     linewidth=0.8,
     label=f"ARIMA({p},{d},{q}) forecast (median)",
 )
-ax.plot(arima_df.index, arima_df["actual"], linewidth=0.5, alpha=0.5, label="Actual GK RV")
+ax.plot(
+    arima_df.index,
+    arima_df["actual"],
+    linewidth=0.5,
+    alpha=0.6,
+    color=COLORS["amber"],
+    label="Actual GK RV",
+)
 ax.fill_between(
     arima_df.index,
-    arima_df["arima_forecast"] - 1.96 * arima_df["arima_forecast_std"],
-    arima_df["arima_forecast"] + 1.96 * arima_df["arima_forecast_std"],
+    arima_df["arima_lo_95"],
+    arima_df["arima_hi_95"],
     alpha=0.2,
-    label="95% PI",
+    label="95% PI (log-normal)",
 )
 ax.set_title(f"ARIMA({p},{d},{q}) Forecast on Garman-Klass RV (Log-Normal Back-Transform)")
 ax.set_ylabel("Annualized Volatility")
 ax.legend()
 
 ax = axes[1]
-ax.plot(arima_df.index, arima_df["arima_forecast_std"], linewidth=0.8, color="orange")
-ax.set_title("Forecast Standard Error on Log Scale (arima_forecast_std)")
-ax.set_ylabel("Log-Scale Std Error")
+ax.plot(arima_df.index, arima_df["arima_forecast_std"], linewidth=0.8, color=COLORS["amber"])
+ax.set_title("Forecast Standard Error (Original Scale, from 95% CI Width)")
+ax.set_ylabel("Std Error (Annualized Vol)")
 
 ax = axes[2]
-ax.plot(arima_df.index, arima_df["forecast_uncertainty_ratio"], linewidth=0.8, color="purple")
+ax.plot(
+    arima_df.index, arima_df["forecast_uncertainty_ratio"], linewidth=0.8, color=COLORS["copper"]
+)
 ax.axhline(
     arima_df["forecast_uncertainty_ratio"].median(),
     color="red",

@@ -56,7 +56,9 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import plotly.graph_objects as go
 import polars as pl
+import structlog
 from ml4t.data.anomaly import (
     AnomalyManager,
     PriceStalenessDetector,
@@ -73,10 +75,12 @@ from ml4t.data.validation import OHLCVValidator
 
 from data import load_us_equities
 from utils.paths import get_output_dir
+from utils.style import COLORS
 
-# The library emits per-symbol DEBUG logs that drown the cell output;
-# silence to WARNING so the notebook prints only call results.
-logging.getLogger("ml4t.data.anomaly").setLevel(logging.WARNING)
+# The anomaly/validation libraries log per-symbol detector results through
+# structlog, which bypasses stdlib logging; filter at WARNING so the cells show
+# call results, not the library's internal debug stream.
+structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
 
 
 def _to_date(value: object) -> object:
@@ -85,14 +89,13 @@ def _to_date(value: object) -> object:
 
 
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Five large-cap symbols from the legacy Wiki/Quandl dataset (1962–2018).
+# FB (not META) is the canonical Facebook ticker in this vintage. Readers can
+# override this universe via Papermill.
+SYMBOLS = ["AAPL", "MSFT", "GOOGL", "NVDA", "FB"]
 
 # %%
 OUTPUT_DIR = get_output_dir(2, "quality")
-
-# Five large-cap symbols from the legacy Wiki/Quandl dataset (1962–2018).
-# FB (not META) is the canonical Facebook ticker in this vintage.
-SYMBOLS = ["AAPL", "MSFT", "GOOGL", "NVDA", "FB"]
 
 # %% [markdown]
 # ## Load Sample Data
@@ -184,14 +187,15 @@ clean_df = datasets["AAPL"]
 highs = clean_df["high"].to_numpy().copy()
 lows = clean_df["low"].to_numpy().copy()
 volumes = clean_df["volume"].to_numpy().copy()
-closes = clean_df["close"].to_numpy().copy()
 
 # Fault 1: high < low at rows 10–12
 highs[10:13] = lows[10:13] - 1.0
 # Fault 2: negative volume at row 20
 volumes[20] = -1000
-# Fault 3: null close at row 30
-closes[30] = np.nan
+# Fault 3: null close at row 30. Use a genuine null, not NumPy NaN: Polars stores
+# np.nan as a float NaN that the null check ignores, so only a real null exercises
+# OHLCVValidator's check_nulls.
+close_col = pl.Series("close", clean_df["close"].to_numpy()).scatter(30, None)
 
 dirty_df = pl.DataFrame(
     {
@@ -200,7 +204,7 @@ dirty_df = pl.DataFrame(
         "open": clean_df["open"],
         "high": highs,
         "low": lows,
-        "close": closes,
+        "close": close_col,
         "volume": volumes,
     }
 )
@@ -263,6 +267,24 @@ method_summary = pl.DataFrame(
 )
 method_summary
 
+# %%
+fig = go.Figure(
+    go.Bar(
+        x=[m.upper() for m in method_summary["method"].to_list()],
+        y=method_summary["anomalies"].to_list(),
+        marker_color=COLORS["slate"],
+        text=method_summary["anomalies"].to_list(),
+        textposition="outside",
+    )
+)
+fig.update_layout(
+    title="AAPL return outliers by method (same threshold = 3.0)",
+    xaxis_title="Method",
+    yaxis_title="Events flagged",
+    height=400,
+)
+fig.show()
+
 # %% [markdown]
 # MAD flags the most events because it is more sensitive in the tails of a
 # heavy-tailed return distribution. The biggest "anomalies" in the AAPL series
@@ -285,6 +307,50 @@ top_mad = pl.DataFrame(
     ]
 )
 top_mad
+
+# %% [markdown]
+# Plotting the daily-return series with the MAD-flagged points on top makes the
+# operator's problem concrete: the largest flags are not glitches but the 2014
+# 7:1 split, the 2000 earnings crash, and the earlier 2:1 splits. A detector
+# finds the outliers; only a human (or a corporate-action feed) can say which
+# are data errors and which are the market.
+
+# %%
+returns_df = sample_df.with_columns((pl.col("close").pct_change() * 100).alias("return_pct"))
+anomaly_dates = {_to_date(a.timestamp) for a in mad_anomalies}
+flagged = returns_df.with_columns(
+    pl.col("timestamp")
+    .map_elements(lambda t: _to_date(t) in anomaly_dates, return_dtype=pl.Boolean)
+    .alias("flagged")
+)
+flagged_pts = flagged.filter(pl.col("flagged"))
+
+fig = go.Figure()
+fig.add_trace(
+    go.Scatter(
+        x=returns_df["timestamp"].to_list(),
+        y=returns_df["return_pct"].to_list(),
+        mode="lines",
+        line=dict(color=COLORS["slate"], width=0.6),
+        name="Daily return (%)",
+    )
+)
+fig.add_trace(
+    go.Scatter(
+        x=flagged_pts["timestamp"].to_list(),
+        y=flagged_pts["return_pct"].to_list(),
+        mode="markers",
+        marker=dict(color=COLORS["copper"], size=5),
+        name="MAD-flagged",
+    )
+)
+fig.update_layout(
+    title="AAPL daily returns with MAD-flagged outliers (splits + the 2000 crash)",
+    xaxis_title="Date",
+    yaxis_title="Return (%)",
+    height=420,
+)
+fig.show()
 
 # %% [markdown]
 # ### VolumeSpikeDetector
@@ -431,6 +497,41 @@ print(
 psi_breakdown
 
 # %% [markdown]
+# The per-bin view shows *where* the drift lives. Bin membership is defined on
+# the baseline (each bin holds 10% by construction), so any bar that departs
+# from 10% in the current half is a shift in that part of the return
+# distribution — here, mass moving out of the extreme-return deciles as the
+# second half runs calmer than the first.
+
+# %%
+fig = go.Figure()
+fig.add_trace(
+    go.Bar(
+        x=psi_breakdown["bin"].to_list(),
+        y=(psi_breakdown["baseline_pct"] * 100).to_list(),
+        name="Baseline %",
+        marker_color=COLORS["slate"],
+    )
+)
+fig.add_trace(
+    go.Bar(
+        x=psi_breakdown["bin"].to_list(),
+        y=(psi_breakdown["current_pct"] * 100).to_list(),
+        name="Current %",
+        marker_color=COLORS["copper"],
+    )
+)
+fig.add_hline(y=10, line_dash="dash", line_color=COLORS["amber"], line_width=1)
+fig.update_layout(
+    title=f"AAPL return-decile membership, baseline vs current (PSI = {psi_value:.3f})",
+    xaxis_title="Baseline decile bin",
+    yaxis_title="Share of observations (%)",
+    barmode="group",
+    height=420,
+)
+fig.show()
+
+# %% [markdown]
 # ---
 #
 # ## Part 4: Data Hygiene
@@ -535,6 +636,36 @@ print(f"Potential corporate-action events across {len(datasets)} symbols: {len(e
 events_table.head(10)
 
 # %% [markdown]
+# Plotting every flagged event on one timeline shows what the 25% threshold
+# actually catches in an unadjusted panel: a handful of large, discrete
+# overnight jumps. The split ratios cluster near recognizable levels (2:1 splits
+# near −50%, the 2014 AAPL 7:1 near −85%), with a few large positive gaps. That
+# discrete, structured pattern is the signature of corporate actions, not the
+# continuous smear a data-corruption problem would leave.
+
+# %%
+fig = go.Figure(
+    go.Scatter(
+        x=events_table["date"].to_list(),
+        y=events_table["overnight_pct"].to_list(),
+        mode="markers",
+        marker=dict(color=COLORS["slate"], size=8),
+        text=events_table["symbol"].to_list(),
+        hovertemplate="%{text}<br>%{x|%Y-%m-%d}: %{y:.1f}%<extra></extra>",
+        name="Flagged event",
+    )
+)
+fig.add_hline(y=25, line_dash="dash", line_color=COLORS["amber"], line_width=1)
+fig.add_hline(y=-25, line_dash="dash", line_color=COLORS["amber"], line_width=1)
+fig.update_layout(
+    title="Flagged corporate actions are large discrete jumps, not data noise (±25% threshold)",
+    xaxis_title="Date",
+    yaxis_title="Overnight return (%)",
+    height=420,
+)
+fig.show()
+
+# %% [markdown]
 # ---
 #
 # ## Part 5: Production Quality Pipeline
@@ -619,9 +750,11 @@ pipeline_summary
 # - **Structural validation**: All five symbols pass the OHLCVValidator with
 #   only an `extreme_returns` warning — that warning fires on the same large
 #   moves the corporate-action detector flags below.
-# - **Synthetic-fault detection**: After injecting `high < low`, negative
-#   volume, and a null close into AAPL, the validator returns `passed=False`
-#   with 4 errors / 0 critical / 1 warning, identifying every fault.
+# - **Synthetic-fault detection**: injecting a `high < low` block, a negative
+#   volume, and a null close into AAPL makes the validator return
+#   `passed=False` with 4 errors and 0 critical: one per fault (`null_values`,
+#   two `price_consistency` checks, and `negative_volume`), catching every
+#   injected fault.
 # - **Return-outlier detector method spread (AAPL, threshold = 3.0)**:
 #   MAD = 336 events, Z-score = 83, IQR = 69. MAD is most sensitive in the
 #   tails because the AAPL return distribution is heavy-tailed; the top MAD

@@ -66,6 +66,7 @@ import polars as pl
 from scipy import stats
 
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # importing utils.style activates the ml4t Plotly template
 
 warnings.filterwarnings("ignore")
 
@@ -199,8 +200,10 @@ events_df.group_by("symbol").len().sort("symbol")
 # %% [markdown]
 # ## 3. Event Study: Manual Implementation
 #
-# **Key Fix**: Use proper indexing with MultiIndex or aligned DataFrames,
-# not `get_loc()` on potentially non-unique indices.
+# We align every symbol and the benchmark on a single shared date index (a
+# wide-format returns table) so that event windows are located by integer
+# offset from the event row - never by a label lookup that could match
+# duplicate dates.
 #
 # The manual implementation shows the mechanics:
 # 1. For each event, extract estimation and event windows
@@ -461,10 +464,11 @@ if len(result["event_cars"]) > 0:
     print(f"  Std CAR: {np.std(cars) * 100:.2f}%")
 
 # %% [markdown]
-# ## 4. Visualize CAAR with Correct Confidence Bands
+# ## 4. Visualize CAAR with Confidence Bands
 #
-# **Key Fix**: The variance of CAAR is the **cumulative sum** of daily AAR variances,
-# not a rolling calculation.
+# The variance of the CAAR is the **cumulative sum** of the daily AAR variances,
+# not a rolling calculation - abnormal returns accumulate day by day, so their
+# variances add:
 #
 # $$\text{Var}(\text{CAAR}_t) = \sum_{s=1}^{t} \text{Var}(\text{AAR}_s)$$
 #
@@ -480,18 +484,7 @@ if len(result["daily_aar"]) > 0:
     caar = daily_aar["caar"].to_numpy() * 100  # Convert to percent
     caar_se = daily_aar["caar_se"].to_numpy() * 100
 
-    # CAAR line
-    fig.add_trace(
-        go.Scatter(
-            x=days,
-            y=caar,
-            mode="lines+markers",
-            name="CAAR",
-            line=dict(color="steelblue", width=2),
-        )
-    )
-
-    # 95% confidence band (CORRECT formula)
+    # 95% confidence band (Var(CAAR_t) = cumulative sum of daily AAR variances)
     upper = caar + 1.96 * caar_se
     lower = caar - 1.96 * caar_se
 
@@ -500,44 +493,76 @@ if len(result["daily_aar"]) > 0:
             x=days + days[::-1],
             y=np.concatenate([upper, lower[::-1]]).tolist(),
             fill="toself",
-            fillcolor="rgba(70, 130, 180, 0.2)",
+            fillcolor="rgba(10, 22, 40, 0.15)",  # COLORS["blue"] at 15% opacity
             line=dict(width=0),
             name="95% CI",
         )
     )
 
-    # Event day marker
-    fig.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Event Day")
-    fig.add_hline(y=0, line_dash="dot", line_color="gray")
+    # CAAR line drawn on top of the band
+    fig.add_trace(
+        go.Scatter(
+            x=days,
+            y=caar,
+            mode="lines+markers",
+            name="CAAR",
+            line=dict(color=COLORS["blue"], width=2),
+        )
+    )
+
+    # Event day marker and zero reference
+    fig.add_vline(
+        x=0,
+        line_dash="dash",
+        line_color=COLORS["amber"],
+        annotation_text="Event day",
+        annotation_position="top left",
+    )
+    fig.add_hline(y=0, line_dash="dot", line_color=COLORS["neutral"])
 
     fig.update_layout(
-        title="Cumulative Average Abnormal Return (CAAR) - Momentum Breakouts",
-        xaxis_title="Days Relative to Event",
-        yaxis_title="CAAR (%)",
+        title="Momentum breakouts earn ~1.3% abnormal return by the event day, then partly fade",
+        xaxis_title="Trading days relative to event",
+        yaxis_title="Cumulative average abnormal return (%)",
         height=500,
     )
 
     fig.show()
 
+# %% [markdown]
+# ### Daily abnormal returns
+#
+# Decomposing the CAAR into its per-day contributions shows *where* the abnormal
+# return is earned. Bars significant at the 5% level (|t| > 1.96) are drawn in the
+# primary color; insignificant days are muted; the event day is highlighted.
+
 # %%
-# Print daily AAR and CAAR table
 if len(result["daily_aar"]) > 0:
     daily_aar = result["daily_aar"]
-    print("\nDaily AAR and CAAR:")
-    print("-" * 80)
-    print(f"{'Day':>5} {'AAR (%)':>10} {'t-stat':>10} {'CAAR (%)':>12} {'CAAR t':>10} {'n':>8}")
-    print("-" * 80)
 
-    for row in daily_aar.iter_rows(named=True):
-        sig = "*" if abs(row["t_stat"]) > 1.96 else ""
-        caar_sig = "*" if abs(row["caar_t_stat"]) > 1.96 else ""
-        print(
-            f"{row['day']:>5} {row['aar'] * 100:>10.3f} {row['t_stat']:>10.2f}{sig}"
-            f" {row['caar'] * 100:>12.3f} {row['caar_t_stat']:>10.2f}{caar_sig} {row['n']:>8}"
-        )
+    days = daily_aar["day"].to_list()
+    aar_pct = (daily_aar["aar"] * 100).to_list()
+    t_stats = daily_aar["t_stat"].to_list()
 
-    print("-" * 80)
-    print("* = significant at 5%")
+    # Color by significance; highlight the event day
+    bar_colors = [
+        COLORS["amber"] if d == 0 else (COLORS["blue"] if abs(t) > 1.96 else COLORS["silver_muted"])
+        for d, t in zip(days, t_stats, strict=True)
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=days, y=aar_pct, marker_color=bar_colors, name="AAR"))
+    fig.add_hline(y=0, line_dash="dot", line_color=COLORS["neutral"])
+    fig.add_vline(x=0, line_dash="dash", line_color=COLORS["amber"])
+
+    fig.update_layout(
+        title="The abnormal return is earned on the breakout day; surrounding days are noise",
+        xaxis_title="Trading days relative to event",
+        yaxis_title="Average abnormal return (%)",
+        height=400,
+    )
+
+    fig.show()
 
 # %% [markdown]
 # ## 4b. Library Alternative: EventStudyAnalysis
@@ -594,12 +619,13 @@ lib_result = lib_analysis.run()
 print("=== Library EventStudyAnalysis Results ===\n")
 print(lib_result.summary())
 
-# The library adds tests not in the manual implementation:
-print("\n=== Additional Statistical Tests ===")
-if hasattr(lib_result, "bmp_test"):
-    print(f"BMP test (robust to event-induced variance): t={lib_result.bmp_test['t_stat']:.2f}")
-if hasattr(lib_result, "corrado_test"):
-    print(f"Corrado rank test (non-parametric): z={lib_result.corrado_test['z_stat']:.2f}")
+# The library defaults to the Boehmer et al. (1991) BMP test, which is robust to
+# event-induced variance - the manual t-test above assumes constant variance.
+print("\n=== Robust significance test (library) ===")
+print(f"Test: {lib_result.test_name}")
+print(f"Test statistic: {lib_result.test_statistic:.2f}")
+print(f"P-value: {lib_result.p_value:.4f}")
+print(f"Significant at 5%: {'Yes' if lib_result.p_value < 0.05 else 'No'}")
 
 # %% [markdown]
 # The manual implementation teaches the market model ($R_i = \alpha + \beta R_m$)
@@ -629,24 +655,31 @@ if len(result["event_cars"]) > 0:
         go.Histogram(
             x=cars,
             nbinsx=25,
-            marker_color="steelblue",
-            name="CAR Distribution",
+            marker_color=COLORS["blue"],
+            name="CAR distribution",
         )
     )
 
-    # Mean and zero lines
-    fig.add_vline(x=0, line_dash="dash", line_color="red", annotation_text="Zero")
+    # Zero reference and mean (mean highlighted in amber)
     fig.add_vline(
-        x=np.mean(cars),
-        line_dash="solid",
-        line_color="green",
+        x=0,
+        line_dash="dot",
+        line_color=COLORS["neutral"],
+        annotation_text="Zero",
+        annotation_position="top left",
+    )
+    fig.add_vline(
+        x=float(np.mean(cars)),
+        line_dash="dash",
+        line_color=COLORS["amber"],
         annotation_text=f"Mean: {np.mean(cars):.2f}%",
+        annotation_position="top right",
     )
 
     fig.update_layout(
-        title="Distribution of Event CARs",
-        xaxis_title="Cumulative Abnormal Return (%)",
-        yaxis_title="Frequency",
+        title="Breakout CARs skew positive, with a mean of +1.1% over the 16-day window",
+        xaxis_title="Cumulative abnormal return over event window (%)",
+        yaxis_title="Number of events",
         height=400,
     )
 
@@ -698,23 +731,30 @@ if len(result["abnormal_returns"]) > 0:
     else:
         event_ids = ar_pivot["event_id"].to_list()
 
+    # ML4T diverging scale centered at zero (red = negative, green = positive AR)
+    diverging_scale = [
+        [0.0, COLORS["negative"]],
+        [0.5, COLORS["silver_muted"]],
+        [1.0, COLORS["positive"]],
+    ]
+
     fig = go.Figure(
         data=go.Heatmap(
             z=ar_matrix,
             x=day_cols,
             y=event_ids,
-            colorscale="RdBu",
+            colorscale=diverging_scale,
             zmid=0,
             colorbar=dict(title="AR (%)"),
         )
     )
 
-    fig.add_vline(x=0, line_dash="dash", line_color="yellow", line_width=2)
+    fig.add_vline(x=0, line_dash="dash", line_color=COLORS["amber"], line_width=2)
 
     fig.update_layout(
-        title="Abnormal Returns Heatmap (Events x Days)",
-        xaxis_title="Days Relative to Event",
-        yaxis_title="Event Date",
+        title="Event-day abnormal returns stand out across individual breakout events",
+        xaxis_title="Trading days relative to event",
+        yaxis_title="Event (date + symbol)",
         height=600,
     )
 
@@ -887,7 +927,7 @@ if "short" in validation and len(validation["short"]["daily_aar"]) > 0:
 # | Abnormal Return | $AR = R_{actual} - (\alpha + \beta \cdot R_{market})$ |
 # | CAR | Cumulative sum of AR over event window |
 # | CAAR | Average CAR across events |
-# | CAAR SE | $\sqrt{\sum_{s=1}^{t} \text{Var}(AAR_s) / n}$ |
+# | CAAR SE | $\sqrt{\sum_{s=1}^{t} \sigma_s^2 / n_s}$ |
 #
 # ### Interpretation Guide
 #
@@ -907,11 +947,12 @@ if "short" in validation and len(validation["short"]["daily_aar"]) > 0:
 # %% [markdown]
 # ## Key Takeaways
 #
-# 1. **Proper indexing matters**: Use aligned DataFrames, not `get_loc()` on
-#    potentially non-unique indices.
+# 1. **Alignment matters**: locate event windows by integer offset on a single
+#    shared date index, so duplicate or missing dates cannot misalign the windows.
 #
-# 2. **CAAR variance is cumulative**: SE(CAAR_t) = sqrt(sum of daily variances),
-#    not a simple propagation formula.
+# 2. **CAAR variance is cumulative**: $\text{SE}(\text{CAAR}_t) = \sqrt{\sum_s
+#    \sigma_s^2 / n_s}$ - the daily variances add, they are not propagated by a
+#    rolling formula.
 #
 # 3. **Event studies validate signals**: Signal-triggered "events" should produce
 #    significant abnormal returns if the signal has predictive power.

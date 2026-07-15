@@ -65,6 +65,7 @@ import polars as pl
 from plotly.subplots import make_subplots
 
 from utils.paths import get_chapter_dir
+from utils.style import COLORS  # importing utils.style sets the ml4t Plotly template as default
 
 warnings.filterwarnings("ignore")
 
@@ -76,7 +77,7 @@ START_DATE = "2015-01-01"
 # ## 0. Feature Discovery with ml4t-engineer
 #
 # Before building features manually, let's see what the `ml4t-engineer` library
-# offers. The registry provides 120+ pre-built, validated features that the
+# offers. The registry provides 120 pre-built, validated features that the
 # case study notebooks use throughout Chapters 8-12.
 #
 # For a full tour of the library ecosystem (data loaders, feature computation,
@@ -350,10 +351,16 @@ fig.add_trace(
     row=3,
     col=1,
 )
-fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
-fig.add_hline(y=0, line_dash="dash", line_color="gray", row=3, col=1)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=2, col=1)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=3, col=1)
 
-fig.update_layout(height=600, title="MA Distance: Raw vs Vol-Scaled")
+fig.update_yaxes(title_text="Price ($)", row=1, col=1)
+fig.update_yaxes(title_text="Distance ($)", row=2, col=1)
+fig.update_yaxes(title_text="Distance (ATR units)", row=3, col=1)
+fig.update_xaxes(title_text="Date", row=3, col=1)
+fig.update_layout(
+    height=600, title="Volatility-scaling standardizes MA distance for cross-asset comparison"
+)
 fig.show()
 
 
@@ -462,8 +469,8 @@ dist_ma_df.select(["timestamp", "close", "ma_50", "atr_14", "dist_to_ma_atr"]).t
 #
 # | Estimator | Efficiency | Best For |
 # |-----------|------------|----------|
-# | Close-to-Close | 1x | Baseline |
-# | Parkinson (H-L) | ~5x | High-low only |
+# | Close-to-Close | 1× | Baseline |
+# | Parkinson (H-L) | ~5× | High-low only |
 # | Garman-Klass | ~7× | Full OHLC |
 # | Yang-Zhang | ~8–14× | Best overall |
 
@@ -507,8 +514,8 @@ vol_df.select(["timestamp", "close", "vol_cc_21", "vol_yz_21"]).tail(10)
 #
 # | Estimator | Efficiency vs CC | Data Required |
 # |-----------|-----------------|---------------|
-# | Close-to-Close | 1x | Close |
-# | Parkinson | ~5x | High, Low |
+# | Close-to-Close | 1× | Close |
+# | Parkinson | ~5× | High, Low |
 # | Garman-Klass | ~7× | Open, High, Low, Close |
 # | Yang-Zhang | ~8–14× | Open, High, Low, Close |
 #
@@ -579,7 +586,12 @@ for idx, (col, name) in enumerate(
         col=c,
     )
 
-fig.update_layout(height=500, title="Volatility Estimator Comparison — SPY (21-day)")
+fig.update_yaxes(title_text="Annualized volatility", col=1)
+fig.update_xaxes(title_text="Date", row=2)
+fig.update_layout(
+    height=500,
+    title="Range-based estimators track SPY volatility more smoothly than close-to-close (21-day)",
+)
 fig.show()
 
 # %% [markdown]
@@ -589,10 +601,11 @@ fig.show()
 # that CC misses. Yang-Zhang is preferred for most applications.
 
 # %% [markdown]
-# ### Book Figure: Four OHLC Estimators Overlaid
+# ### Four OHLC Estimators Overlaid
 #
-# Static matplotlib version for print publication — all four estimators on a
-# single panel with line-style variation for grayscale readability.
+# Overlaying all four estimators on a single panel makes their level and timing
+# differences directly comparable. Line styles vary alongside color so the series
+# stay distinct in grayscale.
 
 # %%
 import matplotlib.pyplot as plt
@@ -605,16 +618,17 @@ fig_mpl, ax = plt.subplots(figsize=(12, 5))
 # SPY close price on secondary axis (context for vol spikes)
 ax2 = ax.twinx()
 dates = vol_plot["timestamp"].to_list()
-ax2.fill_between(dates, vol_plot["close"].to_list(), alpha=0.08, color="black")
-ax2.set_ylabel("SPY Close ($)", color="0.5")
-ax2.tick_params(axis="y", labelcolor="0.5")
+ax2.fill_between(dates, vol_plot["close"].to_list(), alpha=0.08, color=COLORS["neutral"])
+ax2.set_ylabel("SPY Close ($)", color=COLORS["neutral"])
+ax2.tick_params(axis="y", labelcolor=COLORS["neutral"])
 
-# Vol estimators on primary axis (convert to percentage for readability)
+# Vol estimators on primary axis (convert to percentage for readability).
+# Line styles vary alongside color so the four series stay distinct in grayscale print.
 estimators = [
-    ("vol_cc", "Close-to-Close (eff. 1.0\u00d7)", "-", "black"),
-    ("vol_parkinson", "Parkinson (eff. 5.2\u00d7)", "--", "#555555"),
-    ("vol_gk", "Garman-Klass (eff. 7.4\u00d7)", ":", "#333333"),
-    ("vol_yz", "Yang-Zhang (eff. 8.4\u00d7)", "-.", "#666666"),
+    ("vol_cc", "Close-to-Close (eff. 1.0\u00d7)", "-", COLORS["blue"]),
+    ("vol_parkinson", "Parkinson (eff. 5.2\u00d7)", "--", COLORS["amber"]),
+    ("vol_gk", "Garman-Klass (eff. 7.4\u00d7)", ":", COLORS["copper"]),
+    ("vol_yz", "Yang-Zhang (eff. 8.4\u00d7)", "-.", COLORS["slate"]),
 ]
 
 for col, label, ls, color in estimators:
@@ -629,8 +643,8 @@ ax.patch.set_visible(False)
 
 plt.show()
 
-# Persist source data so book/08_financial_features/figures/scripts/generate_figure_8_3_*.py
-# can re-render at print resolution without re-executing this notebook (Hard Rule 15).
+# Persist source data so the book figure script can re-render at print resolution
+# without re-executing this notebook.
 _FIG_8_3_ARTIFACT = (
     get_chapter_dir(8)
     / "output"
@@ -828,7 +842,7 @@ fig.add_trace(
     row=2,
     col=1,
 )
-fig.add_hline(y=1, line_dash="dash", line_color="gray", row=2, col=1)
+fig.add_hline(y=1, line_dash="dash", line_color=COLORS["neutral"], row=2, col=1)
 fig.add_trace(
     go.Scatter(
         x=rel_vol_df["timestamp"].to_list()[-n:],
@@ -838,11 +852,15 @@ fig.add_trace(
     row=3,
     col=1,
 )
-fig.add_hline(y=0, line_dash="dash", line_color="gray", row=3, col=1)
-fig.add_hline(y=2, line_dash="dash", line_color="red", row=3, col=1)
-fig.add_hline(y=-2, line_dash="dash", line_color="red", row=3, col=1)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=3, col=1)
+fig.add_hline(y=2, line_dash="dash", line_color=COLORS["negative"], row=3, col=1)
+fig.add_hline(y=-2, line_dash="dash", line_color=COLORS["negative"], row=3, col=1)
 
-fig.update_layout(height=600, title="Volume Features")
+fig.update_yaxes(title_text="Price ($)", row=1, col=1)
+fig.update_yaxes(title_text="Rel. volume (×avg)", row=2, col=1)
+fig.update_yaxes(title_text="Volume z-score", row=3, col=1)
+fig.update_xaxes(title_text="Date", row=3, col=1)
+fig.update_layout(height=600, title="Relative volume and z-scores isolate trading-activity spikes")
 fig.show()
 
 # %% [markdown]

@@ -310,8 +310,8 @@ for name, feat in features.items():
 # %% [markdown]
 # All three features show negative IC, indicating that positive trend estimates
 # predict negative forward returns over the next 5 days — consistent with
-# short-term mean reversion in SPY. The Kalman slope's IC (-0.16) is roughly
-# 5× the magnitude of the 20-day rolling OLS slope (-0.02), so the Kalman
+# short-term mean reversion in SPY. The Kalman slope's IC (-0.156) is roughly
+# 9× the magnitude of the 20-day rolling OLS slope (-0.017), so the Kalman
 # trend produces a stronger contrarian signal at the 5-day horizon than the
 # fixed-window alternative. The innovation feature also carries a small
 # negative IC, which is what we expect from a surprise-style mean-reversion

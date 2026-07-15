@@ -14,7 +14,7 @@
 # ---
 
 # %% [markdown]
-# # Sentiment Analysis Evolution: TF-IDF → Word2Vec → Transformers
+# # Sentiment Analysis Evolution: TF-IDF → GloVe → Transformers
 #
 # **Chapter 10: From Text to Features - The Transformer Breakthrough**
 # **Section Reference**: See Sections 10.2, 10.3, 10.5 for conceptual discussion
@@ -43,18 +43,20 @@
 # - Understand why pre-trained models need fine-tuning for new tasks
 #
 # ## Prerequisites
-# - Sections 10.1–10.4 of the chapter (TF-IDF, static embeddings, Transformers).
+# - Sections 10.1-10.4 of the chapter (TF-IDF, static embeddings, Transformers).
 # - Financial PhraseBank `sentences_allagree` subset on disk (loaded via
 #   `data.load_financial_phrasebank`).
 #
 # ## Related Notebooks
-# - `01_word2vec_training.py` — Skip-gram mechanics on the same corpus.
-# - `04_bert_finetuning.py` — fine-tunes FinBERT on PhraseBank (this notebook
+# - `01_word2vec_training.py` - Skip-gram mechanics on the same corpus.
+# - `04_bert_finetuning.py` - fine-tunes FinBERT on PhraseBank (this notebook
 #   shows the pre-fine-tuning baseline).
 
 # %%
-"""Sentiment Analysis Evolution — compare TF-IDF, Word2Vec, and Transformer approaches on Financial PhraseBank."""
+"""Sentiment Analysis Evolution - compare TF-IDF, GloVe, and Transformer approaches on Financial PhraseBank."""
 
+import contextlib
+import io
 import json
 import warnings
 
@@ -78,13 +80,13 @@ from utils.reproducibility import set_global_seeds
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # %% tags=["parameters"]
-# Production defaults — Papermill can override for fast CI runs.
+# Production defaults - Papermill can override for fast CI runs.
 SEED = 42
 MAX_SAMPLES = 0  # 0 = use the full sentences_allagree subset
 FINBERT_TEST_SAMPLES = 0  # 0 = run FinBERT on the entire stratified test split
 
 # %%
-# Reproducibility — set_global_seeds covers Python random / NumPy / Torch.
+# Reproducibility - set_global_seeds covers Python random / NumPy / Torch.
 # transformers has its own RNG (used by Trainer + pipelines) that needs explicit seeding.
 set_global_seeds(SEED)
 set_transformers_seed(SEED)
@@ -95,7 +97,7 @@ CONFIG = {
     "dataset": {
         "name": "takala/financial_phrasebank",
         "subset": "sentences_allagree",
-        "description": "Financial PhraseBank — 100% annotator agreement subset (2,264 sentences)",
+        "description": "Financial PhraseBank - 100% annotator agreement subset (2,264 sentences)",
     },
     "tfidf": {
         "max_features": 5000,
@@ -126,7 +128,7 @@ print("=" * 70)
 #
 # The Financial PhraseBank (Malo et al., 2014) consists of English-language
 # sentences from financial news, each labelled positive / negative / neutral
-# by 5–8 annotators. We use the `sentences_allagree` subset — the 2,264
+# by 5-8 annotators. We use the `sentences_allagree` subset - the 2,264
 # sentences where every annotator picked the same label, i.e., the
 # highest-precision portion of the corpus.
 
@@ -296,7 +298,10 @@ def get_embedding_model():
     # Use 100-dim GloVe vectors trained on Wikipedia + Gigaword
     model_name = "glove-wiki-gigaword-100"
     print(f"Loading {model_name}...")
-    return api.load(model_name)
+    # Suppress the gensim downloader's per-chunk progress stream so a
+    # fresh-container download does not flood the notebook output.
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return api.load(model_name)
 
 
 # %% [markdown]
@@ -354,14 +359,18 @@ print(f"  F1 (macro): {f1_glove:.3f}")
 #
 # Transformers learn contextual representations that vary with surrounding words.
 # FinBERT (yiyanghkust/finbert-tone) is pre-trained on financial text and already
-# has a sentiment classification head. However, it was trained on analyst reports,
-# which have different phrasing patterns than Financial PhraseBank's news sentences.
-# Same labels (positive/negative/neutral), different text distribution.
+# has a sentiment classification head, so we can score PhraseBank without any
+# task-specific fine-tuning. It was trained on analyst reports - a different text
+# source than PhraseBank's news sentences (same labels, different distribution) -
+# so this measures cross-dataset transfer.
 #
-# **Critical Note**: This is NOT "zero-shot" since FinBERT-tone already has a
-# sentiment classification head trained on analyst reports. We're testing
-# **cross-dataset transfer** without task-specific fine-tuning on PhraseBank.
-# The poor performance demonstrates **distribution shift**, not model quality.
+# **Critical Note**: This is NOT "zero-shot" - FinBERT-tone already carries a
+# sentiment head trained on analyst reports; we are testing cross-dataset transfer,
+# not prompting. On this high-agreement subset that transfer is strong: FinBERT
+# leads both lexical baselines below. The distribution-shift cost shows up instead
+# on the noisier mixed-agreement subset that the chapter's Section 10.4 table uses,
+# where the same checkpoint slips behind TF-IDF. Section 6 and the takeaways
+# quantify both sides.
 
 # %%
 # ============================================================================
@@ -380,8 +389,8 @@ print("\nLabel mapping (FinBERT → our numeric labels):")
 for label, idx in CONFIG["finbert"]["labels"].items():
     print(f"  {label} → {idx}")
 print("\nThis checkpoint was fine-tuned on analyst reports, not PhraseBank;")
-print("differences vs the TF-IDF / GloVe baselines below reflect distribution shift,")
-print("not a like-for-like comparison of model quality.")
+print("scores below therefore measure cross-dataset transfer, not a like-for-like")
+print("comparison after task-specific fine-tuning.")
 print("=" * 70)
 
 
@@ -437,7 +446,7 @@ print(f"  F1 (macro): {f1_finbert:.3f}")
 # Per-class diagnostic to understand failure patterns
 from sklearn.metrics import classification_report
 
-print("\nPer-class breakdown (explains why cross-dataset transfer struggles):")
+print("\nPer-class breakdown:")
 print(
     classification_report(
         y_test_finbert, y_pred_finbert, target_names=["negative", "neutral", "positive"]
@@ -557,20 +566,20 @@ plt.show()
 #   and stop-word removal, lexical signal alone classifies most sentences
 #   correctly because financial news vocabulary (`profit`, `loss`, `revenue`,
 #   `narrowed`, `tumbled`) is highly polarised.
-# - **GloVe averages add semantic similarity** — synonyms cluster, so a held-
+# - **GloVe averages add semantic similarity** - synonyms cluster, so a held-
 #   out phrase like "earnings retreated" benefits from proximity to training
 #   examples about "profits falling". The gain over TF-IDF is modest because
 #   the document-vector mean throws away word order and negation.
 # - **FinBERT-tone evaluated without task-specific fine-tuning** depends
 #   strongly on which PhraseBank subset is in scope. On `sentences_allagree`
-#   (this notebook's current subset — only sentences where every annotator
+#   (this notebook's current subset - only sentences where every annotator
 #   agreed), FinBERT outperforms both lexical baselines because the high-
 #   agreement labels are the cleanest signal and the pre-trained head can
 #   transfer well. On the larger mixed-agreement subset that the chapter
-#   §10.4 table reports, FinBERT underperforms TF-IDF — the same checkpoint
+#   §10.4 table reports, FinBERT underperforms TF-IDF - the same checkpoint
 #   degrades on noisier labels because its training distribution is analyst-
 #   report tone, not journalistic news. This is "pre-trained, no task-
-#   specific fine-tuning" — not "zero-shot" in the prompted-LLM sense,
+#   specific fine-tuning" - not "zero-shot" in the prompted-LLM sense,
 #   because the classification head already exists.
 #
 # The next code cells quantify each contrast with the actual run; the
@@ -688,7 +697,7 @@ print(f"  - {json_file}")
 #    agreement PhraseBank subset used here, FinBERT outperforms the lexical
 #    baselines because clean labels expose the value of pre-training. On the
 #    larger mixed-agreement subset (the §10.4 table), the same checkpoint
-#    underperforms TF-IDF — distribution shift between analyst-report training
+#    underperforms TF-IDF - distribution shift between analyst-report training
 #    text and journalistic test text matters more when label noise grows.
 #
 # 4. **Distribution shift is the key lesson**: same labels (positive/neutral/

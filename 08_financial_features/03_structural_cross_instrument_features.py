@@ -62,6 +62,11 @@ from plotly.subplots import make_subplots
 
 from utils.paths import get_chapter_dir
 
+# Importing utils.style registers and activates the ML4T Plotly template
+# (house palette, fonts, gridlines) as the repo-wide default, so every Plotly
+# figure below inherits the book style; matplotlib is styled via matplotlibrc.
+from utils.style import COLORS
+
 warnings.filterwarnings("ignore")
 
 # %% tags=["parameters"]
@@ -130,12 +135,15 @@ def compute_roll_yield(df: pl.DataFrame) -> pl.DataFrame:
 
     We approximate DeltaT ≈ 30 days (typical monthly roll).
     """
-    # Pivot to get front and deferred prices side by side
+    # Pivot to get front and deferred prices side by side. Term structure is a
+    # spread between contemporaneous tenor *levels*, so it must read raw_close:
+    # the ratio-adjusted series bakes each tenor's accumulated roll history into
+    # the level, which is not the curve.
     front = df.filter(pl.col("tenor") == 0).select(
-        ["session_date", "product", pl.col("close").alias("close_front")]
+        ["session_date", "product", pl.col("raw_close").alias("close_front")]
     )
     deferred = df.filter(pl.col("tenor") == 1).select(
-        ["session_date", "product", pl.col("close").alias("close_deferred")]
+        ["session_date", "product", pl.col("raw_close").alias("close_deferred")]
     )
 
     # Join and compute carry
@@ -179,14 +187,15 @@ for product in PRODUCTS:
 # %%
 def compute_term_structure_features(df: pl.DataFrame) -> pl.DataFrame:
     """Compute slope and curvature from 3-tenor term structure."""
+    # Contemporaneous tenor levels → raw_close (see compute_roll_yield note).
     t0 = df.filter(pl.col("tenor") == 0).select(
-        ["session_date", "product", pl.col("close").alias("c0")]
+        ["session_date", "product", pl.col("raw_close").alias("c0")]
     )
     t1 = df.filter(pl.col("tenor") == 1).select(
-        ["session_date", "product", pl.col("close").alias("c1")]
+        ["session_date", "product", pl.col("raw_close").alias("c1")]
     )
     t2 = df.filter(pl.col("tenor") == 2).select(
-        ["session_date", "product", pl.col("close").alias("c2")]
+        ["session_date", "product", pl.col("raw_close").alias("c2")]
     )
 
     ts = t0.join(t1, on=["session_date", "product"], how="inner").join(
@@ -241,7 +250,7 @@ for idx, product in enumerate(PRODUCTS):
         row=row,
         col=col,
     )
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", row=row, col=col)
+    fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=row, col=col)
 
 fig.update_layout(height=500, title="Carry (Roll Yield) Across Products", showlegend=False)
 fig.update_yaxes(title_text="Roll Yield (ann.)", row=1, col=1)
@@ -250,8 +259,11 @@ fig.show()
 
 # %% [markdown]
 # **Interpretation**: Backwardation (positive carry) in commodities like CL
-# typically indicates supply tightness. GC and ZN often trade in contango.
-# ES carry reflects the cost-of-carry relationship (dividends minus financing).
+# typically indicates supply tightness; CL prints positive roll yield on 44% of
+# sessions. GC is in contango 80% of the time, as storage and financing costs
+# dominate. ZN is backwardated on 62% of sessions, reflecting the positive carry
+# of a coupon-bearing note held against a lower financing rate. ES carry reflects
+# the cost-of-carry relationship (dividends minus financing).
 #
 # **Crypto funding rates** operate on a distinct clock (8-hour settlements) with
 # much higher volatility. See the `crypto_perps_funding` case study for the
@@ -343,63 +355,40 @@ SECTOR_GRAYS = {
 }
 
 # %%
-# Plot cross-sectional roll yield snapshot
+# Build the figure in one cell so the bars, regime annotations, and sector
+# legend render together (inline flushes a figure at cell end — splitting the
+# legend into a later cell would display the bars before it is attached).
 products = snapshot["product"].to_list()
 yields = snapshot["roll_yield_ann"].to_list()
 colors = [SECTOR_GRAYS.get(SECTORS.get(p, "Other"), "0.50") for p in products]
 
 fig_mpl, ax = plt.subplots(figsize=(12, 5))
-
-bars = ax.bar(range(len(products)), yields, color=colors, edgecolor="black", linewidth=0.5)
+ax.bar(range(len(products)), yields, color=colors, edgecolor="black", linewidth=0.5)
 ax.set_xticks(range(len(products)))
 ax.set_xticklabels(products, fontsize=7, rotation=45, ha="right")
 ax.axhline(y=0, color="black", linewidth=0.8)
 ax.set_ylabel("Annualized Roll Yield")
 ax.set_title(f"Annualized Roll Yield Across CME Products ({snapshot_date})")
 
-# %%
-# Annotations and legend
+# Regime annotations
 y_max, y_min = (max(yields), min(yields)) if yields else (0.1, -0.1)
-ax.text(
-    len(products) * 0.75,
-    y_max * 0.7,
-    "Backwardation\n(holder earns)",
-    ha="center",
-    va="center",
-    fontsize=8,
-    style="italic",
-    color="0.3",
-)
-ax.text(
-    len(products) * 0.25,
-    y_min * 0.7,
-    "Contango\n(holder pays)",
-    ha="center",
-    va="center",
-    fontsize=8,
-    style="italic",
-    color="0.3",
-)
+text_kw = dict(ha="center", va="center", fontsize=8, style="italic", color="0.3")
+ax.text(len(products) * 0.75, y_max * 0.7, "Backwardation\n(holder earns)", **text_kw)
+ax.text(len(products) * 0.25, y_min * 0.7, "Contango\n(holder pays)", **text_kw)
 
-# Compact sector legend
+# Compact sector legend for the grayscale fills
 unique_sectors = sorted(set(SECTORS.get(p, "Other") for p in products))
 legend_handles = [
     plt.Rectangle((0, 0), 1, 1, fc=SECTOR_GRAYS.get(s, "0.50"), ec="black", lw=0.5)
     for s in unique_sectors
 ]
-ax.legend(
-    legend_handles,
-    unique_sectors,
-    loc="upper left",
-    fontsize=7,
-    frameon=False,
-    ncol=len(unique_sectors),
-)
+ax.legend(legend_handles, unique_sectors, loc="upper left", fontsize=7, frameon=False, ncol=4)
 
 plt.show()
 
-# Persist source data so book/08_financial_features/figures/scripts/generate_figure_8_4_*.py
-# can re-render at print resolution without re-executing this notebook (Hard Rule 15).
+# %%
+# Persist the snapshot so the book figure script can re-render it at print
+# resolution without re-executing this notebook.
 _FIG_8_4_ARTIFACT = (
     get_chapter_dir(8) / "output" / "book_figure_artifacts" / "figure_8_4_carry_roll_yield.parquet"
 )
@@ -848,7 +837,7 @@ fig.add_trace(
     row=2,
     col=1,
 )
-fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=2, col=1)
 
 fig.add_trace(
     go.Scatter(
@@ -859,7 +848,7 @@ fig.add_trace(
     row=3,
     col=1,
 )
-fig.add_hline(y=1, line_dash="dash", line_color="gray", row=3, col=1)
+fig.add_hline(y=1, line_dash="dash", line_color=COLORS["neutral"], row=3, col=1)
 fig.add_trace(
     go.Scatter(
         x=viz["timestamp"].to_list(),
@@ -870,7 +859,7 @@ fig.add_trace(
     row=4,
     col=1,
 )
-fig.add_hline(y=0, line_dash="dash", line_color="gray", row=4, col=1)
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"], row=4, col=1)
 
 fig.update_layout(height=700, title=f"Options-Implied Features — {viz_symbol}", showlegend=False)
 fig.update_yaxes(title_text="IV", row=1, col=1)

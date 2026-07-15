@@ -48,7 +48,7 @@
 # - **Related**: Information extraction pipelines, knowledge graphs
 
 # %%
-"""Financial Named Entity Recognition Fine-Tuning — fine-tune a Transformer for NER on financial text."""
+"""Financial Named Entity Recognition Fine-Tuning - fine-tune a Transformer for NER on financial text."""
 
 import json
 import warnings
@@ -81,7 +81,7 @@ N_SAMPLES = 500
 N_EPOCHS = 3
 
 # %%
-# Reproducibility — set_global_seeds covers Python random / NumPy / Torch.
+# Reproducibility - set_global_seeds covers Python random / NumPy / Torch.
 # transformers Trainer uses its own RNG that needs explicit seeding.
 set_global_seeds(SEED)
 set_transformers_seed(SEED)
@@ -124,7 +124,7 @@ print(f"\nUsing device: {device}")
 # This is a teaching-focused demo: we generate synthetic financial sentences
 # annotated with coarse-grained entity types (the next cell builds them from a
 # small set of templates). For a production NER benchmark, use a real annotated
-# corpus such as CoNLL-2003 or FiNER-139 — the training pipeline below is
+# corpus such as CoNLL-2003 or FiNER-139 - the training pipeline below is
 # identical.
 
 
@@ -457,6 +457,26 @@ print(f"  Recall: {results['eval_recall']:.3f}")
 print(f"  F1: {results['eval_f1']:.3f}")
 
 # %% [markdown]
+# ### Reading these scores honestly
+#
+# The model reports near-perfect precision/recall/F1. **This is an artifact of the
+# synthetic data, not evidence that NER is solved.** Our generator draws from a
+# handful of templates with a fixed vocabulary per entity type, so the task is
+# trivially memorizable and the held-out split contains the same surface forms as
+# training. On a real corpus such as CoNLL-2003 or an annotated filings set, F1
+# lands far lower (mid-0.80s to low-0.90s for strong models) and the interesting
+# errors - boundary mistakes, ambiguous tickers, unseen entities - appear. Treat
+# the number here as a plumbing check that the training loop and label alignment
+# work, then re-run on real annotations to measure quality.
+#
+# One more caveat on *what* is being measured: the canonical NER metric is
+# entity-level (a span counts only if its full extent and type match), computed
+# with `seqeval`. When `seqeval` is not installed the notebook falls back to a
+# token-level `sklearn` F1, which is more lenient. On this saturated toy data both
+# read 1.0, but on real data the entity-level score is the honest one - install
+# `seqeval` before trusting the number.
+
+# %% [markdown]
 # ## Entity Extraction Examples
 #
 # Let's see the model in action on sample financial sentences.
@@ -684,3 +704,8 @@ features_df
 #
 # 5. **Entity counts as features**: The number and types of entities in a document
 #    create structured features for ML models, complementing sentiment analysis.
+#
+# 6. **Synthetic data saturates**: the perfect scores above reflect a trivially
+#    memorizable toy corpus, not NER quality. Validate on real annotations
+#    (CoNLL-2003, hand-labeled filings) with entity-level `seqeval` before drawing
+#    any conclusion about how well extraction works in production.

@@ -154,8 +154,12 @@ def _select_and_cast_columns(df: pl.DataFrame) -> pl.DataFrame:
 
 
 # %%
-def load_mbo_data(file_path: Path, max_rows: int | None = None) -> pl.DataFrame:
+def load_and_filter_mbo(file_path: Path, max_rows: int | None = None) -> pl.DataFrame:
     """Load and preprocess DataBento MBO data.
+
+    Named distinctly from the imported ``load_mbo_data`` file-lister above: this
+    reads one parquet, selects the MBO columns, sorts chronologically, and
+    filters to Regular Trading Hours.
 
     Args:
         file_path: Path to parquet file
@@ -202,7 +206,7 @@ else:
     data_files = sorted(SYMBOL_DATA_DIR.glob("*.parquet")) if SYMBOL_DATA_DIR.exists() else []
     if data_files:
         print(f"Loading from {data_files[0].name}...")
-        mbo = load_mbo_data(data_files[0])
+        mbo = load_and_filter_mbo(data_files[0])
         print(f"Messages: {len(mbo):,}")
     else:
         print("No DataBento data found. This notebook requires DataBento MBO data.")
@@ -1025,9 +1029,9 @@ if lob is not None:
 #
 # ### Next Steps
 #
-# 1. **Bar Construction**: See `databento_bar_sampling` notebook
-# 2. **OFI Analysis**: See `databento_mbo_analysis` notebook
-# 3. **Feature Engineering**: See Chapter 8 notebooks
+# 1. **Bar Construction**: See `17_databento_bar_sampling`
+# 2. **OFI Analysis**: See `09_databento_mbo_analysis`
+# 3. **Feature Engineering**: See the Chapter 8 notebooks
 #
 # ---
 #

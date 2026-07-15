@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -100,6 +100,8 @@ import plotly.graph_objects as go
 import polars as pl
 
 from data import load_sec_xbrl_fundamentals
+
+# Importing utils.style registers and activates the ML4T Plotly template
 from utils.style import COLORS
 
 # %% tags=["parameters"]
@@ -213,12 +215,11 @@ fig = go.Figure(
     )
 )
 fig.update_layout(
-    title="Assets Reported by Company and Quarter",
-    xaxis_title="Quarter",
+    title="Assets coverage is near-complete across the 20-symbol panel",
+    xaxis_title="Calendar quarter",
     yaxis_title="Symbol",
     height=600,
     width=800,
-    template="plotly_white",
 )
 fig.show()
 
@@ -247,10 +248,41 @@ filing_lag = (
 filing_lag.select("lag_days").describe()
 
 # %% [markdown]
-# The median filing lag (~30 days) reflects typical 10-Q timing. The elevated mean
+# The median filing lag (~33 days) reflects typical 10-Q timing. The elevated mean
 # and long tail arise from amended/restated filings — the XBRL Frames API may return
 # accession numbers for restated filings rather than original submissions. For PIT
 # backtesting, this is conservative (data appears later than reality).
+#
+# The distribution makes the two regimes visible: a tall cluster near one month
+# (routine 10-Q filings) and a sparse tail of restatements reaching past a year.
+
+# %%
+lags = filing_lag["lag_days"].to_list()
+median_lag = filing_lag["lag_days"].median()
+
+fig = go.Figure(
+    data=go.Histogram(
+        x=lags,
+        xbins={"start": 0, "end": 800, "size": 20},
+        marker_color=COLORS["blue"],
+    )
+)
+fig.add_vline(
+    x=median_lag,
+    line_dash="dash",
+    line_color=COLORS["amber"],
+    annotation_text=f"median {median_lag:.0f}d",
+    annotation_position="top",
+    annotation_font_color=COLORS["amber"],
+)
+fig.update_layout(
+    title="Most filings land ~1 month after quarter-end; amendments form a long tail",
+    xaxis_title="Filing lag (days between fiscal-quarter end and announcement)",
+    yaxis_title="Company-quarters",
+    height=420,
+    width=800,
+)
+fig.show()
 
 # %% [markdown]
 # ## 4. Bitemporal Query Patterns

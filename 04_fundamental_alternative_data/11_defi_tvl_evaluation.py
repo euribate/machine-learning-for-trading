@@ -57,7 +57,7 @@
 # - **Downstream**: Use findings to decide whether to integrate into Chapter 8 features
 
 # %%
-"""Alternative Data Evaluation: DeFi TVL Case Study — measure four evaluation dimensions on a real alt-data feed."""
+"""Alternative Data Evaluation: DeFi TVL Case Study - measure four evaluation dimensions on a real alt-data feed."""
 
 import warnings
 
@@ -76,7 +76,7 @@ print("Alternative Data Evaluation: DeFi TVL Case Study")
 
 
 # %% tags=["parameters"]
-# Production defaults — Papermill injects overrides for CI
+# Production defaults - Papermill injects overrides for CI
 
 # %% [markdown]
 # ---
@@ -84,7 +84,7 @@ print("Alternative Data Evaluation: DeFi TVL Case Study")
 # ## Section 1: Load the Data
 #
 # We evaluate whether DeFi TVL predicts ETH returns. Both feeds come
-# from the canonical on-chain downloader — run once, then work offline:
+# from the canonical on-chain downloader - run once, then work offline:
 #
 # ```bash
 # python data/crypto/onchain/download.py
@@ -232,7 +232,6 @@ fig.update_layout(
     xaxis_title="Forward Return Horizon",
     yaxis_title="Signal",
     height=350,
-    template="plotly_white",
 )
 fig.show()
 
@@ -259,7 +258,6 @@ fig.update_layout(
     xaxis_title="Forward Return Horizon",
     yaxis_title="Information Coefficient",
     height=400,
-    template="plotly_white",
 )
 fig.show()
 
@@ -321,11 +319,10 @@ fig.add_hrect(y0=0, y1=0.2, fillcolor=COLORS["positive"], opacity=0.05)
 fig.add_hrect(y0=-0.2, y1=0, fillcolor=COLORS["negative"], opacity=0.05)
 
 fig.update_layout(
-    title="Rolling 180-Day IC Crosses Zero — Signal Is Regime-Dependent",
+    title="Rolling 180-Day IC Crosses Zero - Signal Is Regime-Dependent",
     xaxis_title="Date",
     yaxis_title="Information Coefficient",
     height=400,
-    template="plotly_white",
 )
 fig.show()
 
@@ -492,7 +489,7 @@ pl.DataFrame(
 # engineer attention diverted from other research. The break-even alpha
 # is the gross trading return required to justify the *total* annual
 # cost, scaled to the fraction of AUM that actually deploys this
-# signal. The 3× ROI target below is conservative — research budgets
+# signal. The 3× ROI target below is conservative - research budgets
 # typically demand a multiple of return-over-cost before continuing
 # investment.
 
@@ -543,7 +540,7 @@ cost_table
 
 # %% [markdown]
 # An IC magnitude does not translate directly to basis points of alpha
-# without a full strategy design — portfolio construction, turnover,
+# without a full strategy design - portfolio construction, turnover,
 # transaction costs, risk model, and capacity constraints all enter
 # between IC and realised PnL. The numbers below are screening
 # diagnostics that establish whether deeper prototyping is warranted,
@@ -702,8 +699,7 @@ fig.add_trace(
 
 fig.update_layout(
     height=750,
-    title="Four-Dimension Evaluation Dashboard — DefiLlama TVL",
-    template="plotly_white",
+    title="Four-Dimension Evaluation Dashboard - DefiLlama TVL",
     margin=dict(t=90, b=60, l=60, r=60),
 )
 # Force the rolling-IC subplot (row=2, col=1) x-axis to render as datetime.
@@ -736,10 +732,10 @@ evidence_summary = pl.DataFrame(
             f"~${annual_hours * hourly_rate:,}/yr engineering, $0 data fees",
         ],
         "binding_caveat": [
-            f"Rolling IC mean {ic_mean:+.3f}, positive in {ic_positive_pct:.0%} of windows; sign reverses with horizon — likely contrarian rather than directional",
-            "No point-in-time vintages — historical revisions can backfill, inflating any backtest",
+            f"Rolling IC mean {ic_mean:+.3f}, positive in {ic_positive_pct:.0%} of windows; sign reverses with horizon - likely contrarian rather than directional",
+            "No point-in-time vintages - historical revisions can backfill, inflating any backtest",
             "Crypto regulation varies by jurisdiction; institutional deployment requires compliance review of underlying smart-contract exposure",
-            f"Required alpha at small fund (10% allocation, 3× ROI) is {cost_table.filter(pl.col('fund_size') == 'Small ($10M)')['required_alpha_bps'].item():.1f} bps — small funds carry the cost-recovery burden",
+            f"Required alpha at small fund (10% allocation, 3× ROI) is {cost_table.filter(pl.col('fund_size') == 'Small ($10M)')['required_alpha_bps'].item():.1f} bps - small funds carry the cost-recovery burden",
         ],
     }
 )
@@ -755,7 +751,7 @@ evidence_summary
 #   prototype should test a *reversal* specification before a momentum
 #   one.
 # - The **data** dimension scores well on coverage and completeness but
-#   fails on point-in-time availability — the binding limitation for
+#   fails on point-in-time availability - the binding limitation for
 #   any production backtest. Either build a snapshot archive going
 #   forward or accept that historical performance may be optimistic.
 # - The **legal** dimension is clean for the DefiLlama feed itself; the
@@ -776,14 +772,15 @@ evidence_summary
 #
 # 1. **The IC matrix shows horizon-dependent sign flips.** The TVL
 #    z-score reaches IC = -0.28 at the 60-day horizon over the joined
-#    window — strong in magnitude but consistent with mean reversion,
+#    window - strong in magnitude but consistent with mean reversion,
 #    not directional alpha. The 30-day TVL growth signal peaks around
 #    the 14-day horizon and decays past 60 days.
 # 2. **Rolling IC stability is the discriminator.** A point estimate
-#    near 0.10 is uninformative when the rolling 180-day mean sits
-#    close to zero (and turns negative in segments) while the share of
-#    positive windows hovers around 50% — record point IC, rolling
-#    mean, and the share-positive together, never just the headline.
+#    near 0.10 is uninformative when the rolling 180-day mean is
+#    slightly negative (-0.11) and swings from about +0.35 to -0.60
+#    across the window while the share of positive windows sits near
+#    49% - record point IC, rolling mean, and the share-positive
+#    together, never just the headline.
 # 3. **Composite scores are scaffolds.** The data-quality 0-100 score is
 #    only meaningful relative to other datasets scored with the same
 #    rubric; the binding constraint here is the absence of point-in-time
@@ -805,5 +802,5 @@ evidence_summary
 # 4. Document the legal posture, including downstream compliance
 #    constraints, not just data acquisition.
 # 5. Compute break-even alpha at the relevant fund size.
-# 6. Surface the four-dimension evidence to the research lead — let
+# 6. Surface the four-dimension evidence to the research lead - let
 #    them combine it with the strategy hypothesis to make the call.

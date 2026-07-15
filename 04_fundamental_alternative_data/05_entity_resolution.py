@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -63,6 +63,10 @@ import plotly.express as px
 import polars as pl
 from rapidfuzz import fuzz as rfuzz
 from rapidfuzz import process as rprocess
+
+# Importing utils.style registers and activates the ML4T Plotly template
+# (palette, gridlines, fonts) repo-wide; the px figure below inherits its colorway.
+from utils.style import COLORS
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -360,7 +364,7 @@ for name in test_names:
 # ## 5. Stage 3: ML-Based Matching with Embeddings
 #
 # Fuzzy scoring compares *surface forms*: it rewards shared tokens and characters.
-# That leaves two gaps. A ticker used as a name ("msft") shares no characters with
+# That leaves two gaps. A ticker used as a name ("msft") shares no whole token with
 # "Microsoft Corporation", and a paraphrase like "Amazon Web Services" shares no
 # token with "Amazon.com" once suffixes are stripped — both fall through fuzzy
 # matching entirely. A sentence-embedding model maps each name to a vector whose
@@ -444,8 +448,8 @@ if embedding_model is not None:
 #
 # - **`Amazon Web Services` → Amazon.com** (cos ≈ 0.65): no shared token survives
 #   normalization, so fuzzy returns nothing, but the names are semantically close.
-# - **`msft` → Microsoft** (cos ≈ 0.53): a ticker carries none of the characters of
-#   the company name; the embedding still places it nearest the right entity.
+# - **`msft` → Microsoft** (cos ≈ 0.53): a ticker is a compressed label the fuzzy
+#   scorer rejects; the embedding still places it nearest the right entity.
 #
 # The other recovered names — `Apple Computer`, `Tesla Motors`, `Alphabet Inc Class
 # A` — fuzzy already matches, because the canonical name is a token subset. The
@@ -787,10 +791,14 @@ fig = px.histogram(
     resolved_alt_data.to_pandas(),
     x="match_score",
     nbins=20,
-    title="Distribution of Match Scores",
-    labels={"match_score": "Fuzzy Match Score", "count": "Count"},
+    title="Fuzzy scores are bimodal: confident matches near 100, non-matches at zero",
+    labels={"match_score": "Fuzzy match score (0–100)", "count": "Number of names"},
+    color_discrete_sequence=[COLORS["blue"]],
 )
-fig.add_vline(x=75, line_dash="dash", line_color="red", annotation_text="Threshold (75)")
+fig.update_yaxes(title_text="Number of names")
+fig.add_vline(
+    x=75, line_dash="dash", line_color=COLORS["negative"], annotation_text="Threshold (75)"
+)
 fig.show()
 
 # %% [markdown]

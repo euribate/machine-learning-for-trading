@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.19.3
+#       jupytext_version: 1.18.1
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -125,6 +125,10 @@ import statsmodels.api as sm
 
 from data import load_firm_characteristics
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS, ml4t_diverging
+
+# Importing utils.style registers and activates the ML4T Plotly template
+# (palette, gridlines, fonts) repo-wide; px/go figures below inherit its colorway.
 
 # %% tags=["parameters"]
 # Production defaults — Papermill injects overrides for CI
@@ -180,18 +184,22 @@ fig = px.line(
     monthly_counts.to_pandas(),
     x="timestamp",
     y="len",
-    title="Coverage Grew from ~430 Stocks in 1967 to ~2,800 in 2016",
-    labels={"len": "Stock Count", "timestamp": "Date"},
+    title="Coverage grew from ~430 stocks in 1967 to ~2,800 in 2016",
+    labels={"len": "Stocks in cross-section", "timestamp": "Date"},
+    color_discrete_sequence=[COLORS["blue"]],
 )
-# Add vertical lines for split boundaries (without annotation_text to avoid datetime bug)
-fig.add_vline(x=datetime(1990, 1, 1), line_dash="dash", line_color="red")
-fig.add_vline(x=datetime(2000, 1, 1), line_dash="dash", line_color="green")
-# Add annotations separately
+# Split boundaries (train | valid | test), drawn in the neutral palette color
+fig.add_vline(x=datetime(1990, 1, 1), line_dash="dash", line_color=COLORS["neutral"])
+fig.add_vline(x=datetime(2000, 1, 1), line_dash="dash", line_color=COLORS["neutral"])
 fig.add_annotation(
-    x=datetime(1990, 1, 1), y=2800, text="Valid", showarrow=False, font=dict(color="red")
+    x=datetime(1990, 1, 1),
+    y=2800,
+    text="Valid",
+    showarrow=False,
+    font=dict(color=COLORS["neutral"]),
 )
 fig.add_annotation(
-    x=datetime(2000, 1, 1), y=2800, text="Test", showarrow=False, font=dict(color="green")
+    x=datetime(2000, 1, 1), y=2800, text="Test", showarrow=False, font=dict(color=COLORS["neutral"])
 )
 fig.show()
 
@@ -267,20 +275,21 @@ high_corr_df = pl.DataFrame(high_corr_pairs).sort("correlation", descending=True
 high_corr_df
 
 # %%
-# Correlation heatmap
+# Correlation heatmap on the ML4T diverging scale (negative -> neutral -> positive)
+_div = ml4t_diverging()
 fig = go.Figure(
     data=go.Heatmap(
         z=corr_matrix,
         x=feature_cols,
         y=feature_cols,
-        colorscale="RdBu",
+        colorscale=[[0.0, _div[0]], [0.5, _div[1]], [1.0, _div[2]]],
         zmid=0,
         zmin=-1,
         zmax=1,
     )
 )
 fig.update_layout(
-    title="Valuation and Volatility Form the Densest Correlation Clusters",
+    title="Volatility and valuation form the densest correlation clusters",
     width=1000,
     height=900,
     xaxis_tickangle=-45,
@@ -358,18 +367,31 @@ for row in ic_df.iter_rows(named=True):
             break
     ic_with_category.append({**row, "category": category})
 
-ic_cat_df = pl.DataFrame(ic_with_category)
+ic_cat_df = pl.DataFrame(ic_with_category).with_columns(
+    pl.when(pl.col("IC") > 0)
+    .then(pl.lit("Positive predictor"))
+    .otherwise(pl.lit("Negative predictor"))
+    .alias("Direction")
+)
 
+# 8 characteristic categories exceed the ML4T palette's distinct-color budget, so
+# color encodes the sign of the relationship (the point of the figure); the x-axis
+# names the individual characteristic.
 fig = px.bar(
     ic_cat_df.to_pandas(),
     x="feature",
     y="IC",
-    color="category",
-    title="Short-Term Reversal and 12-Month Momentum Carry the Largest Single-Characteristic ICs",
+    color="Direction",
+    color_discrete_map={
+        "Positive predictor": COLORS["blue"],
+        "Negative predictor": COLORS["copper"],
+    },
+    category_orders={"Direction": ["Positive predictor", "Negative predictor"]},
+    title="Short-term reversal and 12-month momentum carry the largest single-characteristic ICs",
     labels={"IC": "Information Coefficient", "feature": "Characteristic"},
 )
 fig.update_layout(xaxis_tickangle=-45, height=500)
-fig.add_hline(y=0, line_dash="dash", line_color="gray")
+fig.add_hline(y=0, line_dash="dash", line_color=COLORS["neutral"])
 fig.show()
 
 # %% [markdown]
@@ -396,14 +418,20 @@ return_stats
 # %%
 # Return distribution
 sample_size = min(100_000, len(df))
+# Clip to +/-60% so the distribution shape is visible; a few extreme outliers
+# (max next-month return ~+1900% in the valid split) otherwise flatten every bar
+# into a single spike at zero and hide the very widening the figure is about.
 fig = px.histogram(
     df.sample(n=sample_size, seed=SEED).to_pandas(),  # Convert for Plotly compatibility
     x="ret",
     color="split",
-    nbins=100,
-    title="Return Distributions Widen After 1990 as the Cross-Section Expands",
-    labels={"ret": "Next-Month Return", "count": "Frequency"},
-    opacity=0.7,
+    nbins=120,
+    range_x=[-0.6, 0.6],
+    category_orders={"split": ["train", "valid", "test"]},
+    color_discrete_sequence=[COLORS["blue"], COLORS["amber"], COLORS["copper"]],
+    title="Return distributions widen after 1990 as the cross-section expands",
+    labels={"ret": "Next-month return", "count": "Frequency"},
+    opacity=0.6,
     barmode="overlay",
 )
 fig.show()
@@ -469,50 +497,3 @@ print(f"macro_* columns in shipped dataset: {len(macro_cols)}")
 # 5. **Limitation**: no asset identifiers — this dataset supports prediction-accuracy studies, not backtesting.
 #
 # **Next**: See `case_studies/us_firm_characteristics/` for ML models applied to this data.
-
-# %%
-# Compute summary statistics for quantitative insights
-top_ic = ic_df.head(5)
-bottom_ic = ic_df.sort("IC").head(5)
-high_corr_count = len(high_corr_df)
-
-print("=" * 70)
-print("KEY INSIGHTS")
-print("=" * 70)
-print(f"""
-Chen-Pelger-Zhu (2020) Academic Asset Pricing Dataset
-
-## Dataset Structure
-- Observations:  {len(df):,} stock-months
-- Features:      46 firm characteristics (rank-normalized to [-0.5, +0.5])
-- Returns:       Next-month excess returns (raw)
-- Period:        1967-2016 (50 years)
-- Splits:        Train (1967-1989), Valid (1990-1999), Test (2000-2016)
-
-## Quantitative Findings
-
-### Predictive Power (Information Coefficients)
-Top 3 positive ICs: {", ".join([f"{r['feature']} (IC={r['IC']:.3f}, t_NW={r['t_stat_NW']:.1f})" for r in top_ic.head(3).iter_rows(named=True)])}
-Top 3 negative ICs: {", ".join([f"{r['feature']} (IC={r['IC']:.3f}, t_NW={r['t_stat_NW']:.1f})" for r in bottom_ic.head(3).iter_rows(named=True)])}
-
-### Correlation Structure
-- Highly correlated pairs (|r| > 0.5): {high_corr_count}
-- Valuation metrics form tight clusters (high collinearity)
-- Momentum features relatively orthogonal to value/profitability
-
-### Implications for ML Models
-1. Lasso/Ridge may be needed to handle correlated features
-2. Tree models naturally handle correlated features via splits
-3. Neural networks benefit from the [-0.5, +0.5] normalization
-4. The lack of asset IDs limits this to prediction accuracy studies only
-
-## Usage
-  from data import load_firm_characteristics
-  train = load_firm_characteristics(split="train")
-  X = train.drop(["timestamp", "ret"]).to_numpy()
-  y = train["ret"].to_numpy()
-
-## Reference
-  Chen, Pelger, and Zhu (2020). "Deep Learning in Asset Pricing"
-  https://github.com/jasonzy121/Deep_Learning_Asset_Pricing
-""")

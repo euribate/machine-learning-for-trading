@@ -55,10 +55,12 @@ import numpy as np
 import plotly.graph_objects as go
 import polars as pl
 from IPython.display import display
+from plotly.subplots import make_subplots
 
 warnings.filterwarnings("ignore")
 
 from utils.paths import get_case_study_dir
+from utils.style import COLORS  # importing utils.style registers the ml4t Plotly template
 
 # %% tags=["parameters"]
 # Scale parameters (Papermill overrides for testing; readers see production values)
@@ -149,11 +151,12 @@ if awaiting:
     print(f"  No features: {', '.join(DISPLAY_NAMES.get(cs, cs) for cs in awaiting)}")
 
 # %% [markdown]
-# ## 2. Feature Count Comparison
+# ## 2. Feature Inventory Summary
 #
-# How many features and feature families does each case study engineer? (The
-# multiple-testing survival counts are produced upstream in each case study's
-# `13_model_analysis.py`; here we inventory the feature space.)
+# How many features and feature families does each case study engineer, and what
+# are its largest families? (The multiple-testing survival counts are produced
+# upstream in each case study's `13_model_analysis.py`; here we inventory the
+# feature space.)
 
 # %%
 if evaluated:
@@ -192,15 +195,15 @@ if evaluated:
         go.Bar(
             x=cs_names,
             y=n_features,
-            marker_color="#3498db",
+            marker_color=COLORS["blue"],
             text=[str(n) for n in n_features],
             textposition="outside",
         )
     )
     fig.update_layout(
-        title="Number of Financial Features by Case Study",
-        yaxis_title="Number of Features",
-        template="plotly_white",
+        title="Each case study engineers 39-66 financial features",
+        xaxis_title="Case study",
+        yaxis_title="Number of features",
         height=450,
     )
     fig.show()
@@ -210,47 +213,125 @@ else:
 # %% [markdown]
 # ## 4. Feature Family Distribution
 #
-# Which feature families are used across asset classes? This heatmap shows
-# the number of features per family per case study, revealing cross-asset
-# patterns (e.g., momentum features everywhere) vs asset-specific features
-# (e.g., carry only in futures/FX).
+# We group features into *families* by their name prefix (the token before the
+# first underscore: `mom_21` and `mom_63` both count as `mom`). This is a coarse,
+# mechanical lens - across nine very different markets it yields on the order of a
+# hundred prefixes, but that overstates the number of distinct ideas. Two effects
+# inflate it: each asset class contributes genuinely specialized measures that
+# appear nowhere else (option `skew`/`term`/`iv`, microstructure `kyle`/`depth`,
+# crypto `funding`/`premium`, futures term-structure), and inconsistent naming
+# splits a few shared concepts (`bb` vs `bollinger` for the same Bollinger %B;
+# `r12`/`r36`/`past` all momentum windows). Read the y-axis as prefixes, not as a
+# taxonomy.
+#
+# What the figure *is* good for is the cross-asset pattern. A heatmap is the right
+# lens for the prefixes that *recur* - momentum, volatility, and returns show up
+# almost everywhere - so we keep those (used in two or more case studies, broadest
+# on top) in the heatmap, and collapse the long tail of single-market prefixes
+# into a companion bar counting how many specialized measures each asset class
+# adds.
 
 # %%
 if evaluated:
+    cs_list = list(evaluated)
+
     # Collect all family names across case studies
     all_families: set[str] = set()
-    for cs in evaluated:
+    for cs in cs_list:
         all_families.update(evaluated[cs]["family_counts"].keys())
 
-    all_families_sorted = sorted(all_families)
+    if all_families:
+        # Breadth = number of case studies each family appears in; total count is
+        # the tiebreak so the heavy hitters float to the top of the heatmap.
+        breadth = {
+            fam: sum(1 for cs in cs_list if evaluated[cs]["family_counts"].get(fam, 0) > 0)
+            for fam in all_families
+        }
+        total_count = {
+            fam: sum(evaluated[cs]["family_counts"].get(fam, 0) for cs in cs_list)
+            for fam in all_families
+        }
+        # Ascending sort: Plotly stacks the first y entry at the bottom, so the
+        # broadest / heaviest families end up on top.
+        recurring = sorted(
+            (f for f in all_families if breadth[f] >= 2),
+            key=lambda f: (breadth[f], total_count[f], f),
+        )
+        singletons = [f for f in all_families if breadth[f] == 1]
 
-    if all_families_sorted:
-        heatmap_data = []
-        for family in all_families_sorted:
-            row = []
-            for cs in evaluated:
-                count = evaluated[cs]["family_counts"].get(family, 0)
-                row.append(count if count > 0 else float("nan"))
-            heatmap_data.append(row)
+        # One asset-specific family belongs to exactly one case study; count them.
+        singleton_counts = [
+            sum(1 for f in singletons if evaluated[cs]["family_counts"].get(f, 0) > 0)
+            for cs in cs_list
+        ]
 
-        fig = go.Figure(
-            data=go.Heatmap(
+        heatmap_data = [
+            [(evaluated[cs]["family_counts"].get(fam, 0) or float("nan")) for cs in cs_list]
+            for fam in recurring
+        ]
+
+        # One catch-all "other" bucket can spike far above the real families and
+        # flatten the palette; winsorize the color at the 90th percentile so the
+        # gradient stays readable. Printed counts remain exact.
+        _flat = [v for row in heatmap_data for v in row if not np.isnan(v)]
+        zmax_cap = float(np.nanpercentile(_flat, 90)) if _flat else None
+
+        cs_labels = [DISPLAY_NAMES[cs] for cs in cs_list]
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            row_heights=[0.82, 0.18],
+            vertical_spacing=0.09,
+            subplot_titles=(
+                f"{len(recurring)} prefixes recur across two or more asset classes",
+                "Each asset class also adds its own specialized measures",
+            ),
+        )
+        fig.add_trace(
+            go.Heatmap(
                 z=heatmap_data,
-                x=[DISPLAY_NAMES[cs] for cs in evaluated],
-                y=all_families_sorted,
-                colorscale="Blues",
+                x=cs_labels,
+                y=recurring,
+                colorscale=[[0.0, COLORS["silver_muted"]], [1.0, COLORS["blue"]]],
+                zmax=zmax_cap,
+                zmin=0,
                 text=[
                     [f"{int(v)}" if not np.isnan(v) else "" for v in row] for row in heatmap_data
                 ],
                 texttemplate="%{text}",
                 textfont={"size": 9},
-            )
+                colorbar={"title": "Features", "len": 0.82, "y": 1.0, "yanchor": "top"},
+            ),
+            row=1,
+            col=1,
         )
+        fig.add_trace(
+            go.Bar(
+                x=cs_labels,
+                y=singleton_counts,
+                marker_color=COLORS["amber"],
+                text=singleton_counts,
+                textposition="outside",
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+        fig.update_xaxes(showticklabels=False, row=1, col=1)
+        fig.update_yaxes(title_text="Feature prefix", row=1, col=1)
+        fig.update_xaxes(title_text="Case study", row=2, col=1)
+        fig.update_yaxes(title_text="Specialized", row=2, col=1)
+        # Establish a clear title hierarchy: prominent claim title on top, the two
+        # panel labels smaller and in body color (the template renders subplot
+        # titles larger/blue, which reads backwards against the main title).
+        fig.update_annotations(font={"size": 13, "color": COLORS["slate"]})
         fig.update_layout(
-            title="Feature Family Count by Case Study",
-            template="plotly_white",
-            height=max(400, len(all_families_sorted) * 30 + 100),
-            width=max(600, len(evaluated) * 100 + 200),
+            title={
+                "text": "A few families recur across asset classes; most are asset-specific",
+                "font": {"size": 19},
+            },
+            height=max(500, len(recurring) * 26 + 280),
+            width=max(700, len(cs_list) * 90 + 260),
         )
         fig.show()
     else:
@@ -286,31 +367,7 @@ else:
     print("No feature data available.")
 
 # %% [markdown]
-# ## 6. Correlation Structure Summary
-#
-# Feature redundancy across case studies. How many feature pairs
-# have correlation above 0.7? High redundancy wastes model capacity.
-
-# %%
-if evaluated:
-    corr_data = []
-    for cs in evaluated:
-        corr_data.append(
-            {
-                "case_study": DISPLAY_NAMES[cs],
-                "n_features": evaluated[cs]["n_features"],
-                "n_families": len(evaluated[cs]["family_counts"]),
-            }
-        )
-
-    corr_df = pl.DataFrame(corr_data)
-    display(corr_df)
-    print("\nNote: For full correlation analysis, run the per-case-study evaluation notebooks.")
-else:
-    print("No feature data available.")
-
-# %% [markdown]
-# ## 7. Breadth vs IC: The Fundamental Law Perspective
+# ## 6. Breadth vs IC: The Fundamental Law Perspective
 #
 # The Fundamental Law of Active Management says:
 #
@@ -368,25 +425,28 @@ else:
 # Visualize breadth vs IC
 if evaluated and "breadth_data" in dir() and breadth_data:
     fig = go.Figure()
-    for brow in breadth_data:
-        fig.add_trace(
-            go.Scatter(
-                x=[brow["universe_size"]],
-                y=[brow["best_abs_ic"]],
-                mode="markers+text",
-                text=[brow["case_study"]],
-                textposition="top center",
-                marker=dict(size=brow["estimated_ir"] * 20 + 5),
-                showlegend=False,
-            )
+    fig.add_trace(
+        go.Scatter(
+            x=[brow["universe_size"] for brow in breadth_data],
+            y=[brow["best_abs_ic"] for brow in breadth_data],
+            mode="markers+text",
+            text=[brow["case_study"] for brow in breadth_data],
+            textposition="top center",
+            marker=dict(
+                size=[brow["estimated_ir"] * 20 + 5 for brow in breadth_data],
+                color=COLORS["blue"],
+                opacity=0.75,
+                line=dict(width=1, color=COLORS["slate"]),
+            ),
+            showlegend=False,
         )
+    )
 
     fig.update_layout(
-        title="Universe Size vs Best Model IC (bubble size = estimated IR)",
-        xaxis_title="Universe Size (number of instruments)",
-        yaxis_title="Best Model |IC|",
+        title="Breadth lifts risk-adjusted signal even where per-bet IC is small",
+        xaxis_title="Universe size (number of instruments, log scale)",
+        yaxis_title="Best model |IC|",
         xaxis_type="log",
-        template="plotly_white",
         height=450,
     )
     fig.show()
