@@ -30,16 +30,17 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-import yaml
-
 try:
     from tests.pm_helpers import get_overrides, run_notebook
+    from tests.preset_patches import _patch_presets_for_testing, _trim_label_configs
 except ModuleNotFoundError:
     from pm_helpers import get_overrides, run_notebook
+    from preset_patches import _patch_presets_for_testing, _trim_label_configs
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -68,59 +69,11 @@ DL_STAGE_PATTERNS = re.compile(
 # Config seeding — replicate conftest.py seeded_output_dir logic
 # ---------------------------------------------------------------------------
 
-# Per-model-type overrides applied to copied preset YAMLs.
-# Goal: minimal workload that still exercises the training loop + registry.
-_TEST_PRESET_PATCHES: dict[str, dict] = {
-    "lgb": {"max_iterations": 2, "checkpoint_interval": 1},
-    "lstm": {"n_epochs": 2, "checkpoint_interval": 1},
-    "tsmixer": {"n_epochs": 2, "checkpoint_interval": 1},
-    "tcn": {"n_epochs": 2, "checkpoint_interval": 1},
-    "nlinear": {"n_epochs": 2, "checkpoint_interval": 1},
-    "patchtst": {"n_epochs": 2, "checkpoint_interval": 1},
-    "tabm": {"n_epochs": 2, "checkpoint_interval": 1},
-    "cae": {"n_epochs": 2, "checkpoint_interval": 1},
-    "sdf": {"n_epochs": 2, "checkpoint_interval": 1},
-    "sae": {"n_epochs": 2, "checkpoint_interval": 1},
-    "ipca": {"n_epochs": 2, "checkpoint_interval": 1},
-}
-
-_MAX_CONFIGS_PER_FAMILY = 2
-_TRIM_FAMILIES = {"linear", "gbm"}
-
-
-def _patch_presets_for_testing(config_dir: Path) -> None:
-    """Patch copied preset YAMLs with reduced-workload values for testing."""
-    for model_type, overrides in _TEST_PRESET_PATCHES.items():
-        model_dir = config_dir / model_type
-        if not model_dir.exists():
-            continue
-        for preset_path in model_dir.glob("*.yaml"):
-            preset = yaml.safe_load(preset_path.read_text())
-            if preset is None:
-                continue
-            preset.update(overrides)
-            with open(preset_path, "w") as f:
-                yaml.dump(preset, f, default_flow_style=False)
-
-
-def _trim_label_configs(cs_config_dir: Path) -> None:
-    """Trim label config YAMLs to at most _MAX_CONFIGS_PER_FAMILY for sweep families."""
-    for label_yaml in cs_config_dir.glob("fwd_*.yaml"):
-        data = yaml.safe_load(label_yaml.read_text())
-        if data is None or not isinstance(data, dict):
-            continue
-        trimmed = False
-        for family, configs in data.items():
-            if (
-                family in _TRIM_FAMILIES
-                and isinstance(configs, list)
-                and len(configs) > _MAX_CONFIGS_PER_FAMILY
-            ):
-                data[family] = configs[:_MAX_CONFIGS_PER_FAMILY]
-                trimmed = True
-        if trimmed:
-            with open(label_yaml, "w") as f:
-                yaml.dump(data, f, default_flow_style=False)
+# _patch_presets_for_testing (and the _TEST_PRESET_PATCHES it reads) is
+# imported from tests/preset_patches.py rather than duplicated here: two
+# copies of the same workload-reduction table drift the moment one gets a
+# fix the other doesn't (e.g. IPCA's factor_ridge/gamma_ridge
+# regularization), silently regenerating fixtures against the stale values.
 
 
 def seed_configs(output_dir: Path) -> None:
@@ -322,6 +275,12 @@ def main():
         json.dump(metadata, f, indent=2)
     print(f"Metadata: {metadata_path}")
 
+    # A failed stage leaves whatever the previous run wrote in place, so exiting 0
+    # reports success while the fixture set still holds the stale artifact. That
+    # is how the sp500_options temporal artifact shipped without a `fold` column:
+    # the stage timed out, the wrapper ran under `set -e` and saw nothing.
+    return 1 if failed else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

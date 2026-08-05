@@ -11,15 +11,24 @@
 #
 # Trigger policy:
 #   - PR: incremental (path-filtered, only changed chapters)
+#   - Push to main: incremental (same path filter as PR) — see below
 #   - Weekly: full suite on schedule (Monday 6 AM UTC)
 #   - After Docker Publish: full suite (workflow_run trigger)
 #   - Manual: workflow_dispatch with optional run_all flag
-#   - Push to main: NOT triggered (conserves minutes)
+#
+# Push to main was previously NOT triggered, to conserve minutes. Exports land on
+# main as pushes, so nothing CI ran had ever seen what shipped: issue #372 (59 of
+# 122 shipped notebooks would not open in JupyterLab) reached a reader through
+# that gap, and the weekly cron is up to 7 days late. The push run is
+# path-filtered exactly like the PR run, so the marginal cost is one duplicate
+# run per merge — cheaper than one reader-found defect.
 
 name: Tests
 
 on:
   pull_request:
+    branches: [main]
+  push:
     branches: [main]
   schedule:
     - cron: '0 6 * * 1'   # Weekly Monday 6 AM UTC
@@ -64,13 +73,34 @@ jobs:
         id: filter
         with:
           filters: |
+            # "shared" fans the matrix out to every chapter and every case study.
+            # Only files that can change what test-chapters or test-case-studies
+            # DO belong here. Those two jobs run exactly one test module each
+            # (test_chapter_notebooks.py, test_case_studies.py), and the harness
+            # they import is conftest -> preset_patches and pm_helpers ->
+            # overrides.yaml. The other ~100 files in tests/ are unit tests owned
+            # by test-unit, which is required and runs on every commit anyway, so
+            # listing 'tests/**' here re-ran nine notebook pipelines to re-test
+            # something that had already been tested in ninety seconds.
             shared:
               - 'utils/**'
               - 'data/**'
-              - 'tests/**'
               - 'pyproject.toml'
               - '.github/workflows/test.yml'
               - 'matplotlibrc'
+              - 'tests/__init__.py'
+              - 'tests/conftest.py'
+              - 'tests/pm_helpers.py'
+              - 'tests/preset_patches.py'
+              - 'tests/overrides.yaml'
+              - 'tests/fixtures/**'
+              - 'tests/test_case_studies.py'
+              - 'tests/test_chapter_notebooks.py'
+            # test-py312, test-neo4j and test-benchmark all run this module. It is
+            # not in `shared` because it drives none of the chapter or case-study
+            # matrix; it gets its own filter, wired into run_py312 below.
+            docker-notebooks:
+              - 'tests/test_docker_notebooks.py'
             ch01:
               - '01_process_is_edge/**'
             ch02-03:
@@ -229,6 +259,7 @@ jobs:
              || [[ "${{ steps.filter.outputs.ch08-09 }}" == "true" ]] \
              || [[ "${{ steps.filter.outputs.ch10 }}" == "true" ]] \
              || [[ "${{ steps.filter.outputs.ch14-15 }}" == "true" ]] \
+             || [[ "${{ steps.filter.outputs.docker-notebooks }}" == "true" ]] \
              || [[ "${{ steps.filter.outputs.ch21 }}" == "true" ]]; then
             run_py312="true"
           fi
@@ -304,10 +335,64 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "latest"
+      # Same version as pyproject.toml's dev extra and .pre-commit-config.yaml;
+      # tests/test_toolchain_pins.py fails when any of the three drift.
       - name: Ruff check
-        run: uvx ruff@0.15.8 check utils/ data/ tests/
+        run: uvx ruff@0.15.14 check utils/ data/ tests/
       - name: Ruff format
-        run: uvx ruff@0.15.8 format --check utils/ data/ tests/
+        run: uvx ruff@0.15.14 format --check utils/ data/ tests/
+
+  # ---------------------------------------------------------------------------
+  # Reader-facing guards. Always-on, never path-filtered, no Docker, ~1 minute.
+  #
+  # Every other job in this workflow asks "does the notebook run?". None asked
+  # "can a reader open it?" — so issue #372 was invisible to the entire suite
+  # while 59 of 122 shipped notebooks raised File Load Error in JupyterLab.
+  #
+  # check_notebook_pair_sync.py is that missing check, and it already existed:
+  # it was wired into .pre-commit-config.yaml only, so it gated commits and not
+  # pushes. Exports reach main as pushes. This job is where it actually gates.
+  #
+  # Unfiltered by design: a desynced pair is caused by tooling that touches many
+  # chapters at once (papermill metadata, ruff-format, a partial export), so
+  # "only test what changed" is precisely the wrong scope for it.
+  # ---------------------------------------------------------------------------
+  guards:
+    name: guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+      # A path Windows cannot represent makes the whole repo unclonable there,
+      # not just that file (#433). Stdlib-only and instant, so it runs before
+      # anything is installed.
+      - name: Every tracked path is checkout-able on Windows (#433 regression gate)
+        run: python .github/scripts/check_windows_safe_paths.py
+      - name: Install guard deps
+        # jupytext only: check_notebook_pair_sync.py shells out to the `jupytext`
+        # binary, so it must be on PATH. Deliberately not the project env — this
+        # stays a ~1-minute gate.
+        run: |
+          uv venv --python 3.14
+          uv pip install jupytext==1.19.3 pytest nbformat
+      - name: Notebook pairs open in JupyterLab (#372 regression gate)
+        run: |
+          source .venv/bin/activate
+          python .github/scripts/check_notebook_pair_sync.py
+      # Chapter 21 shipped two notebooks importing helper modules that were
+      # never committed, so every reader hit ModuleNotFoundError. This is a
+      # purely static check (no imports executed, nothing installed), which is
+      # why it belongs in this fast job rather than inside a built image.
+      - name: Every import resolves to a file or a declared dependency
+        run: |
+          source .venv/bin/activate
+          python .github/scripts/check_import_resolution.py
+      - name: Notebook output hygiene
+        run: |
+          source .venv/bin/activate
+          python -m pytest tests/test_notebook_output_hygiene.py -q
 
   # ---------------------------------------------------------------------------
   # Fast native unit tests — download-script logic (no Docker, no network,
@@ -331,12 +416,23 @@ jobs:
         with:
           version: "latest"
       - name: Install minimal test deps
-        # Just the import surface of the download-logic tests (utils/downloading
-        # + data/download_all + firm-char extract_zip). Intentionally NOT the
-        # full project env (no torch/ml4t-*) so this stays a fast per-commit gate.
+        # Just the import surface of the tests in this job (utils/downloading +
+        # data/download_all + firm-char extract_zip, plus gymnasium for the
+        # Chapter 21 environments). Intentionally NOT the full project env (no
+        # torch/ml4t-*) so this stays a fast per-commit gate.
+        #
+        # requests is here for the fixture-generator tests: create_test_data
+        # validates the 13F artifacts by rebuilding them with the producer's own
+        # build_features_and_matrix, and 13f_download.py imports requests at
+        # module scope. Nothing in this job makes a network call.
+        #
+        # scipy/statsmodels/scikit-learn are the import surface of
+        # case_studies/utils/causal.py, so the p-value tail test can actually
+        # run its numeric case rather than skipping past the behavior it pins.
         run: |
           uv venv --python 3.14
-          uv pip install pytest polars pyyaml python-dotenv plotly
+          uv pip install pytest numpy polars pyyaml python-dotenv plotly gymnasium requests \
+            scipy statsmodels scikit-learn
       - name: Run download-logic unit tests
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -356,6 +452,76 @@ jobs:
             tests/test_download_scripts_registry.py \
             tests/test_compose_mounts.py \
             tests/test_download_coverage.py \
+            tests/test_plotly_renderer.py \
+            -v --tb=short
+      # The Chapter 21 environments reached readers as broken imports partly
+      # because no job ran the tests that name them: test_import_coverage.py
+      # listed both notebooks while nothing invoked it. These two files pin the
+      # restored environments and the behavior of the import guard the `guards`
+      # job executes, so they gate every PR from here.
+      - name: Run Chapter 21 environment and import-guard tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          .venv/bin/python -m pytest \
+            tests/test_ch21_rl_environments.py \
+            tests/test_import_resolution.py \
+            -v --tb=short
+      # The harness that decides which notebooks run, and the subsampler that
+      # builds the fixtures they run against. Both were ungated: the fixture
+      # regeneration path had not been runnable for months without anything
+      # going red, and a notebook could be marked skip on a credential the
+      # weekly workflow supplies without anything noticing.
+      - name: Run test-harness and fixture-generator tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          # Same override as the download-logic step above, and for the same
+          # reason: create_test_data imports the production producers, which
+          # pulls in utils.config, which hard-fails at import when
+          # ML4T_DATA_PATH does not exist. This job checks out no test-data, so
+          # the workflow-level default points at a directory that is not there.
+          # The tests build their own synthetic sources under tmp_path and read
+          # nothing from this path.
+          ML4T_PATH: ${{ github.workspace }}
+          ML4T_DATA_PATH: ${{ github.workspace }}/data
+        run: |
+          .venv/bin/python -m pytest \
+            tests/test_pm_helpers.py \
+            tests/test_create_test_data.py \
+            tests/test_sample_registry_for_tests.py \
+            tests/test_toolchain_pins.py \
+            -v --tb=short
+      # A two-tailed p-value written as `2 * (1 - dist.cdf(abs(t)))` returns
+      # exactly 0.0 above |t| ~8.35, so a notebook teaching inference printed
+      # `p=0` for a number no computation produced. `dist.sf` is the correct
+      # call. Two halves, both needed: the numeric case pins the behavior of
+      # the DML HAC p-value that reaches the registry, and the static scan
+      # catches the expression coming back — it is reintroduced by copying it
+      # from one chapter into another, so the scan is unfiltered by path.
+      - name: No tail probability computed as 1 - cdf
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ML4T_PATH: ${{ github.workspace }}
+          ML4T_DATA_PATH: ${{ github.workspace }}/data
+        run: |
+          .venv/bin/python -m pytest tests/test_pvalue_tail_precision.py -v --tb=short
+
+      # The methodology ratchet. Both files are static AST/source scans over the
+      # notebook tree, so they need no data and no model deps, and both were
+      # ungated: nothing invoked either one. The cost of that showed up the first
+      # time they were run from CI's perspective — the random-split bucket still
+      # listed an occurrence that no longer exists in the source, which is the
+      # ratchet's own staleness check firing after the drift, not before it.
+      # A leak-shaped call added to any notebook now fails the PR that adds it.
+      - name: Run leakage and holdout-boundary detectors
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          ML4T_PATH: ${{ github.workspace }}
+          ML4T_DATA_PATH: ${{ github.workspace }}/data
+        run: |
+          .venv/bin/python -m pytest \
+            tests/test_leakage_detectors.py \
+            tests/test_holdout_boundary.py \
             -v --tb=short
 
   # ---------------------------------------------------------------------------
@@ -467,6 +633,13 @@ jobs:
             cp -r test-data/intermediates/* $ML4T_OUTPUT_DIR/
             echo "Seeded $(du -sh $ML4T_OUTPUT_DIR | cut -f1) of intermediates"
           fi
+
+      # ml4t/ml4t:latest only bakes in pytest + pytest-timeout (envs/ml4t/Dockerfile);
+      # pytest-rerunfailures lives in the dev extra, which this image doesn't install.
+      # Without it, overrides.yaml's `reruns:` key (tests/conftest.py) silently adds no
+      # retry marker, so a notebook marked flaky just fails outright here.
+      - name: Install pytest-rerunfailures
+        run: pip install --no-cache-dir "pytest-rerunfailures>=15.0"
 
       - name: Run pipeline (${{ matrix.case-study }})
         env:

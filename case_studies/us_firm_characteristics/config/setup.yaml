@@ -1,41 +1,45 @@
 strategy_id: us_firm_characteristics
-setup_version: v1
+setup_version: v2
 
 universe:
-  min_price_usd: 5
-  min_adv_usd: 1000000
-  exclusions: [ADRs, REITs, financials]
-  identifiers: anonymized_permno_based
-  note: Filters applied by the data provider before anonymization; cannot be independently verified.
+  inclusion_rule: complete_characteristic_case
+  identifiers: anonymous_split_scoped_firm_axis
+  note: >-
+    The authors retain observations with all 46 characteristics available.
+    Anonymous identifiers are persistent within each released tensor block;
+    the archive does not publish a mapping between blocks.
+  # Approximate active cross-sectional breadth. Display metadata only; the
+  # backtest counts assets from data.
+  n_assets: 2500
 
 decision:
   cadence: monthly_month_end
   snapshot: month_end_close
   execution_delay: next_bar_open
-  characteristic_lag: 6_months
+  characteristic_availability: provider_standard_conventions
+  yearly_update: end_of_june
+  monthly_update: month_end_for_next_month
 
-# Engine-level execution defaults. Single source of truth — Ch16-19 notebooks
+# Engine-level execution defaults. Single source of truth - Ch16-19 notebooks
 # read these via get_backtest_config(); never declare a local INITIAL_CASH
 # or share_type constant. Changing values here invalidates every existing
 # backtest_hash for this case study (cash + share_type are spec-hash inputs).
 #
 # Moment-based allocators (inverse_vol, risk_parity, hrp, mvo_ledoit_wolf)
-# are EXCLUDED for this case study. US firm characteristics is a returns-only
-# cross-sectional panel keyed by integer firm IDs (no continuous per-symbol
-# price series), so a per-symbol trailing volatility or covariance is not
-# well-defined: firms enter and exit, and 12 monthly observations cannot
-# support a covariance over a top-50 cross-section. Under that data the
-# moment allocators either degenerate to equal weight (mvo/hrp hit their
-# observation-count guards and fall back) or produce numbers from a
-# covariance estimate the data cannot justify (inverse_vol, risk_parity).
-# Only lookback-free allocators (equal_weight, score_weighted,
-# conformal_weighted) are swept and eligible for carrier selection.
+# are EXCLUDED for this case study. The recovered anonymous identities provide
+# per-firm monthly return histories within each tensor block, but the declared
+# 12-month lookback is too short to support a stable covariance estimate over
+# a top-50 long-short cross-section with changing membership. Under that data,
+# the multivariate allocators either hit observation-count guards and fall back
+# or rely on an estimate the design cannot justify.
+# Equal weight establishes the baseline; only the lookback-free alternatives
+# (score_weighted and conformal_weighted) enter the allocation sweep.
 # ``allocator_lookback`` below is retained only because get_backtest_config()
 # requires the key; it is unused while no moment allocator is configured.
 #
 # Cash defaults to 1_000_000 rather than 100_000: monthly-cadence
 # long-short portfolios at top_k=50 carry ~$10K per leg per name at the
-# 100k tier — below realistic round-trip granularity for institutional
+# 100k tier - below realistic round-trip granularity for institutional
 # US equity. 1M keeps the spec-implied position sizes (notional per name
 # / fixed-cost ratio) in a regime the backtest engine resolves cleanly.
 execution:
@@ -44,10 +48,10 @@ execution:
   allocator_lookback: 12         # 1 year of monthly bars
 
 mapping:
-  class: long_short_decile_rebalance
+  class: long_short_top_k_rebalance
   position_state_space: long_short
-  entry_logic: decile_sort_long_top_short_bottom
-  sizing: equal_weight_within_decile
+  entry_logic: rank_top_k_long_bottom_k_short
+  sizing: equal_weight_within_leg
 
 costs:
   class: material
@@ -58,8 +62,8 @@ costs:
 
 evaluation:
   n_splits: 10
-  train_size: 10Y
-  val_size: 1Y
+  train_size: 10YE
+  val_size: 1YE
   holdout_start: '2016-01-01'
   holdout_end: '2016-12-31'
   calendar: null  # Monthly returns; calendar-aware splitting needs daily frequency.
@@ -87,6 +91,189 @@ labels:
   classification_eval_label:
     fwd_class_1m: fwd_ret_1m
 
+features:
+  # Window over which the feature matrix is built. Both endpoints are inclusive and
+  # 03_financial_features binds them from here rather than retyping them.
+  window:
+    start: 1990-01-01
+    end: 2016-12-31
+
+  # The feature register. Rendered by case_studies.utils.feature_engineering
+  # .register_frame and drawn as the timing contract by plot_timing_contract, so
+  # `lookback` and `lag` are read by the figure as well as by the prose.
+  #
+  # `lookback` and `lag` are counted in months, this case study's bar.
+  #
+  # A caveat that belongs with the numbers rather than under them: the release does
+  # not publish a per-characteristic estimation window. What is published is the
+  # update convention (decision.yearly_update, decision.monthly_update), and some
+  # characteristics name their own window - r36_13 reads 36 months back to 13. The
+  # lookbacks below are those two sources and nothing else; where a characteristic
+  # publishes neither, the entry is the span of one provider observation. The lag is
+  # the load-bearing column for look-ahead and it is fully sourced: an annual variable
+  # is published at the end of June against a December fiscal year end.
+  families:
+    - name: value
+      pattern: "BEME|E2P|CF2P|D2P|S2P|A2ME"
+      role: signal
+      hypothesis: A firm priced low against its fundamentals earns the higher subsequent return
+      inputs: released annual accounting characteristics, provider rank-transformed
+      lookback: 12
+      lag: 6
+      frame: cross section
+      representation: provider cross-sectional rank in [-0.5, 0.5]
+      failure_mode: cheapness that reflects permanent impairment rather than mispricing
+
+    - name: quality
+      pattern: "PROF|ROE|ROA|OP|PM|PCM|RNA"
+      role: signal
+      hypothesis: A more profitable firm earns the higher subsequent return at the same price
+      inputs: released annual accounting characteristics, provider rank-transformed
+      lookback: 12
+      lag: 6
+      frame: cross section
+      representation: provider cross-sectional rank in [-0.5, 0.5]
+      failure_mode: margins mean-revert faster than the annual update reports them
+
+    - name: investment
+      pattern: "Investment|NOA|DPI2A|NI|OA|AC"
+      role: signal
+      hypothesis: A firm growing its asset base aggressively earns the lower subsequent return
+      inputs: released annual accounting characteristics, provider rank-transformed
+      lookback: 24
+      lag: 6
+      frame: cross section
+      representation: provider cross-sectional rank in [-0.5, 0.5]
+      failure_mode: a growth measure spans two annual observations, so one restatement moves both
+
+    - name: momentum
+      pattern: "r12_2|r2_1|r12_7|r36_13|ST_REV|LT_Rev|SUV|Rel2High"
+      role: signal
+      hypothesis: Recent relative price trends persist over a quarter to a year and reverse beyond it
+      inputs: released monthly price and return characteristics, provider rank-transformed
+      lookback: 36
+      lag: 0
+      frame: cross section
+      representation: provider cross-sectional rank in [-0.5, 0.5]
+      failure_mode: trends break at a reversal faster than a 12-month window unwinds
+
+    - name: risk
+      pattern: "Beta|MktBeta|IdioVol|Resid_Var|Variance|Spread|LTurnover|LME"
+      role: state
+      hypothesis: Volatility, liquidity and size describe the regime a signal is read in
+      inputs: released monthly risk and liquidity characteristics, provider rank-transformed
+      lookback: 12
+      lag: 0
+      frame: cross section
+      representation: provider cross-sectional rank in [-0.5, 0.5]
+      failure_mode: >-
+        LME travels with this family in the provider's grouping but behaves as a signal,
+        so a family-level reading of the group mixes a size premium with regime description
+
+    - name: other
+      pattern: "Q|C|CF|AT|ATO|CTO|D2A|FC2Y|Lev|OL|SGA2S"
+      role: signal
+      hypothesis: Leverage, turnover and cost structure carry information the five named families omit
+      inputs: released accounting characteristics, provider rank-transformed
+      lookback: 12
+      lag: 6
+      frame: cross section
+      representation: provider cross-sectional rank in [-0.5, 0.5]
+      failure_mode: a residual grouping has no single thesis, so a family average over it means little
+
+    # The constructed columns are split by the timing of the members they read, not
+    # bundled under one row per construction. A single `composite` entry would have to
+    # claim one lookback and one lag for `composite_value` (annual accounting, published
+    # end-June) and `composite_momentum` (monthly prices, no publication lag), and would
+    # be wrong about one of them whichever pair it named.
+    #
+    # A construction that mixes the two gets its own row, and the row spans everything it
+    # reads: lookback 18 and lag 0. An earlier version gave these the accounting member's
+    # lag of 6, which made `plot_timing_contract` draw them as reading nothing from the six
+    # months before the decision - and they do, through the momentum member. The composite
+    # itself is knowable at the decision timestamp, because its accounting member was
+    # published six months earlier and its price member is current, so the lag is zero and
+    # the window reaches back to the oldest input.
+
+    - name: composite accounting
+      pattern: "composite_value|composite_quality|composite_value_quality"
+      role: signal
+      hypothesis: Averaging ranks within and across families cancels characteristic-specific noise
+      inputs: the released value and quality characteristics, within the same row
+      lookback: 12
+      lag: 6
+      frame: cross section
+      representation: equal-weight mean of member ranks, on the members' own scale
+      failure_mode: an equal weight asserts the members are equally informative, which is untested here
+
+    - name: composite investment
+      pattern: "composite_investment"
+      role: signal
+      hypothesis: Averaging the investment characteristics cancels measure-specific noise
+      inputs: the released investment characteristics, within the same row
+      lookback: 24
+      lag: 6
+      frame: cross section
+      representation: equal-weight mean of member ranks, on the members' own scale
+      failure_mode: its members span two annual observations, so one restatement moves the composite twice
+
+    - name: composite momentum
+      pattern: "composite_momentum"
+      role: signal
+      hypothesis: Averaging the two 12-month momentum measures cancels their formation-window differences
+      inputs: r12_2 and r12_7, within the same row
+      lookback: 12
+      lag: 0
+      frame: cross section
+      representation: equal-weight mean of member ranks, on the members' own scale
+      failure_mode: both members skip a recent month, so neither reflects the last few weeks
+
+    - name: interaction accounting
+      pattern: "interaction_value_x_quality|interaction_value_x_roe"
+      role: signal
+      hypothesis: Some theses are conditional - cheap is worth more when the firm is also profitable
+      inputs: BEME with PROF or ROE, within the same row
+      lookback: 12
+      lag: 6
+      frame: cross section
+      representation: product of two member ranks, so the sign encodes agreement
+      failure_mode: a product of two centred ranks is large at both extremes and cannot separate them
+
+    - name: composite mixed
+      pattern: "composite_value_momentum|composite_quality_momentum"
+      role: signal
+      hypothesis: Pairing a slow accounting view with a fast price view cancels noise in both
+      inputs: an annual accounting composite and the 12-month momentum composite, within the same row
+      lookback: 18
+      lag: 0
+      frame: cross section
+      representation: equal-weight mean of two composites, on the members' own scale
+      failure_mode: >-
+        the two halves move at different speeds, so the average is stale against the price
+        member and current against the accounting one at the same time
+
+    - name: interaction mixed
+      pattern: "interaction_size_x_value"
+      role: signal
+      hypothesis: The value premium is larger among smaller firms
+      inputs: LME and BEME, within the same row
+      lookback: 18
+      lag: 0
+      frame: cross section
+      representation: product of two member ranks, so the sign encodes agreement
+      failure_mode: size is current while book-to-market is six months old, so the product pairs two different dates
+
+    - name: interaction momentum
+      pattern: "interaction_momentum_x_ivol"
+      role: signal
+      hypothesis: Momentum reads differently at high idiosyncratic volatility than at low
+      inputs: r12_2 and IdioVol, within the same row
+      lookback: 12
+      lag: 0
+      frame: cross section
+      representation: product of two member ranks, so the sign encodes agreement
+      failure_mode: a product of two centred ranks is large at both extremes and cannot separate them
+
 backtest:
   rebalance:
     # Per-asset rebalance thresholds. A rebalance is skipped when the
@@ -104,19 +291,17 @@ backtest:
     # downstream stages take the top-N from the upstream stage's rank-1.
     # Notebooks read these via get_top_n_predictions(case_study, stage).
     top_n_predictions:
-      signal: 0                 # all signal predictions (eq-weight baseline)
-      allocation_cheap: 0       # score_weighted — all signal preds
-      allocation_expensive: 10  # conformal_weighted — top-10 by signal Sharpe
+      signal: 0                 # all predictions at the equal-weight baseline
+      allocation: 10            # top-10 model configs by equal-weight baseline Sharpe
       cost_sensitivity: 1       # top-1 of {signal+allocation} per label
       risk_overlay: 1           # top-1 of {signal+allocation} per label
     # Skip MVO/HRP when allocator runtime is the bottleneck (intraday CSes).
     expensive_allocators_skip: false
-    # Allocators routed through ``allocation_expensive`` (top-10 by signal Sharpe).
-    # All others (equal_weight, score_weighted) take the cheap path.
-    expensive_allocators: [conformal_weighted]
+    # The two alternatives below take the cheap path. Equal weight is already
+    # the baseline and must not be repeated as an allocation-stage method.
     # Ch16 backtest is equal-weight sized within the selected set. The
     # selection rule is one of: top-k (rank), percentile band (long-only
-    # cutoff), or quantile buckets (e.g. quintile long-short — combines
+    # cutoff), or quantile buckets (e.g. quintile long-short, which combines
     # with the long-short mapping). Only top_k_grid is active here;
     # uncomment percentile_grid / quantile_grid to add other selection axes
     # for any label.
@@ -129,13 +314,11 @@ backtest:
     # quantile_grid:
     #   fwd_ret_1m: [5, 10]
     # Ch17 portfolio: reuses top_k_grid above and sweeps over allocators.
-    # Only lookback-free allocators are listed — moment-based allocators
-    # (inverse_vol, risk_parity, hrp, mvo_ledoit_wolf) are excluded because
-    # this returns-only firm-characteristics panel has no per-symbol price
-    # series to estimate volatility or covariance from (see the execution
-    # block above). No max-weight cap.
+    # Only lookback-free alternatives are listed - moment-based allocators
+    # (inverse_vol, risk_parity, hrp, mvo_ledoit_wolf) are excluded because a
+    # 12-month history is too thin for the declared top-50 cross-section (see
+    # the execution block above). No max-weight cap.
     allocators:
-      - {name: equal_weight,    method: equal_weight}
       - {name: score_weighted,  method: score_weighted}
       - {name: conformal_weighted, method: conformal_weighted}
     # Ch18 cost sensitivity (bps regime).
@@ -162,9 +345,36 @@ modeling:
   gbm:
     libraries: [lightgbm]
     preset: default
-    device: gpu
+    # CPU is the reader-facing reproducible path. Numerical parameters stay
+    # fixed when maintainers opt into a different execution backend.
+    device: cpu
+    max_bin: 63
+    num_threads: 8
+  tabular_dl:
+    models: [tabm]
+    device: cuda
+    num_threads: 8
   latent_factors:
-    persistent_entities: false
+    persistent_entities: true
+    device: cuda
+    num_threads: 8
+    deterministic_algorithms: true
+    # Only unrevised daily market observations enter the SDF context. The
+    # one-day availability lag prevents same-close information from entering
+    # the next-month forecast.
+    macro_series:
+      - dff
+      - dgs1
+      - dgs2
+      - dgs3
+      - dgs5
+      - dgs7
+      - dgs10
+      - dgs20
+      - dgs30
+      - t10y2y
+      - vixcls
+    macro_availability_lag_days: 1
     model_kwargs:
       sdf:
         checkpoint_epochs: [256, 512, 768, 1024, 1280]

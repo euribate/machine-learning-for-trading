@@ -42,9 +42,16 @@ For notebooks requiring libraries without Python 3.14 wheels:
 ```bash
 docker compose --profile py312 pull py312
 docker compose --profile py312 run --rm py312 python 05_synthetic_data/03_sigcwgan_signatures.py
+docker compose --profile py312 run --rm py312 \
+  /opt/bsts/bin/python 15_causal_estimation/06_fed_announcement_bsts.py
 ```
 
-Not available on Apple Silicon — view pre-executed `.ipynb` files instead.
+The Chapter 15 command uses the isolated `/opt/bsts` interpreter. The default
+`/opt/ml4t` interpreter and its NumPy 2 signature, gensim, and pfhedge dependencies
+remain unchanged for every other py312 notebook.
+
+No native arm64 image. On Apple Silicon, read the committed `.ipynb` outputs, or run the
+amd64 image under Rosetta with `DOCKER_DEFAULT_PLATFORM=linux/amd64`.
 
 ### benchmark (Storage Benchmarks)
 

@@ -35,6 +35,14 @@ def compute_prediction_fold_metrics(
     - headline_metrics: aggregated across all folds
     - fold_metrics: per-fold breakdown keyed by fold_id
 
+    Folds whose scores are constant produce no cross-sectional IC. Headline
+    ``ic_mean`` / ``ic_std`` / ``ic_t`` / ``pct_positive`` are computed over the
+    folds that did produce one, and ``n_folds_ic`` reports how many that was
+    against ``n_folds``. ``ic_t`` is None when fewer than two folds have a defined
+    IC or the folds show no dispersion. The fold-based ``ic_t`` is a diagnostic:
+    the inferential statistic is ``ic_t_hac``, computed below on the daily IC
+    series with its confidence interval.
+
     Regression metrics: ic, ic_std, rmse, mae, n_entities
     Classification metrics: ic, ic_std, auc_roc, log_loss, brier_score,
         accuracy, balanced_accuracy, auc_pr, n_entities
@@ -137,16 +145,34 @@ def compute_prediction_fold_metrics(
 
         fold_results[fold_id] = fold_m
 
-    # Headline aggregates — IC always computed
+    # Headline aggregates over the folds that produced a *defined* IC.
+    #
+    # A fold whose scores are constant has no cross-sectional rank correlation, so
+    # `cross_sectional_ic` returns NaN for it — an L1 config that zeroes every
+    # coefficient on one fold is the case that surfaced this. Aggregating with plain
+    # `np.mean`/`np.std` propagates that NaN into every headline value, and because
+    # `np.nan > 0` is False the `ic_t` guard fell through to a sentinel `0.0`. A
+    # stored `ic_t = 0.0` reads as "this IC is indistinguishable from zero", which is
+    # a claim; "not computable" is not. Aggregate over the defined folds, count them
+    # in `n_folds_ic` so partial coverage is visible next to `n_folds`, and return
+    # None (SQL NULL) for a t statistic that does not exist.
+    #
+    # `ic_std` keeps its 0.0-when-undefined convention: `_verify_cached_config` in
+    # `case_studies/utils/gbm.py` reads the stored value through `float()`, which a
+    # NULL would raise on.
     fold_ics = [fm["ic"] for fm in fold_results.values()]
-    headline: dict[str, float | str] = {
-        "ic_mean": float(np.mean(fold_ics)) if fold_ics else 0.0,
-        "ic_std": float(np.std(fold_ics)) if len(fold_ics) > 1 else 0.0,
-        "ic_t": float(np.mean(fold_ics) / (np.std(fold_ics) / np.sqrt(len(fold_ics))))
-        if len(fold_ics) > 1 and np.std(fold_ics) > 0
-        else 0.0,
+    defined_ics = [float(ic) for ic in fold_ics if ic is not None and np.isfinite(ic)]
+    n_ic = len(defined_ics)
+    ic_dispersion = float(np.std(defined_ics)) if n_ic > 1 else 0.0
+    headline: dict[str, float | str | None] = {
+        "ic_mean": float(np.mean(defined_ics)) if n_ic else None,
+        "ic_std": ic_dispersion,
+        "ic_t": float(np.mean(defined_ics) / (ic_dispersion / np.sqrt(n_ic)))
+        if n_ic > 1 and ic_dispersion > 0
+        else None,
         "n_folds": len(folds),
-        "pct_positive": float(np.mean([ic > 0 for ic in fold_ics])) if fold_ics else 0.0,
+        "n_folds_ic": n_ic,
+        "pct_positive": float(np.mean([ic > 0 for ic in defined_ics])) if n_ic else None,
         "task_type": "classification" if task_type == "classification" else "regression",
     }
 
@@ -259,14 +285,33 @@ def _infer_horizon_from_label(label: str | None) -> int:
     `fwd_ret_5d` -> 5, `fwd_dir_21d` -> 21, `fwd_class_1m` -> 21,
     `fwd_carry_8h` -> 1 (one 8h bar). Defaults to 1 when label is missing.
     Callers should always pass `label=` so the HAC lag matches horizon-1.
+
+    Some deployed labels carry no `<number><unit>` token. `ret_to_expiry`
+    (S&P 500 options, hold-to-expiry) overlaps ~35 trading days per its
+    `buffer: 35D` setup — resolving it to 1 silently under-lags the HAC
+    bandwidth (this was the Ch13 §13.9 exposure). It is resolved by name here.
+    Any *other* non-parsing label triggers a warning and a conservative
+    fallback of 1; the caller should pass an explicit horizon at the call site.
     """
     if not label:
         return 1
     import re
 
     s = label.lower()
+    # Named horizons for labels that do not carry a <number><unit> token.
+    if "to_expiry" in s:
+        return 35
     m = re.search(r"(\d+)\s*([dhwm])", s)
     if not m:
+        import warnings
+
+        warnings.warn(
+            f"_infer_horizon_from_label: label {label!r} has no <number><unit> "
+            "token and is not a named horizon; defaulting to horizon=1, which "
+            "under-lags the HAC bandwidth for any overlapping label. Pass an "
+            "explicit horizon at the call site.",
+            stacklevel=2,
+        )
         return 1
     n = int(m.group(1))
     unit = m.group(2)
@@ -320,7 +365,27 @@ def compute_backtest_fold_metrics(
     if not isinstance(daily_returns, pl.DataFrame):
         daily_returns = pl.from_pandas(daily_returns)
 
-    # Determine periods_per_year from case study calendar or data frequency
+    # Determine periods_per_year: the declared convention of the daily_returns
+    # grid first, then the exchange calendar, then the observed data frequency.
+    # `evaluation.periods_per_year` is the only one of the three that knows the
+    # difference between a genuinely monthly series (us_firm, 12) and a monthly-
+    # rebalanced strategy marked to market daily (etfs, 252).
+    # Callers that omit it — `BacktestExplorer.backfill_fold_metrics` is the one
+    # in the tree — get the same reconciliation `run_backtest` applies, so a
+    # backfilled thinned grid is not annualized at the declared daily rate.
+    if periods_per_year == 0 or periods_per_year is None:
+        try:
+            from case_studies.utils.backtest_runner import reconcile_periods_per_year
+            from case_studies.utils.uncertainty import periods_per_year_from_setup
+
+            declared = int(periods_per_year_from_setup(case_study_id))
+            periods_per_year = (
+                reconcile_periods_per_year(declared, daily_returns, case_study=case_study_id)
+                if declared
+                else 0
+            )
+        except (KeyError, FileNotFoundError, ImportError):
+            periods_per_year = 0
     if periods_per_year == 0 or periods_per_year is None:
         # Try to get calendar from setup.yaml → exchange_calendars
         try:
@@ -595,11 +660,12 @@ def compute_fold_metrics_from_predictions(
     best_epoch: int,
     date_col: str = "timestamp",
     entity_col: str = "symbol",
+    eval_col: str | None = None,
 ):
     """Compute per-fold cross-sectional IC from a registered predictions table.
 
     Filters to the best (config, epoch) and groups by fold_id, returning a
-    polars DataFrame with [fold_id, ic_mean, n_test].
+    polars DataFrame with [fold_id, ic_mean, n_test, n_entities].
 
     Used by deep_learning / tabular_dl / darts_forecasting runners to assemble
     a fold_metrics summary at the end of CV.
@@ -616,6 +682,7 @@ def compute_fold_metrics_from_predictions(
     if best_preds.height == 0:
         return pl.DataFrame()
 
+    actual_col = eval_col if eval_col and eval_col in best_preds.columns else "y_true"
     rows = []
     for fold_id in sorted(best_preds["fold_id"].unique().to_list()):
         fold_df = best_preds.filter(pl.col("fold_id") == fold_id)
@@ -624,7 +691,7 @@ def compute_fold_metrics_from_predictions(
             fold_df,
             fold_df,
             pred_col="y_score",
-            ret_col="y_true",
+            ret_col=actual_col,
             date_col=date_col,
             entity_col=_entity,
             method="spearman",
@@ -635,6 +702,9 @@ def compute_fold_metrics_from_predictions(
                 "fold_id": fold_id,
                 "ic_mean": result["ic_mean"],
                 "n_test": fold_df.height,
+                "n_entities": (
+                    fold_df[entity_col].n_unique() if entity_col in fold_df.columns else 0
+                ),
             }
         )
     return pl.DataFrame(rows) if rows else pl.DataFrame()

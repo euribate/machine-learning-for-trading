@@ -19,6 +19,8 @@ flag it before a sweep wastes GPU time.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import polars as pl
 import pytest
@@ -33,6 +35,7 @@ from utils.cv_splits import (
     make_walk_forward_config,
     make_wf_config,
 )
+from utils.modeling import validate_temporal_fold_coverage
 
 # -----------------------------------------------------------------------------
 # Pure: _map_calendar_id
@@ -141,8 +144,8 @@ def test_load_evaluation_config_raises_on_missing_section(tmp_path, monkeypatch)
 
 @pytest.fixture(scope="module")
 def etfs_daily_frame() -> pl.DataFrame:
-    """~24 years of business days — enough for 8 backward folds of 10+1 years."""
-    ts = pd.date_range("1999-01-01", "2023-12-31", freq="B")
+    """~24 years of business days, including dates inside the sealed holdout."""
+    ts = pd.date_range("1999-01-01", "2024-01-31", freq="B")
     return pl.DataFrame({"timestamp": pl.Series(ts)})
 
 
@@ -189,11 +192,27 @@ def test_generate_cv_splits_etfs_embargo_respects_label_buffer(etfs_splits) -> N
         assert gap >= pd.Timedelta(days=21), s  # at minimum 21 calendar days
 
 
-def test_generate_cv_splits_etfs_val_before_holdout(etfs_splits) -> None:
-    """All validation windows end strictly before the holdout_start (2024-01-01)."""
+def test_generate_cv_splits_etfs_val_before_holdout(etfs_splits, etfs_daily_frame) -> None:
+    """Every 21-session validation label ends before the holdout."""
     holdout_start = pd.Timestamp("2024-01-01")
+    timestamps = etfs_daily_frame.select("timestamp").to_series().to_pandas()
+    holdout_pos = int(pd.DatetimeIndex(timestamps).searchsorted(holdout_start, side="left"))
     for s in etfs_splits:
-        assert s["val_end"] < holdout_start, s
+        val_end_pos = int(pd.DatetimeIndex(timestamps).searchsorted(s["val_end"], side="left"))
+        assert val_end_pos + 21 < holdout_pos, s
+
+
+def test_generate_cv_splits_etfs_label_outcome_ends_before_holdout(
+    etfs_daily_frame, etfs_splits
+) -> None:
+    """The last validation decision's 21-session outcome must remain pre-holdout."""
+    dates = etfs_daily_frame["timestamp"].to_list()
+    date_index = {timestamp: index for index, timestamp in enumerate(dates)}
+    holdout_start = pd.Timestamp("2024-01-01")
+
+    for split in etfs_splits:
+        exit_timestamp = dates[date_index[split["val_end"]] + 21]
+        assert exit_timestamp < holdout_start, split
 
 
 def test_generate_cv_splits_etfs_train_size_10y(etfs_splits) -> None:
@@ -225,6 +244,21 @@ def test_generate_cv_splits_crypto_respects_8h_buffer_and_no_calendar() -> None:
         # because step is in 8-hour bars).
         gap = s["val_start"] - s["train_end"]
         assert gap >= pd.Timedelta(hours=8), s
+        assert s["val_end"] + pd.Timedelta(hours=8) < pd.Timestamp("2024-01-01"), s
+
+
+def test_generate_cv_splits_crypto_purges_variant_endpoint_at_holdout() -> None:
+    ts = pd.date_range("2019-01-01", "2023-12-31 16:00", freq="8h")
+    df = pl.DataFrame({"timestamp": pl.Series(ts)})
+
+    splits = generate_cv_splits(
+        df,
+        case_study_id="crypto_perps_funding",
+        label_buffer="24H",
+    )
+
+    assert splits[0]["val_end"] == pd.Timestamp("2023-12-30 16:00")
+    assert splits[0]["val_end"] + pd.Timedelta(hours=24) < pd.Timestamp("2024-01-01")
 
 
 # -----------------------------------------------------------------------------
@@ -317,6 +351,141 @@ def test_generate_cv_splits_raises_on_empty_dataset() -> None:
     df = pl.DataFrame({"timestamp": pl.Series([], dtype=pl.Datetime)})
     with pytest.raises(ValueError, match="No timestamps"):
         generate_cv_splits(df, case_study_id="etfs", label_buffer="21D")
+
+
+# -----------------------------------------------------------------------------
+# Fold-specific temporal artifact alignment
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def backward_temporal_fixture() -> tuple[pl.DataFrame, pl.DataFrame, list[dict]]:
+    dates = pd.date_range("2017-01-02", "2020-12-31", freq="B")
+    dataset = pl.DataFrame({"timestamp": dates, "symbol": ["A"] * len(dates)})
+    splits = [
+        {
+            "fold": 0,
+            "train_start": pd.Timestamp("2018-01-01"),
+            "train_end": pd.Timestamp("2019-12-31"),
+            "val_start": pd.Timestamp("2020-01-01"),
+            "val_end": pd.Timestamp("2020-12-31"),
+        },
+        {
+            "fold": 1,
+            "train_start": pd.Timestamp("2017-01-01"),
+            "train_end": pd.Timestamp("2018-12-31"),
+            "val_start": pd.Timestamp("2019-01-01"),
+            "val_end": pd.Timestamp("2019-12-31"),
+        },
+    ]
+    forward_numbered = pl.concat(
+        [
+            pl.DataFrame(
+                {
+                    "timestamp": pd.date_range("2017-01-02", "2019-12-31", freq="B"),
+                    "fold": 0,
+                }
+            ),
+            pl.DataFrame(
+                {
+                    "timestamp": pd.date_range("2018-01-01", "2020-12-31", freq="B"),
+                    "fold": 1,
+                }
+            ),
+        ]
+    ).with_row_index("value")
+    return dataset, forward_numbered, splits
+
+
+def test_temporal_fold_validation_rejects_forward_numbering(backward_temporal_fixture) -> None:
+    dataset, temporal, splits = backward_temporal_fixture
+
+    with pytest.raises(ValueError, match=r"fold 0 validation.*0/.*0\.0%"):
+        validate_temporal_fold_coverage(dataset, temporal, splits, date_col="timestamp")
+
+
+def test_temporal_fold_metadata_remap_restores_coverage(backward_temporal_fixture) -> None:
+    dataset, temporal, splits = backward_temporal_fixture
+    values_before = temporal["value"].sort().to_list()
+    remapped = temporal.with_columns((1 - pl.col("fold")).alias("fold"))
+
+    validate_temporal_fold_coverage(dataset, remapped, splits, date_col="timestamp")
+
+    assert remapped["value"].sort().to_list() == values_before
+
+
+@pytest.fixture
+def warmup_temporal_fixture() -> tuple[pl.DataFrame, list[dict]]:
+    """One fold whose artifact can be trimmed to simulate a burn-in prefix."""
+    dates = pd.date_range("2018-01-01", "2020-12-31", freq="B")
+    dataset = pl.DataFrame({"timestamp": dates, "symbol": ["A"] * len(dates)})
+    splits = [
+        {
+            "fold": 0,
+            "train_start": pd.Timestamp("2018-01-01"),
+            "train_end": pd.Timestamp("2019-12-31"),
+            "val_start": pd.Timestamp("2020-01-01"),
+            "val_end": pd.Timestamp("2020-12-31"),
+        }
+    ]
+    return dataset, splits
+
+
+def _temporal_from(dates: pd.DatetimeIndex) -> pl.DataFrame:
+    return pl.DataFrame({"timestamp": dates, "fold": 0})
+
+
+def test_temporal_warmup_prefix_within_bound_is_excused(warmup_temporal_fixture) -> None:
+    dataset, splits = warmup_temporal_fixture
+    dates = pd.DatetimeIndex(dataset["timestamp"].to_pandas())
+    train = dates[dates <= pd.Timestamp("2019-12-31")]
+    # 8% of the train window unavailable at its start, as a rolling warm-up is.
+    trimmed = dates[dates >= train[int(len(train) * 0.08)]]
+
+    validate_temporal_fold_coverage(dataset, _temporal_from(trimmed), splits, date_col="timestamp")
+
+
+def test_temporal_warmup_prefix_beyond_bound_still_fails(warmup_temporal_fixture) -> None:
+    dataset, splits = warmup_temporal_fixture
+    dates = pd.DatetimeIndex(dataset["timestamp"].to_pandas())
+    train = dates[dates <= pd.Timestamp("2019-12-31")]
+    # A shifted fold looks like this: a leading gap over half the train window.
+    trimmed = dates[dates >= train[int(len(train) * 0.5)]]
+
+    with pytest.raises(ValueError, match=r"fold 0 train: temporal date coverage"):
+        validate_temporal_fold_coverage(
+            dataset, _temporal_from(trimmed), splits, date_col="timestamp"
+        )
+
+
+def test_temporal_warmup_allowance_does_not_apply_to_validation(warmup_temporal_fixture) -> None:
+    dataset, splits = warmup_temporal_fixture
+    dates = pd.DatetimeIndex(dataset["timestamp"].to_pandas())
+    val = dates[dates >= pd.Timestamp("2020-01-01")]
+    # 8% at the start of the window: excused on train, fatal on validation.
+    keep = dates[(dates < pd.Timestamp("2020-01-01")) | (dates >= val[int(len(val) * 0.08)])]
+
+    with pytest.raises(ValueError, match=r"fold 0 validation: temporal date coverage"):
+        validate_temporal_fold_coverage(dataset, _temporal_from(keep), splits, date_col="timestamp")
+
+
+def test_temporal_interior_gap_is_not_excused(warmup_temporal_fixture) -> None:
+    dataset, splits = warmup_temporal_fixture
+    dates = pd.DatetimeIndex(dataset["timestamp"].to_pandas())
+    train = dates[dates <= pd.Timestamp("2019-12-31")]
+    gap = train[int(len(train) * 0.3) : int(len(train) * 0.5)]
+    keep = dates[~dates.isin(gap)]
+
+    with pytest.raises(ValueError, match=r"fold 0 train: temporal date coverage"):
+        validate_temporal_fold_coverage(dataset, _temporal_from(keep), splits, date_col="timestamp")
+
+
+def test_sp500_options_temporal_producer_uses_canonical_split_ids() -> None:
+    source = Path("case_studies/sp500_options/04_model_based_features.py").read_text()
+
+    assert "generate_cv_splits(" in source
+    assert 'fold_idx = fold["fold"]' in source
+    assert "first_test_year" not in source
 
 
 # -----------------------------------------------------------------------------

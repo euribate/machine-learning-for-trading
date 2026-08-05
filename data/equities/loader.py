@@ -9,6 +9,76 @@ from data.exceptions import DataNotFoundError
 from utils import ML4T_DATA_PATH
 from utils.data_quality import apply_max_symbols
 
+# --------------------------------------------------------------------------------
+# AlgoSeek datasets
+# --------------------------------------------------------------------------------
+#
+# AlgoSeek publishes two of the four datasets this book uses, openly and with no
+# account, at the page below. Both are CSV; every loader here reads parquet, so the
+# reader's path is download -> algoseek_convert.py -> (for the options, one build
+# script) -> loader. The instructions below are what a reader sees when a dataset is
+# missing, so they name that path rather than an address to write to.
+
+ALGOSEEK_PAGE = "https://algoseek.com/ml-for-trading/"
+ALGOSEEK_CONVERT = "data/equities/market/algoseek_convert.py"
+
+_NASDAQ100_MINUTE_BARS_INSTRUCTIONS = f"""AlgoSeek publishes this dataset for the book.
+No account, no API key, no license request.
+
+  1. Download nasdaq-100-constituents-taq-ext.zip (5.9 GB) from
+     {ALGOSEEK_PAGE}
+  2. Convert it to the layout this loader reads:
+     uv run python {ALGOSEEK_CONVERT} \\
+       --dataset nasdaq100-minute-bars --source <path to the zip>
+
+Coverage: 505 trading days, 2020-01-02 to 2021-12-31, extended-hours minute bars."""
+
+_SP500_OPTIONS_INSTRUCTIONS = f"""AlgoSeek publishes this dataset for the book.
+No account, no API key, no license request.
+
+  1. Download options_daily_greeks_sp500.zip (13.8 GB) from
+     {ALGOSEEK_PAGE}
+  2. Convert it to the layout this loader reads:
+     uv run python {ALGOSEEK_CONVERT} \\
+       --dataset sp500-options --source <path to the zip>
+
+The archive holds 1,275,314 gzipped files, so unpacking it first and pointing
+--source at the extracted directory is considerably faster than reading from
+the zip.
+
+Coverage: 1,259 trading days 2017-2021, 634 symbols, full daily chains with Greeks."""
+
+
+def _derived_from_raw_options(build_script: str) -> str:
+    """Instructions for a dataset built out of the raw option chains."""
+    return f"""This dataset is derived from the raw S&P 500 option chains.
+
+  1. Obtain the raw chains first — download options_daily_greeks_sp500.zip
+     (13.8 GB) from {ALGOSEEK_PAGE} and convert it:
+     uv run python {ALGOSEEK_CONVERT} --dataset sp500-options --source <path>
+  2. Build this dataset from them:
+     uv run python {build_script}"""
+
+
+def _not_yet_published(what: str, affects: str, why_no_substitute: str = "") -> str:
+    """Instructions for the two datasets AlgoSeek has not packaged yet.
+
+    Saying so plainly is the point: without it a reader hits a missing file with no
+    way to tell whether they did something wrong.
+    """
+    lines = [
+        f"AlgoSeek has not yet published {what}.",
+        "",
+        "It was staged for hosting and has not been packaged. Nothing you can run",
+        "will produce it, so this is not something you have done wrong.",
+        "",
+        f"Affected: {affects}",
+    ]
+    if why_no_substitute:
+        lines += ["", why_no_substitute]
+    lines += ["", f"Check for it at: {ALGOSEEK_PAGE}"]
+    return "\n".join(lines)
+
 
 def load_sp500_index() -> pl.DataFrame:
     """Load S&P 500 index OHLCV data (bundled with repository).
@@ -195,15 +265,7 @@ def load_nasdaq100_bars(
         raise DataNotFoundError(
             dataset_name="NASDAQ-100 Minute Bars",
             path=hive_path,
-            instructions="""This dataset requires a commercial license from AlgoSeek.
-
-To obtain the data:
-  1. Contact AlgoSeek: https://www.algoseek.com/
-  2. Request NASDAQ-100 Minute Bar data (2020-2021)
-  3. Download data to: $ML4T_DATA_PATH/algoseek/minute_nq100/
-  4. Run extraction: python data/_licensed/algoseek/nasdaq100_minute_bars.py
-
-Note: Academic pricing may be available for educational use.""",
+            instructions=_NASDAQ100_MINUTE_BARS_INSTRUCTIONS,
         )
 
     lf = pl.scan_parquet(hive_path / "**/*.parquet", hive_partitioning=True)
@@ -305,15 +367,12 @@ def load_sp500_daily_bars(
         raise DataNotFoundError(
             dataset_name="S&P 500 Daily Bars",
             path=path,
-            instructions="""This dataset requires a commercial license from AlgoSeek.
-
-To obtain the data:
-  1. Contact AlgoSeek: https://www.algoseek.com/
-  2. Request S&P 500 Daily OHLCV data (2017-2021)
-  3. Download data to: $ML4T_DATA_PATH/algoseek/sp500_daily/
-  4. Run extraction: python data/_licensed/algoseek/sp500_daily_bars.py
-
-Note: Academic pricing may be available for educational use.""",
+            instructions=_not_yet_published(
+                "the S&P 500 daily bars",
+                "18_transaction_costs/01_cost_taxonomy, 02_spread_estimation and "
+                "03_market_impact_calibration, and the sp500_equity_option_analytics "
+                "case-study backtest",
+            ),
         )
 
     lf = pl.scan_parquet(path)
@@ -406,15 +465,7 @@ def load_sp500_options(
         raise DataNotFoundError(
             dataset_name="S&P 500 Options Greeks",
             path=base_path,
-            instructions="""This dataset requires a commercial license from AlgoSeek.
-
-To obtain the data:
-  1. Contact AlgoSeek: https://www.algoseek.com/
-  2. Request S&P 500 Options Greeks data (2017-2021)
-  3. Download data to: $ML4T_DATA_PATH/algoseek/options_sp500/
-  4. Run extraction: python data/_licensed/algoseek/sp500_options.py
-
-Note: Academic pricing may be available for educational use.""",
+            instructions=_SP500_OPTIONS_INSTRUCTIONS,
         )
 
     # Use lazy scan with Hive partitioning
@@ -459,9 +510,6 @@ Note: Academic pricing may be available for educational use.""",
     return lf if lazy else lf.collect()
 
 
-_SP500_OPTIONS_S3_BASE = "https://algoseek-public.s3.amazonaws.com/ml4t/sp500_options"
-
-
 def load_sp500_options_eda(
     symbols: list[str] | None = None,
     option_type: Literal["C", "P", "all"] = "all",
@@ -495,7 +543,9 @@ def load_sp500_options_eda(
         raise DataNotFoundError(
             dataset_name="S&P 500 Options — EDA subset",
             path=base_path,
-            download_url=f"{_SP500_OPTIONS_S3_BASE}/options_eda/",
+            instructions=_derived_from_raw_options(
+                "data/equities/market/sp500/build_options_eda.py"
+            ),
         )
 
     lf = pl.scan_parquet(base_path / "year=*.parquet", hive_partitioning=True)
@@ -556,7 +606,9 @@ def load_sp500_options_straddles_raw(
         raise DataNotFoundError(
             dataset_name="S&P 500 Options — ATM-band straddle raw chains",
             path=base_path,
-            download_url=f"{_SP500_OPTIONS_S3_BASE}/options_straddles_raw.tar.zst",
+            instructions=_derived_from_raw_options(
+                "data/equities/market/sp500/build_options_straddles_raw.py"
+            ),
         )
 
     lf = pl.scan_parquet(base_path / "year=*.parquet", hive_partitioning=True)
@@ -606,7 +658,9 @@ def load_sp500_options_surface(
         raise DataNotFoundError(
             dataset_name="S&P 500 Options — Daily IV Surface",
             path=path,
-            download_url=f"{_SP500_OPTIONS_S3_BASE}/options_surface_daily.parquet",
+            instructions=_derived_from_raw_options(
+                "data/equities/market/sp500/materialize_options.py"
+            ),
             derivation_notebook=(
                 "case_studies/sp500_equity_option_analytics/03_financial_features.py"
             ),
@@ -642,7 +696,9 @@ def load_sp500_options_straddles(
         raise DataNotFoundError(
             dataset_name="S&P 500 Options — Daily 30D ATM Straddles",
             path=path,
-            download_url=f"{_SP500_OPTIONS_S3_BASE}/options_straddles_daily.parquet",
+            instructions=_derived_from_raw_options(
+                "data/equities/market/sp500/materialize_options.py"
+            ),
             derivation_notebook="data/equities/market/sp500/materialize_options.py",
         )
     lf = pl.scan_parquet(path)
@@ -709,15 +765,12 @@ def load_nasdaq100_taq(
     """
     base_path = ML4T_DATA_PATH / "equities" / "market" / "microstructure" / "trade_and_quotes"
 
-    algoseek_instructions = """This dataset requires a commercial license from AlgoSeek.
-
-To obtain the data:
-  1. Contact AlgoSeek: https://www.algoseek.com/
-  2. Request Trade and Quote (TAQ) data for March 2020
-  3. Download data to: $ML4T_DATA_PATH/algoseek/taq/
-  4. Run extraction: python data/_licensed/algoseek/trade_and_quotes.py
-
-Note: Academic pricing may be available for educational use."""
+    algoseek_instructions = _not_yet_published(
+        "the NASDAQ-100 trade-and-quote ticks",
+        "03_market_microstructure/11_algoseek_taq_eda and 12_algoseek_taq_lob_reconstruction",
+        "The published minute-bar archive cannot stand in: it is quote-aware bar\n"
+        "aggregates, and reconstructing an order book needs the individual events.",
+    )
 
     if not base_path.exists() or not list(base_path.glob("symbol=*")):
         raise DataNotFoundError(
@@ -1007,26 +1060,21 @@ def load_firm_characteristics(
 ) -> pl.DataFrame:
     """Load firm characteristics dataset for ML-based asset pricing.
 
-    Chen-Pelger-Zhu (2020) anonymized dataset with ~180 firm characteristics
+    Chen-Pelger-Zhu (2020) anonymized dataset with 46 firm characteristics
     (accounting ratios, price-based measures) and monthly returns for US equities.
-    Standard benchmark for Chapters 10-16.
+    Anonymous identifiers are persistent within each published data split.
 
     Args:
         split: Which split to load ("all", "train", "valid", "test")
-               - train: 1967-1989 (~70%)
-               - valid: 1990-1999 (~15%)
-               - test: 2000-2016 (~15%)
+               - train: 1967-1986
+               - valid: 1987-1991
+               - test: 1992-2016
         include_macro: Whether to include macro columns
 
     Returns:
-        DataFrame with ~180 firm characteristics and returns
+        DataFrame with symbol, timestamp, 46 firm characteristics, and returns
     """
-    # Use canonical firm_characteristics_*.parquet naming
-    if split == "valid":
-        # Valid split derived from full dataset
-        filename = "firm_characteristics_all.parquet"
-    else:
-        filename = f"firm_characteristics_{split}.parquet"
+    filename = f"firm_characteristics_{split}.parquet"
 
     path = ML4T_DATA_PATH / "equities" / "firm_characteristics" / filename
 
@@ -1039,25 +1087,20 @@ def load_firm_characteristics(
 
     df = pl.read_parquet(path)
 
-    # Normalize: date → timestamp for canonical schema
+    # Normalize date to timestamp for canonical schema.
     if "date" in df.columns and "timestamp" not in df.columns:
         df = df.rename({"date": "timestamp"})
     if df["timestamp"].dtype != pl.Date:
         df = df.with_columns(pl.col("timestamp").cast(pl.Date))
 
-    # Add split column based on year (matches Chen-Pelger-Zhu methodology)
-    if "split" not in df.columns and "timestamp" in df.columns:
-        df = df.with_columns(
-            pl.when(pl.col("timestamp").dt.year() < 1990)
-            .then(pl.lit("train"))
-            .when(pl.col("timestamp").dt.year() < 2000)
-            .then(pl.lit("valid"))
-            .otherwise(pl.lit("test"))
-            .alias("split")
+    required = {"symbol", "timestamp", "split"}
+    if missing := required.difference(df.columns):
+        raise ValueError(
+            f"Outdated firm-characteristics parquet at {path}: missing {sorted(missing)}. "
+            "Re-run data/equities/firm_characteristics/download.py --convert to recover "
+            "persistent anonymous identifiers from the published tensors."
         )
-
-    # Filter to requested split if not "all"
-    if split != "all" and "split" in df.columns:
+    if split != "all":
         df = df.filter(pl.col("split") == split)
 
     if not include_macro:
@@ -1391,7 +1434,9 @@ def load_institutional_holdings_13f(
 ) -> pl.DataFrame:
     """Load 13F institutional holdings for Chapter 10 / Chapter 22-23 notebooks.
 
-    Produced by `data/equities/positioning/13f_download.py`.
+    Produced by `data/equities/positioning/13f_download.py`. The `put_call`
+    field preserves the SEC security-type marker so consumers can separate
+    long-equity rows from put and call positions.
     """
     path = ML4T_DATA_PATH / "equities" / "positioning" / "13f" / "institutional_holdings.parquet"
     if not path.exists():
@@ -1403,8 +1448,13 @@ def load_institutional_holdings_13f(
         )
 
     data = pl.read_parquet(path)
-    if "filing_date" in data.columns and data["filing_date"].dtype == pl.String:
-        data = data.with_columns(pl.col("filing_date").str.to_date(strict=False))
+    date_columns = [
+        pl.col(column).str.to_date(strict=False)
+        for column in ("report_date", "filing_date")
+        if column in data.columns and data[column].dtype == pl.String
+    ]
+    if date_columns:
+        data = data.with_columns(date_columns)
 
     if start_date and "filing_date" in data.columns:
         data = data.filter(pl.col("filing_date") >= pl.lit(start_date).str.to_date())
@@ -1447,9 +1497,9 @@ def load_13f_bulk_holdings(quarter: str) -> pl.DataFrame:
 
     Produced by `data/equities/positioning/13f_download.py --mode bulk`.
     Same canonical schema as `load_institutional_holdings_13f` (cik,
-    accession_no, issuer, cusip, value_thousands, shares, filing_date,
-    company_name) but covers all ~5-7K filers in the window instead of the
-    curated institution list.
+    accession_no, issuer, cusip, value_thousands, shares, put_call,
+    report_date, filing_date, company_name) but covers all ~5-7K filers
+    in the window instead of the curated institution list.
 
     Args:
         quarter: SEC filing-window label, e.g. '2024Q3'. SEC labels by

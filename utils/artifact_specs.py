@@ -41,6 +41,26 @@ def _load_spec(path: Path) -> dict[str, Any] | None:
 
 
 @cache
+def _load_setup_config_cached(case_study_id: str) -> dict[str, Any]:
+    path = get_case_study_dir(case_study_id, create=False) / "config" / "setup.yaml"
+    if not path.exists():
+        return {}
+    with path.open() as f:
+        data = yaml.safe_load(f)
+    return dict(data) if data else {}
+
+
+def load_setup_config(case_study_id: str) -> dict[str, Any]:
+    """Return the whole parsed `config/setup.yaml` for a case study.
+
+    `load_evaluation_config` returns only the `evaluation` section. Callers that
+    also need `labels` (the buffer, the primary label, the variant buffers) read
+    the file through here rather than re-parsing the YAML themselves.
+    """
+    return deepcopy(_load_setup_config_cached(case_study_id))
+
+
+@cache
 def _load_market_data_spec_cached(case_study_id: str) -> dict[str, Any] | None:
     return _load_spec(_artifact_root(case_study_id) / "market_data.yaml")
 
@@ -102,6 +122,23 @@ def resolve_label_buffer(
     return None
 
 
+def resolve_label_horizon(
+    case_study_id: str,
+    label: str,
+    setup: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Return the outcome horizon, which may be shorter than the CV buffer."""
+    label_spec = load_label_spec(case_study_id, label)
+    if label_spec is not None:
+        definition = label_spec.get("definition", {})
+        if definition.get("horizon"):
+            return str(definition["horizon"])
+
+    labels = (setup or {}).get("labels", {})
+    horizon = (labels.get("horizons") or {}).get(label)
+    return str(horizon) if horizon else resolve_label_buffer(case_study_id, label, setup)
+
+
 def resolve_market_semantics(
     case_study_id: str,
     setup: Mapping[str, Any] | None = None,
@@ -130,6 +167,7 @@ __all__ = [
     "load_label_spec",
     "load_market_data_spec",
     "resolve_label_buffer",
+    "resolve_label_horizon",
     "resolve_market_runtime",
     "resolve_market_semantics",
     "resolve_storage_path",

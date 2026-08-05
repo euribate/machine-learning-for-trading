@@ -13,7 +13,7 @@
 #     name: python3
 # ---
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # # Multiple Testing and Selection Bias
 #
 # **Docker image**: `ml4t`
@@ -43,13 +43,13 @@
 #
 # ## Prerequisites
 #
-# - `06_ic_inference` — provides per-factor HAC inference whose p-values feed
+# - `06_ic_inference` - provides per-factor HAC inference whose p-values feed
 #   the BH/Holm/Rademacher corrections here.
 # - Familiarity with the family-wise error rate (FWER) and false discovery
 #   rate (FDR), and with the Sharpe ratio's distribution under selection.
 
-# %%
-"""Multiple Testing — Bonferroni, FDR, and deflated Sharpe corrections for strategy evaluation."""
+# %% tags=[]
+"""Multiple Testing - Bonferroni, FDR, and deflated Sharpe corrections for strategy evaluation."""
 
 from __future__ import annotations
 
@@ -79,6 +79,7 @@ from scipy import stats
 
 from data import load_etfs
 from utils.reproducibility import set_global_seeds
+from utils.style import COLORS  # importing utils.style activates the ml4t Plotly template
 
 warnings.filterwarnings("ignore")
 
@@ -95,17 +96,18 @@ N_TRUE_ZOO = 15
 N_PERIODS_ZOO = 1260
 N_ASSETS_ZOO = 100
 ETF_START_DATE = "2010-01-01"
+ETF_LABEL_HORIZON = 5  # drives both the fwd return and its HAC truncation
 N_RAD_ETF = 5000
 N_STRATEGIES_DSR = 50
 N_DAYS_DSR = 756
 N_STRAT_PBO = 20
 N_COMBOS_PBO = 50
 
-# %%
+# %% tags=[]
 set_global_seeds(SEED)
 
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 1. The Selection Bias Problem
 #
 # When testing N factors and selecting the best:
@@ -118,7 +120,7 @@ set_global_seeds(SEED)
 #
 # This is the "expected best by chance" - the selection bias.
 
-# %%
+# %% tags=[]
 # Simulate the selection bias problem with synthetic factors
 rng = np.random.default_rng(42)
 
@@ -146,7 +148,7 @@ for f in range(n_factors):
 observed_ics = np.array(observed_ics)
 ic_series_all = np.array(ic_series_all)
 
-# %%
+# %% tags=[]
 # The "best" factor by IC
 best_idx = np.argmax(observed_ics)
 best_ic = observed_ics[best_idx]
@@ -183,7 +185,7 @@ print(
     )
 )
 
-# %%
+# %% tags=[]
 # Visualize selection bias
 fig = go.Figure()
 
@@ -192,7 +194,7 @@ fig.add_trace(
         x=observed_ics,
         nbinsx=25,
         name="Factor ICs",
-        marker_color="#1f77b4",
+        marker_color=COLORS["blue"],
         opacity=0.7,
     )
 )
@@ -200,34 +202,33 @@ fig.add_trace(
 fig.add_vline(
     x=best_ic,
     line_dash="dash",
-    line_color="#f97316",
+    line_color=COLORS["amber"],
     annotation_text=f"Selected: {best_ic:.4f}",
 )
 
 fig.add_vline(
     x=0,
     line_dash="dot",
-    line_color="gray",
+    line_color=COLORS["neutral"],
     annotation_text="True IC = 0",
 )
 
 fig.update_layout(
-    title="Factor IC Distribution (All Noise Factors)",
+    title="Selecting the best of 100 pure-noise factors manufactures a positive IC",
     xaxis_title="Mean IC",
     yaxis_title="Count",
-    template="plotly_white",
     height=350,
 )
 
 fig.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### Publication Figure Artifact
 #
 # The book figure for this section reads a compact NumPy artifact so formatting
 # changes do not rerun the null simulation.
 
-# %%
+# %% tags=[]
 
 
 def _vectorized_rank_ic(signals_3d: np.ndarray, returns_2d: np.ndarray) -> np.ndarray:
@@ -304,7 +305,7 @@ def write_figure_7_6_artifact() -> Path:
 figure_7_6_artifact = write_figure_7_6_artifact()
 print(f"Wrote publication figure artifact: {figure_7_6_artifact}")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 2. Benjamini-Hochberg FDR Control
 #
 # **False Discovery Rate (FDR)** controls the expected proportion of false
@@ -317,7 +318,7 @@ print(f"Wrote publication figure artifact: {figure_7_6_artifact}")
 # 2. Find largest k where p₍ₖ₎ ≤ (k/n) × α
 # 3. Reject hypotheses 1, 2, ..., k
 
-# %%
+# %% tags=[]
 # Compute HAC-adjusted p-values for each factor
 # IMPORTANT: Use HAC p-values, not naive t-stats
 p_values = []
@@ -344,7 +345,7 @@ print(
     )
 )
 
-# %%
+# %% tags=[]
 # Visualize BH procedure
 fig = make_subplots(rows=1, cols=2, subplot_titles=["P-Value Distribution", "BH Procedure"])
 
@@ -354,13 +355,13 @@ fig.add_trace(
         x=p_values,
         nbinsx=20,
         name="P-values",
-        marker_color="#1f77b4",
+        marker_color=COLORS["blue"],
     ),
     row=1,
     col=1,
 )
 
-fig.add_vline(x=0.05, line_dash="dash", line_color="#f97316", row=1, col=1)
+fig.add_vline(x=0.05, line_dash="dash", line_color=COLORS["amber"], row=1, col=1)
 
 # BH procedure visualization
 sorted_idx = np.argsort(p_values)
@@ -374,7 +375,7 @@ fig.add_trace(
         y=sorted_p,
         mode="markers",
         name="Sorted p-values",
-        marker=dict(size=5, color="#1f77b4"),
+        marker=dict(size=5, color=COLORS["blue"]),
     ),
     row=1,
     col=2,
@@ -386,13 +387,16 @@ fig.add_trace(
         y=bh_threshold,
         mode="lines",
         name="BH threshold",
-        line=dict(dash="dash", color="#f97316"),
+        line=dict(dash="dash", color=COLORS["amber"]),
     ),
     row=1,
     col=2,
 )
 
-fig.update_layout(height=350, template="plotly_white")
+fig.update_layout(
+    height=350,
+    title_text="BH-FDR keeps discoveries below the rank-scaled threshold line",
+)
 fig.update_xaxes(title_text="P-Value", row=1, col=1)
 fig.update_yaxes(title_text="Count", row=1, col=1)
 fig.update_xaxes(title_text="Rank", row=1, col=2)
@@ -400,16 +404,16 @@ fig.update_yaxes(title_text="P-Value", row=1, col=2)
 
 fig.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### 2.1 Holm-Bonferroni FWER Control
 #
 # BH controls **FDR** (the expected proportion of false discoveries among rejections).
 # Holm-Bonferroni controls **FWER** (the probability of making *any* false discovery).
 #
-# Use FWER when even one false positive is unacceptable — e.g., deploying a new
+# Use FWER when even one false positive is unacceptable - e.g., deploying a new
 # strategy that incurs real capital risk.
 
-# %%
+# %% tags=[]
 # Apply Holm-Bonferroni to the same p-values
 holm_result = holm_bonferroni(p_values, alpha=0.05)
 holm_significant = np.sum(holm_result["rejected"])
@@ -429,7 +433,7 @@ print(
     )
 )
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 3. Rademacher Complexity (RAS)
 #
 # When factors are correlated, Rademacher complexity provides a sharper bound
@@ -439,13 +443,38 @@ print(
 # Key insight: Testing 100 variants of the same factor is less risky than
 # testing 100 truly independent factors.
 
-# %%
-# Compute Rademacher complexity
+# %% [markdown] tags=[]
+# ### Two scales, and why the distinction matters
+#
+# Rademacher complexity is estimated from a matrix of per-period performances, and
+# **it comes out in whatever units that matrix is in**. Two different questions here
+# need two different scales, and mixing them is a silent error:
+#
+# - *How correlated is this candidate set?* Compare $\hat{R}$ to Massart's bound
+#   $\sqrt{2\log N / T}$. Massart bounds the maximum of $N$ **standardized** means,
+#   so this comparison is only meaningful on standardized ICs.
+# - *How much do I deduct from an observed IC?* The RAS bound
+#   $\theta_N \ge \hat{\theta}_N - 2\hat{R} - 2\kappa\sqrt{\log(2/\delta)/T}$
+#   subtracts $2\hat{R}$ from an IC, so here $\hat{R}$ must be in **IC units**.
+#
+# Standardizing divides each factor's column by its own **per-period** IC standard
+# deviation - the dispersion of that factor's IC across dates, not the dispersion of
+# the averaged ICs across factors. The two differ by more than an order of magnitude
+# here, and the cell below prints both so the conversion is checkable rather than
+# asserted. Feeding the standardized $\hat{R}$ into the adjustment would deduct a
+# penalty many times larger than any IC in the set - the bound would reject
+# everything, and would do so no matter what the data said.
+
+# %% tags=[]
+# Compute Rademacher complexity on both scales
 ic_matrix = ic_series_all.T  # Shape: (T, N)
 ic_matrix_norm = (ic_matrix - np.mean(ic_matrix, axis=0)) / np.std(ic_matrix, axis=0, ddof=1)
 
 n_rad_sims = N_RAD_SIMS
-R_hat = rademacher_complexity(ic_matrix_norm, n_simulations=n_rad_sims, random_state=42)
+# Standardized: comparable to Massart, answers "how correlated is the candidate set?"
+R_hat_norm = rademacher_complexity(ic_matrix_norm, n_simulations=n_rad_sims, random_state=42)
+# Raw IC units: the scale the RAS deduction below is applied on
+R_hat = rademacher_complexity(ic_matrix, n_simulations=n_rad_sims, random_state=42)
 
 # Massart's bound (theoretical max for independent factors)
 massart_bound = np.sqrt(2 * np.log(n_factors) / n_periods)
@@ -453,36 +482,98 @@ massart_bound = np.sqrt(2 * np.log(n_factors) / n_periods)
 print(
     pl.DataFrame(
         {
-            "metric": ["Empirical R-hat", "Massart bound", "Ratio"],
-            "value": [f"{R_hat:.4f}", f"{massart_bound:.4f}", f"{R_hat / massart_bound:.1%}"],
+            "metric": [
+                "R-hat (standardized)",
+                "Massart bound",
+                "Ratio",
+                "R-hat (IC units, used by RAS)",
+                "per-period IC std (mean over factors, the divisor)",
+                "implied scale: R-hat raw / R-hat standardized",
+                "std of the averaged ICs across factors (NOT the divisor)",
+            ],
+            "value": [
+                f"{R_hat_norm:.4f}",
+                f"{massart_bound:.4f}",
+                f"{R_hat_norm / massart_bound:.1%}",
+                f"{R_hat:.6f}",
+                f"{np.mean(np.std(ic_matrix, axis=0, ddof=1)):.6f}",
+                f"{R_hat / R_hat_norm:.6f}",
+                f"{np.std(observed_ics, ddof=1):.6f}",
+            ],
         }
     )
 )
 
-# %% [markdown]
-# A ratio near 100% means factors are nearly independent — the full multiple-testing
+# %% [markdown] tags=[]
+# A ratio near 100% means factors are nearly independent - the full multiple-testing
 # penalty applies. A ratio well below 100% signals correlation among candidates,
 # meaning the effective hypothesis count is lower than the nominal count.
 
-# %%
+# %% tags=[]
 # Apply the RAS adjustment.
-# The observed ICs are all noise: max |IC| = 0.022. We set kappa=0.05 (Paleologo's
-# "high-conviction" band), which bounds the largest observed |IC| while staying far
-# below the overly conservative kappa=1.0. The library returns a conservative lower
-# bound on each true IC and flags significance as adjusted_ic > 0.
+#
+# kappa is the bound the concentration (Hoeffding) term needs, and it bounds the
+# *per-period* IC observations that get averaged - not the averaged IC. This is the
+# same units confusion as the complexity above, one term to the right, and it is
+# easy to make because the averaged ICs are tiny: max |IC| = 0.022 invites
+# kappa=0.05, and a per-period Spearman IC is supported on [-1, 1].
+#
+# **The reported bound uses kappa = 1.0.** Hoeffding needs a bound fixed *before*
+# the data is seen. The observed sample maximum is a function of the same sample the
+# bound is being computed on, so substituting it does not give a conservative bound
+# with a smaller constant - it gives no valid coverage guarantee at all, and the
+# "significant" flag downstream would then mean nothing. The Spearman support
+# [-1, 1] is the bound that holds by construction.
+#
+# The empirical maximum is computed too, and shown next to it as a **sensitivity
+# calculation only** - the size of the estimation term if one were willing to assume
+# the observed range persists. No significance claim is read off that row. It is
+# here because the gap between the two is the honest cost of a distribution-free
+# bound on one year of data, and that cost is invisible if only one value is shown.
+KAPPA = 1.0  # Spearman IC support: valid without assumptions, and used for inference
+kappa_empirical = float(np.max(np.abs(ic_matrix)))  # sensitivity only, data-dependent
+
 ras = ras_ic_adjustment(
     observed_ic=observed_ics,
     complexity=R_hat,
     n_samples=n_periods,
     delta=0.05,
-    kappa=0.05,
+    kappa=KAPPA,
     return_result=True,
+)
+ras_sensitivity = ras_ic_adjustment(
+    observed_ic=observed_ics,
+    complexity=R_hat,
+    n_samples=n_periods,
+    delta=0.05,
+    kappa=kappa_empirical,
+    return_result=True,
+)
+print(
+    pl.DataFrame(
+        {
+            "kappa": [
+                f"{KAPPA:.4f}  (Spearman support)",
+                f"{kappa_empirical:.4f}  (observed per-period |IC| max)",
+            ],
+            "role": ["REPORTED bound", "sensitivity only (data-dependent)"],
+            "best adjusted IC": [
+                f"{np.max(ras.adjusted_values):+.4f}",
+                f"{np.max(ras_sensitivity.adjusted_values):+.4f}",
+            ],
+            "significant": [
+                f"{int(np.sum(ras.adjusted_values > 0))}/{n_factors}",
+                "not a valid claim",
+            ],
+        }
+    )
 )
 adjusted_ics = ras.adjusted_values
 
-# The RAS penalty is an absolute deduction (2*R_hat plus a small estimation term),
-# not a proportional shrinkage, so we report the penalty components and the resulting
-# lower bound. Significance uses the library's own convention: adjusted_ic > 0.
+# The RAS penalty is an absolute deduction (2*R_hat plus the estimation term), not a
+# proportional shrinkage, so we report both components and the resulting lower bound.
+# Which of the two is larger depends on kappa, N and T, so it is printed rather than
+# described. Significance uses the library's own convention: adjusted_ic > 0.
 n_positive_raw = int(np.sum(observed_ics > 0))
 
 print(
@@ -508,16 +599,38 @@ print(
     )
 )
 
-# %% [markdown]
-# All 100 factors are pure noise, and the RAS lower bound reflects that. The
-# data-snooping penalty of 2 R-hat is roughly 0.31, which dwarfs the largest
-# observed IC of about 0.02, so no factor's conservative lower bound clears zero.
-# Where 42 factors show a positive raw IC by chance, none survives the correction.
-# The penalty is an absolute deduction driven almost entirely by the Rademacher
-# complexity of the candidate set, not a percentage haircut on each IC. A stricter
-# correction therefore makes significance harder to claim, exactly as intended.
+# %% [markdown] tags=[]
+# All 100 factors are pure noise, and the RAS lower bound reflects that: no factor's
+# conservative lower bound clears zero, though a good many show a positive raw IC by
+# chance. The penalty is an absolute deduction in IC units, not a percentage haircut
+# on each IC, and it has two parts. The data-snooping term $2\hat{R}$ is the price of
+# having searched the candidate set at all; the estimation term
+# $2\kappa\sqrt{\log(2/\delta)/T}$ is the price of a finite sample.
+#
+# Both terms are now on the IC scale, so their sizes can be compared and the
+# comparison means something - read them off the table above rather than from here,
+# because which one dominates is not a fixed fact about the method. It moves with
+# $\kappa$, with $N$ and with $T$: the search term scales with the number and
+# correlation of the candidates, the estimation term with $\kappa/\sqrt{T}$. On this
+# panel - a distribution-free $\kappa$ and a single year of data - the finite sample
+# is much the more expensive of the two. Lengthen the sample or widen the candidate
+# set and that ordering changes.
+#
+# This paragraph has now been written wrong twice, in both directions, which is the
+# argument for printing the components instead of narrating them: an ordering
+# asserted in prose survives the re-run that invalidates it.
+#
+# Read against the best observed IC, the total deduction is many times that IC -
+# enough to sink every candidate, which is correct, because every candidate here is
+# noise by construction.
+#
+# The point of putting the complexity in IC units is that the comparison is now a
+# statement about the data at all. On the standardized scale the search penalty alone
+# was 0.31, about sixteen times the largest IC in the set, and it would have rejected
+# everything no matter what the ICs were - a bound that returns the same verdict for
+# every input is not measuring anything.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 4. Harvey et al. (2016) Thresholds
 #
 # Based on the "factor zoo" of 300+ published factors, Harvey et al. recommend
@@ -529,7 +642,7 @@ print(
 # | Modern | t > 3.0 | Accounts for ~300 prior factors |
 # | Strict | t > 3.5 | For new factor discovery papers |
 
-# %%
+# %% tags=[]
 # Simulate factor zoo scenario
 n_factors_zoo = N_FACTORS_ZOO
 n_true = N_TRUE_ZOO
@@ -543,7 +656,7 @@ print(
     f"{n_periods_zoo} days ({n_periods_zoo // 252} years), {n_assets_zoo} assets"
 )
 
-# %%
+# %% tags=[]
 # Generate factor signals and returns
 rng_zoo = np.random.default_rng(123)
 factor_signals_zoo = rng_zoo.standard_normal((n_periods_zoo, n_assets_zoo, n_factors_zoo))
@@ -577,7 +690,7 @@ for f in range(n_factors_zoo):
 
 zoo_df = pl.DataFrame(zoo_results)
 
-# %%
+# %% tags=[]
 # Apply different thresholds
 alpha = 0.05
 
@@ -630,7 +743,7 @@ print(
     )
 )
 
-# %%
+# %% tags=[]
 # Visualize factor zoo results
 fig = make_subplots(
     rows=1, cols=2, subplot_titles=["t-Statistic Distribution", "Method Comparison"]
@@ -644,7 +757,7 @@ fig.add_trace(
     go.Histogram(
         x=t_stats[~true_mask],
         name="Noise factors",
-        marker_color="gray",
+        marker_color=COLORS["neutral"],
         opacity=0.6,
         nbinsx=30,
     ),
@@ -656,7 +769,7 @@ fig.add_trace(
     go.Histogram(
         x=t_stats[true_mask],
         name="True factors",
-        marker_color="#2166ac",
+        marker_color=COLORS["blue"],
         opacity=0.8,
         nbinsx=15,
     ),
@@ -665,7 +778,7 @@ fig.add_trace(
 )
 
 # Threshold lines with annotations
-for thresh, label, color in [(2.0, "t=2.0", "#f97316"), (3.0, "t=3.0", "#2166ac")]:
+for thresh, label, color in [(2.0, "t=2.0", COLORS["amber"]), (3.0, "t=3.0", COLORS["blue"])]:
     for sign in [1, -1]:
         fig.add_vline(x=sign * thresh, line_dash="dash", line_color=color, row=1, col=1)
     fig.add_annotation(
@@ -682,18 +795,18 @@ for thresh, label, color in [(2.0, "t=2.0", "#f97316"), (3.0, "t=3.0", "#2166ac"
         col=1,
     )
 
-# Method comparison — colorblind-safe blue/orange
+# Method comparison - colorblind-safe blue/orange
 methods = ["Naive (t>2)", "Harvey (t>3)", "BH-FDR", "Holm-Bonf"]
 tp_counts = [naive_tp, harvey_tp, bh_tp, holm_tp]
 fp_counts = [naive_fp, harvey_fp, bh_fp, holm_fp]
 
 fig.add_trace(
-    go.Bar(x=methods, y=tp_counts, name="True Positives", marker_color="#2166ac"),
+    go.Bar(x=methods, y=tp_counts, name="True Positives", marker_color=COLORS["blue"]),
     row=1,
     col=2,
 )
 fig.add_trace(
-    go.Bar(x=methods, y=fp_counts, name="False Positives", marker_color="#f97316"),
+    go.Bar(x=methods, y=fp_counts, name="False Positives", marker_color=COLORS["amber"]),
     row=1,
     col=2,
 )
@@ -701,21 +814,25 @@ fig.add_trace(
 fig.add_hline(
     y=n_true,
     line_dash="dot",
-    line_color="gray",
+    line_color=COLORS["neutral"],
     row=1,
     col=2,
     annotation_text=f"N true = {n_true}",
     annotation_position="top left",
 )
 
-fig.update_layout(height=400, template="plotly_white", barmode="stack")
+fig.update_layout(
+    height=400,
+    barmode="stack",
+    title_text="Stricter thresholds trade true discoveries for fewer false positives",
+)
 fig.update_xaxes(title_text="t-Statistic (HAC)", row=1, col=1)
 fig.update_yaxes(title_text="Count", row=1, col=1)
 fig.update_yaxes(title_text="Count", row=1, col=2)
 
 fig.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 5. Practical Pipeline
 #
 # The recommended workflow for evaluating many factors:
@@ -725,7 +842,7 @@ fig.show()
 # 3. **Report adjusted p-values** alongside discoveries
 # 4. **Consider RAS** if factors are correlated (e.g., parameter variants)
 
-# %%
+# %% tags=[]
 # Build discovery table
 discovery_df = zoo_df.with_columns(
     [
@@ -754,7 +871,7 @@ else:
         .select(["factor", "mean_ic", "t_stat_hac", "p_value_hac", "adjusted_p", "is_true"])
     )
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 5.1 Exploration vs. Confirmation Pass
 #
 # Section 7.4 recommends splitting evaluation into two passes:
@@ -767,7 +884,7 @@ else:
 # The confirmation pass controls FDR more tightly because the search set
 # shrinks to only the promoted candidates.
 
-# %%
+# %% tags=[]
 # Split zoo data into exploration (first 80%) and confirmation (last 20%)
 n_explore = int(n_periods_zoo * 0.8)
 
@@ -793,7 +910,7 @@ for f in range(n_factors_zoo):
 explore_bh = benjamini_hochberg_fdr(explore_p_values, alpha=0.10, return_details=True)
 promoted_idx = np.where(explore_bh["rejected"])[0]
 
-# %%
+# %% tags=[]
 # Confirmation pass: re-evaluate ONLY promoted candidates
 if len(promoted_idx) > 0:
     confirm_p_values = np.zeros(len(promoted_idx))
@@ -836,26 +953,26 @@ if len(promoted_idx) > 0:
 else:
     print("No candidates promoted from exploration pass")
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # The confirmation pass operates on a smaller search set (only the promoted
 # candidates), so BH corrections are less aggressive. At the same time, using
 # held-out data prevents the double-dipping that inflates exploration-pass
 # discovery rates. This two-pass workflow is the practical implementation of
 # the "separate exploration from confirmation" principle in Section 7.4.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ### 5.2 Applied Example: ETF Feature Search
 #
 # The synthetic simulations above use known ground truth to verify the
 # corrections work. Now we apply the same pipeline to real features on
-# the ETF universe — the same data used in notebooks 05, 06, and 08.
+# the ETF universe - the same data used in notebooks 05, 06, and 08.
 #
 # We compute 13 candidate features (momentum at 6 lookbacks, reversal
 # at 3 horizons, realized volatility, and volume ratios) and test each
 # for IC significance with HAC inference. After BH-FDR correction for
 # 13 simultaneous tests, how many survive?
 
-# %%
+# %% tags=[]
 # Load ETF data and compute candidate features
 etfs_real = load_etfs()
 etf_start = datetime.strptime(ETF_START_DATE, "%Y-%m-%d")
@@ -871,7 +988,9 @@ panel = (
     )
     .sort(["symbol", "timestamp"])
     .with_columns(
-        (pl.col("close").shift(-5).over("symbol") / pl.col("close")).log().alias("fwd_5d"),
+        (pl.col("close").shift(-ETF_LABEL_HORIZON).over("symbol") / pl.col("close"))
+        .log()
+        .alias("fwd_5d"),
         pl.col("close").pct_change().shift(1).over("symbol").alias("ret_lag1"),
     )
     .with_columns(
@@ -895,7 +1014,7 @@ panel = (
     )
 )
 
-# %%
+# %% tags=[]
 FEAT_COLS = {
     "mom_5d": "Momentum 5d",
     "mom_10d": "Momentum 10d",
@@ -920,7 +1039,7 @@ print(
 )
 print(f"Candidate features: {len(FEAT_COLS)}")
 
-# %%
+# %% tags=[]
 # Cross-sectional IC with HAC inference for each feature
 groups = panel.partition_by("timestamp", as_dict=True)
 
@@ -939,13 +1058,18 @@ for col, name in FEAT_COLS.items():
         if not np.isnan(rho):
             ics.append(rho)
 
-    hac = compute_ic_hac_stats(ics)
+    # label_horizon, because `fwd_5d` is a 5-day forward return sampled daily and
+    # this IC series is therefore overlapping. Without it the library picks the
+    # truncation from the sample size alone, which is the defect `06_ic_inference`
+    # corrects; the three calls above are on synthetic zoos whose periods are drawn
+    # independently, so the automatic rule is right for those and only for those.
+    hac = compute_ic_hac_stats(ics, label_horizon=ETF_LABEL_HORIZON)
     etf_test_results.append(
         {"feature": name, "ic": hac["mean_ic"], "t_hac": hac["t_stat"], "p_hac": hac["p_value"]}
     )
     all_ic_series.append(ics)
 
-# %%
+# %% tags=[]
 # Apply BH-FDR, Holm-Bonferroni, and Rademacher analysis
 etf_p = np.array([r["p_hac"] for r in etf_test_results])
 etf_bh = benjamini_hochberg_fdr(etf_p, alpha=0.05, return_details=True)
@@ -987,13 +1111,13 @@ print(
     f"\nRademacher: R_hat={R_etf:.4f}, Massart={massart_etf:.4f}, ratio={R_etf / massart_etf:.0%}"
 )
 
-# %%
+# %% tags=[]
 # IC by feature, colored by BH-FDR significance
 sort_idx = np.argsort(etf_p)
 sorted_names = [etf_test_results[i]["feature"] for i in sort_idx]
 sorted_ics = [etf_test_results[i]["ic"] for i in sort_idx]
 sorted_bh = [bool(etf_bh["rejected"][i]) for i in sort_idx]
-colors_etf = ["#2166ac" if b else "lightgray" for b in sorted_bh]
+colors_etf = [COLORS["amber"] if b else COLORS["neutral"] for b in sorted_bh]
 
 fig = go.Figure(
     go.Bar(
@@ -1003,18 +1127,17 @@ fig = go.Figure(
         marker_color=colors_etf,
     )
 )
-fig.add_vline(x=0, line_dash="dash", line_color="gray")
+fig.add_vline(x=0, line_dash="dash", line_color=COLORS["neutral"])
 fig.update_layout(
-    title="ETF Feature IC — no feature survives BH-FDR at alpha=0.05",
+    title="ETF Feature IC - no feature survives BH-FDR at alpha=0.05",
     xaxis_title="Mean IC (HAC)",
     height=400,
-    template="plotly_white",
 )
 fig.show()
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # The Rademacher ratio is well below 100%, reflecting the high correlation
-# among momentum variants — testing 6 lookbacks is not 6 independent trials.
+# among momentum variants - testing 6 lookbacks is not 6 independent trials.
 # Even with this milder effective penalty, most features do not survive BH-FDR
 # correction after HAC inference.
 #
@@ -1026,7 +1149,7 @@ fig.show()
 # significance. The corrections here ensure that features *selected* for
 # that pipeline have not been promoted purely by selection bias.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 6. Output: Discovery Report
 #
 # The JSON structure below is a template for production logging. Recording
@@ -1034,8 +1157,8 @@ fig.show()
 # alongside the Rademacher analysis makes the report self-contained and
 # auditable.
 
-# %%
-# Build structured output — base report with naive and Harvey thresholds
+# %% tags=[]
+# Build structured output - base report with naive and Harvey thresholds
 discovery_report = {
     "n_factors_tested": n_factors_zoo,
     "n_true_factors": n_true,
@@ -1060,7 +1183,7 @@ discovery_report = {
     },
 }
 
-# %%
+# %% tags=[]
 # Add FDR, Holm-Bonferroni, and Rademacher analysis
 discovery_report["methods"]["bh_fdr"] = {
     "alpha": 0.05,
@@ -1081,15 +1204,18 @@ discovery_report["methods"]["holm_bonferroni"] = {
     "power": round(holm_tp / n_true, 3),
 }
 discovery_report["rademacher_analysis"] = {
-    "empirical_complexity": round(float(R_hat), 4),
+    # Standardized scale: the one comparable to Massart's bound
+    "empirical_complexity_standardized": round(float(R_hat_norm), 4),
     "massart_bound": round(float(massart_bound), 4),
-    "complexity_ratio": round(float(R_hat / massart_bound), 3),
+    "complexity_ratio": round(float(R_hat_norm / massart_bound), 3),
+    # IC units: the scale the RAS deduction is applied on
+    "empirical_complexity_ic_units": round(float(R_hat), 6),
 }
 
-# %%
+# %% tags=[]
 print(json.dumps(discovery_report, indent=2))
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 7. Deflated Sharpe Ratio (DSR)
 #
 # When the outcome is a strategy Sharpe ratio (not factor IC), the **Deflated Sharpe
@@ -1101,7 +1227,7 @@ print(json.dumps(discovery_report, indent=2))
 #
 # $$DSR = P\left[\hat{SR} > E\left[\max_{k \in K} SR_k\right] \mid H_0\right]$$
 
-# %%
+# %% tags=[]
 # Simulate noise strategy return streams
 rng_dsr = np.random.default_rng(99)
 n_strategies = N_STRATEGIES_DSR
@@ -1109,7 +1235,7 @@ n_days = N_DAYS_DSR
 
 strategy_returns = [rng_dsr.standard_normal(n_days) * 0.01 for _ in range(n_strategies)]
 
-# Apply DSR to all strategies — picks best and adjusts
+# Apply DSR to all strategies - picks best and adjusts
 dsr_result = deflated_sharpe_ratio(strategy_returns, frequency="daily")
 
 print(
@@ -1119,8 +1245,8 @@ print(
                 "Strategies tested",
                 "Sample (days)",
                 "Best Sharpe (ann.)",
-                "E[max] under null",
-                "Deflated Sharpe",
+                "E[max] under null (ann.)",
+                "Excess over E[max] (ann.)",
                 "DSR probability",
                 "Significant (95%)",
             ],
@@ -1128,8 +1254,10 @@ print(
                 f"{n_strategies}",
                 f"{n_days}",
                 f"{dsr_result.sharpe_ratio_annualized:.2f}",
-                f"{dsr_result.expected_max_sharpe:.2f}",
-                f"{dsr_result.deflated_sharpe:.2f}",
+                # expected_max_sharpe and deflated_sharpe are per-period, like
+                # dsr_result.sharpe_ratio; annualize them so this column is one scale
+                f"{dsr_result.expected_max_sharpe * np.sqrt(252):.2f}",
+                f"{dsr_result.deflated_sharpe * np.sqrt(252):.2f}",
                 f"{dsr_result.probability:.1%}",
                 f"{dsr_result.is_significant}",
             ],
@@ -1137,12 +1265,22 @@ print(
     )
 )
 
-# %% [markdown]
-# The DSR correctly identifies that the best Sharpe among pure-noise strategies
-# is inflated by selection. The `expected_max_sharpe` quantifies how good the
-# best strategy would look *even if none had skill*.
+# %% [markdown] tags=[]
+# **Every row above is on the annualized scale.** That matters more than it sounds:
+# the library returns `sharpe_ratio`, `expected_max_sharpe` and `deflated_sharpe`
+# per period and `sharpe_ratio_annualized` already annualized, so printing them in
+# one column without converting puts a $\sqrt{252} \approx 15.9$ factor between two
+# adjacent rows. The comparison the table invites - best Sharpe against the null's
+# expected maximum - is only meaningful once they are on the same scale.
+#
+# Read that way, the result is stark. The best of 50 pure-noise strategies posts an
+# annualized Sharpe of about 1.3, and the expected maximum *under the null* is about
+# 1.2. Almost the entire apparent performance is selection. What remains after
+# deflation is a small excess, and the DSR probability of roughly 60% is far short of
+# the 95% needed to call it skill. `expected_max_sharpe` quantifies how good the best
+# strategy would look *even if none had skill*.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 8. Probability of Backtest Overfitting (PBO)
 #
 # PBO (Bailey et al., 2017) estimates the probability that the best in-sample
@@ -1155,7 +1293,7 @@ print(
 # Full implementation with CPCV splitting is covered in Chapter 16. Here we
 # demonstrate the `compute_pbo()` function on pre-computed IS/OOS performance.
 
-# %%
+# %% tags=[]
 # Simulate IS/OOS performance for strategies
 rng_pbo = np.random.default_rng(77)
 n_strat_pbo = N_STRAT_PBO
@@ -1191,12 +1329,28 @@ print(
     )
 )
 
-# %% [markdown]
+# %% [markdown] tags=[]
+# The number to compare against here is **50%, not 0**. Strategy 0 was handed a
+# large in-sample advantage and nothing else - out of sample it is the same standard
+# normal as the other nineteen. So the in-sample winner is selected on noise, and its
+# out-of-sample rank is uniform: it lands below the median about half the time. A PBO
+# near 50% is the *correct* reading of a selection that carries no real edge, and the
+# median out-of-sample rank of about 9.5 out of 20 - dead centre - says the same
+# thing a second way.
+#
+# This is why the "PBO > 0.5 suggests severe overfitting" rule of thumb needs care.
+# It is not a pass mark with a comfortable margin below it. A strategy whose edge is
+# entirely an artifact of selection sits *at* 50%, and the sampling error on a PBO
+# estimated from this many combinations is wide enough that a point estimate in the
+# forties is fully consistent with a strategy that has no edge at all. What would
+# actually be reassuring is a PBO close to zero, together with an in-sample winner
+# that stays near the top of the out-of-sample ranking.
+#
 # PBO is a powerful complement to DSR. While DSR focuses on Sharpe inflation,
 # PBO directly measures whether the in-sample best-performing configuration *degrades* out-of-sample.
 # See Chapter 16 for applying PBO with actual CPCV backtest splits.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 9. Minimum Track Record Length (MinTRL)
 #
 # How long must a track record be before we trust a Sharpe ratio?
@@ -1205,10 +1359,21 @@ print(
 # autocorrelation). `min_trl_fwer()` additionally adjusts for the number of
 # strategies tested.
 
-# %%
+# %% tags=[]
 # MinTRL table: varying Sharpe and number of strategies
 sharpes = [0.5, 1.0, 1.5, 2.0]
 n_trials_list = [1, 10, 100]
+
+# The FWER adjustment is driven by how much the trial Sharpes disagree with each
+# other: if every candidate scored identically, searching more of them would tell
+# you nothing new. `variance_trials=0` therefore switches the correction off, and
+# every N column would print the single-test answer. We take the dispersion the
+# Section 7 search actually exhibited, so the table reports the cost of that search.
+variance_trials_observed = dsr_result.variance_trials
+print(
+    f"Sharpe dispersion across the {n_strategies} strategies searched in Section 7: "
+    f"variance={variance_trials_observed:.6f} (per-period sd={np.sqrt(variance_trials_observed):.4f})"
+)
 
 rows = []
 for sr in sharpes:
@@ -1224,34 +1389,41 @@ for sr in sharpes:
             result = min_trl_fwer(
                 observed_sharpe=sr / np.sqrt(252),
                 n_trials=n,
-                variance_trials=0.0,
+                variance_trials=variance_trials_observed,
                 target_sharpe=0.0,
                 frequency="daily",
             )
         years = result.min_trl_years
-        row[f"N={n}"] = "inf" if years == float("inf") else f"{years:.1f}y"
+        row[f"N={n}"] = "never" if years == float("inf") else f"{years:.1f}y"
     rows.append(row)
 
 mintrl_df = pl.DataFrame(rows)
 display(mintrl_df)
 
-# %% [markdown]
-# **Interpretation**: A strategy with Sharpe 1.0 needs ~2.7 years of daily data
-# for significance. With `variance_trials=0` the FWER correction collapses to
-# the single-test case — all N columns are identical. In practice, when strategy
-# Sharpe ratios vary (`variance_trials > 0`), larger N increases the required
-# track record because the expected best-by-chance Sharpe grows with N.
+# %% [markdown] tags=[]
+# **Interpretation**: read across a row, not down a column. A Sharpe of 1.0 found
+# without searching needs a little under three years of daily data to confirm. The
+# *same* Sharpe, arrived at after trying ten candidates, needs a track record longer
+# than most funds survive; after a hundred candidates it cannot be confirmed at any
+# length, which is what `never` means - the required record grows faster than the
+# evidence a longer record supplies.
+#
+# The columns differ only because the trial Sharpes differ. That is the whole
+# mechanism: the FWER correction prices the *search*, and a search over candidates
+# that all score alike costs nothing while a search over dispersed candidates is
+# expensive. Higher Sharpes buy back some room - at 2.0 the N=10 requirement is back
+# within a career - but the ordering never reverses.
 #
 # This connects to NB06's track record planning for IC: both IC and Sharpe
 # require longer records than practitioners typically assume.
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## 10. One-Call Production Alternative
 #
 # `multiple_testing_summary()` wraps the manual HAC → BH/Holm pipeline into
 # a single call. Use it after you've computed per-factor test results.
 
-# %%
+# %% tags=[]
 # Build test results from the zoo simulation's pre-computed HAC statistics
 test_results = [
     {
@@ -1282,7 +1454,7 @@ summary_df = pl.DataFrame(
 )
 display(summary_df)
 
-# %% [markdown]
+# %% [markdown] tags=[]
 # ## Summary
 #
 # ### Key Concepts

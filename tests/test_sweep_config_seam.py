@@ -3,11 +3,11 @@
 Pins the contract between ``case_studies/{cs}/config/setup.yaml::backtest.sweep``
 and the helpers in ``case_studies.utils.sweep_config``:
 
-1. **Loader shape** — ``load_sweep`` and the ``*_for`` / ``get_*`` helpers
+1. **Loader shape** - ``load_sweep`` and the ``*_for`` / ``get_*`` helpers
    return the expected types and values for migrated case studies.
-2. **Registry reconciliation** — the declared sweep covers the rank-1
+2. **Registry reconciliation** - the declared sweep covers the rank-1
    ``(method, top_k)`` for every label in ``labels.{primary, variants}``.
-3. **Quarantine policy** — V3/V4 deprecated classes (``score_weighted_top_k``
+3. **Quarantine policy** - V3/V4 deprecated classes (``score_weighted_top_k``
    on the signal stage, ``cross_sectional_percentile``) must not appear in
    the declared sweep.
 
@@ -47,7 +47,7 @@ MIGRATED_CASES: tuple[str, ...] = (
     "sp500_options",
 )
 
-# Signal-stage methods that must never appear in a declared sweep. These
+# Baseline methods that must never appear in a declared sweep. These
 # correspond to the V3/V4 quarantine list: ``score_weighted_top_k`` is an
 # allocator (Ch17), not a signal scheme; ``cross_sectional_percentile``
 # was retired during V3 cleanup.
@@ -57,7 +57,7 @@ QUARANTINED_SIGNAL_METHODS: frozenset[str] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# Loader contract — us_firm_characteristics (the first migrated case study)
+# Loader contract - us_firm_characteristics (the first migrated case study)
 # ---------------------------------------------------------------------------
 
 
@@ -90,16 +90,14 @@ class TestUsFirmLoader:
     def test_allocators_strip_name(self):
         allocators = get_allocators(self.CS)
         methods = [a["method"] for a in allocators]
-        # us_firm is a returns-only firm-characteristics panel with no per-symbol
-        # price series, so the moment-based allocators (inverse_vol, risk_parity,
-        # hrp, mvo_ledoit_wolf) are intentionally excluded — only the
-        # lookback-free allocators are declared (see setup.yaml allocators block).
+        # The 12-month history is too thin for a top-50 covariance allocation,
+        # so only lookback-free alternatives are declared. Equal weight is the
+        # baseline and must not be duplicated in the allocation sweep.
         assert methods == [
-            "equal_weight",
             "score_weighted",
             "conformal_weighted",
         ]
-        # No allocator dict should carry the human-readable ``name`` key —
+        # No allocator dict should carry the human-readable ``name`` key -
         # the spec hash is computed from the shape that the dispatcher sees.
         assert all("name" not in a for a in allocators)
 
@@ -115,7 +113,7 @@ class TestUsFirmLoader:
 
 
 # ---------------------------------------------------------------------------
-# Quarantine policy — V3/V4 retired classes must not appear in any declared
+# Quarantine policy - V3/V4 retired classes must not appear in any declared
 # sweep
 # ---------------------------------------------------------------------------
 
@@ -127,7 +125,7 @@ class TestQuarantinePolicy:
     def test_no_score_weighted_top_k_in_signal_sweep(self, case_study):
         sweep = load_sweep(case_study)
         # ``score_weighted_top_k`` should never appear as a top_k_grid /
-        # percentile_grid / quantile_grid axis — it belongs in
+        # percentile_grid / quantile_grid axis - it belongs in
         # ``allocators`` only.
         # The synthesized entry schemes are the SUT.
         for label in (
@@ -144,7 +142,7 @@ class TestQuarantinePolicy:
 
 
 # ---------------------------------------------------------------------------
-# Registry reconciliation — declared sweep covers rank-1 per (CS, label)
+# Registry reconciliation - declared sweep covers rank-1 per (CS, label)
 # ---------------------------------------------------------------------------
 
 
@@ -231,7 +229,7 @@ class TestRegistryReconciliation:
                         f"{n_quantiles} not in declared quantile_grid={declared_qs}"
                     )
                 elif method in QUARANTINED_SIGNAL_METHODS:
-                    # The registry still has V3/V4 debris — Ch16-19 sweep
+                    # The registry still has V3/V4 debris - Ch16-19 sweep
                     # cleanup hasn't run yet for this (case_study, label).
                     # Skip rather than fail; once cleanup runs, the rank-1
                     # method will be canonical and the assertion above takes
@@ -244,6 +242,45 @@ class TestRegistryReconciliation:
                 else:
                     pytest.fail(
                         f"{case_study}/{label}: rank-1 method {method!r} is "
-                        f"unrecognized by the seam test — extend the test or "
+                        f"unrecognized by the seam test - extend the test or "
                         f"the loader."
                     )
+
+
+# ---------------------------------------------------------------------------
+# ML4T_OUTPUT_DIR redirection - the create_experiment workflow
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_reads_redirected_setup_under_output_dir(tmp_path, monkeypatch):
+    """When ML4T_OUTPUT_DIR is set, the sweep loader must read setup.yaml from
+    the redirected dir, so a reader's experiment-local edit to
+    ``backtest.sweep.top_n_predictions`` is honored (regression for the
+    create_experiment workflow: model stages redirect config reads, and the
+    Ch16-19 sweep must too)."""
+    from case_studies.utils.sweep_config import get_top_n_predictions, load_sweep
+
+    cs = "etfs"
+    exp_config = tmp_path / cs / "config"
+    exp_config.mkdir(parents=True)
+    # A deliberately non-default allocation breadth the source setup.yaml never uses.
+    sentinel = 3
+    (exp_config / "setup.yaml").write_text(
+        f"backtest:\n  sweep:\n    top_n_predictions:\n      allocation: {sentinel}\n"
+    )
+
+    monkeypatch.setenv("ML4T_OUTPUT_DIR", str(tmp_path))
+    assert load_sweep(cs)["top_n_predictions"]["allocation"] == sentinel
+    assert get_top_n_predictions(cs, "allocation") == sentinel
+
+
+def test_sweep_read_does_not_create_case_study_dir(tmp_path, monkeypatch):
+    """Reading sweep config must not materialize the case-study dir under
+    ML4T_OUTPUT_DIR: a side-effect mkdir would make create_experiment believe
+    the experiment already exists."""
+    from case_studies.utils.sweep_config import load_sweep
+
+    monkeypatch.setenv("ML4T_OUTPUT_DIR", str(tmp_path))
+    with pytest.raises((FileNotFoundError, KeyError)):
+        load_sweep("etfs")  # no config seeded under tmp_path
+    assert not (tmp_path / "etfs").exists()

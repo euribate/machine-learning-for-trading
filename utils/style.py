@@ -269,6 +269,169 @@ def format_pct_axis(ax: Axes, axis: Literal["x", "y", "both"] = "y") -> None:
         ax.xaxis.set_major_formatter(formatter)
 
 
+def add_message_title(
+    ax: Axes,
+    message: str,
+    subtitle: str | None = None,
+    source: str | None = None,
+) -> None:
+    """Left-aligned takeaway title (a claim, not a label), optional subtitle + source note.
+
+    `message` should state the finding ("Momentum decays beyond a 12-month hold"), not
+    label the axes. `subtitle` carries the qualifier the title omits (metric, universe,
+    frequency, period); `source` is a small bottom-left note. No figure number — the
+    publisher captions separately.
+    """
+    ax.set_title(
+        message,
+        loc="left",
+        color=COLORS["blue"],
+        fontweight="semibold",
+        pad=15 if subtitle else 8,
+    )
+    if subtitle:
+        ax.annotate(
+            subtitle,
+            xy=(0, 1),
+            xycoords="axes fraction",
+            xytext=(0, 4),
+            textcoords="offset points",
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            color=COLORS["neutral"],
+        )
+    if source:
+        ax.figure.text(
+            0.01, 0.005, source, ha="left", va="bottom", fontsize=8, color=COLORS["neutral"]
+        )
+
+
+def show_with_alt(fig: object, alt: str) -> None:
+    """Render *fig* carrying alt text for screen readers, then close it.
+
+    `plt.show()` emits an `<img>` with no alternative text, which nbconvert warns
+    about and a screen reader cannot describe. The alt text is a sentence saying
+    what the chart shows, not a repeat of the title.
+    """
+    from IPython.display import display
+
+    display(fig, metadata={"image/png": {"alt": alt}})
+    plt.close(fig)
+
+
+def label_line_ends(ax: Axes, xpad_points: int = 4, expand_right: float = 0.10) -> None:
+    """Direct-label each labeled line at its last finite point; use instead of a legend.
+
+    Preferred over a legend for <=5 series. Expands the right margin to fit labels.
+    Do not also call ``ax.legend()``. Each label inherits its line's color, so the chart
+    stays legible in grayscale (position + color, no legend lookup).
+    """
+    x0, x1 = ax.get_xlim()
+    ax.set_xlim(x0, x1 + (x1 - x0) * expand_right)
+    for line in ax.get_lines():
+        label = line.get_label()
+        if not label or label.startswith("_"):
+            continue
+        x = np.asarray(line.get_xdata(), dtype=float)
+        y = np.asarray(line.get_ydata(), dtype=float)
+        m = np.isfinite(x) & np.isfinite(y)
+        if not m.any():
+            continue
+        ax.annotate(
+            label,
+            xy=(x[m][-1], y[m][-1]),
+            xytext=(xpad_points, 0),
+            textcoords="offset points",
+            va="center",
+            ha="left",
+            color=line.get_color(),
+            fontsize=9,
+            annotation_clip=False,
+        )
+
+
+def zero_line(ax: Axes, at: float = 0.0, axis: Literal["x", "y"] = "y") -> None:
+    """Thin neutral reference line (zero, benchmark=1.0, mean, threshold) behind the data."""
+    draw = ax.axhline if axis == "y" else ax.axvline
+    draw(at, color=COLORS["neutral"], linewidth=0.8, linestyle="--", zorder=0.5)
+
+
+def upper_triangle_mask(corr: object) -> np.ndarray:
+    """Boolean mask hiding the redundant upper triangle of a symmetric matrix.
+
+    For correlation/covariance heatmaps: ``sns.heatmap(corr, mask=upper_triangle_mask(corr),
+    vmin=-1, vmax=1, center=0, cmap=...)``.
+    """
+    return np.triu(np.ones_like(np.asarray(corr), dtype=bool), k=1)
+
+
+# Canonical panel-label size for Plotly subplot figures. Plotly writes
+# subplot_titles as annotations carrying an explicit size of 16, and an explicit
+# value beats the template's annotationdefaults, so the template cannot lower
+# them from here. That leaves a subplot figure with 16pt panel labels above a
+# 14pt figure title. style_subplot_titles() is the opt-in helper that restores
+# the order: title 14 > panel label 13 > body 11.
+SUBPLOT_TITLE_SIZE = 13
+
+
+# The size Plotly stamps on every subplot-title annotation it creates. Part of
+# the signature below, so a change to this default makes the helper match
+# nothing rather than match the wrong thing;
+# test_style_subplot_titles_restyles_panel_labels fails first if it moves.
+_PLOTLY_SUBPLOT_TITLE_SIZE = 16
+
+
+def _is_subplot_title(annotation: object) -> bool:
+    """Match the annotations ``make_subplots`` creates for ``subplot_titles``.
+
+    Plotly stamps all six of these properties on a subplot title and on nothing
+    else it creates: arrowless, referenced to the paper in both axes, centered
+    horizontally, anchored at the bottom, and sized 16. A caption or source note
+    added with ``add_annotation`` normally differs in at least one - most often
+    the size, since 16 is not a size hand-written annotations pick.
+
+    An ``add_annotation`` call that happens to set all six identically is
+    indistinguishable from a panel label and will be restyled. Nothing in the
+    figure records which annotations Plotly authored, so that case cannot be
+    separated; it just needs a different size or anchor to opt out.
+    """
+    return (
+        getattr(annotation, "showarrow", None) is False
+        and getattr(annotation, "xref", None) == "paper"
+        and getattr(annotation, "yref", None) == "paper"
+        and getattr(annotation, "xanchor", None) == "center"
+        and getattr(annotation, "yanchor", None) == "bottom"
+        and getattr(getattr(annotation, "font", None), "size", None) == _PLOTLY_SUBPLOT_TITLE_SIZE
+    )
+
+
+def style_subplot_titles(fig: object, size: int = SUBPLOT_TITLE_SIZE) -> object:
+    """Bring ``make_subplots`` panel labels under the figure title.
+
+    Plotly hardcodes 16pt on subplot-title annotations, which outranks both the
+    body text and the 14pt figure title the template sets. Call this after
+    building a subplot figure::
+
+        fig = make_subplots(rows=2, cols=2, subplot_titles=[...])
+        ...
+        style_subplot_titles(fig)
+
+    Only the panel labels are restyled - ``add_annotation`` callouts keep their
+    own font, so the call is safe at any point in figure construction. It also
+    applies once: a restyled label no longer carries Plotly's 16pt and so falls
+    out of the selector, which makes a second call at a different ``size`` a
+    no-op rather than a second restyle.
+
+    Returns the figure so it can be chained.
+    """
+    fig.update_annotations(  # type: ignore[attr-defined]
+        font={"size": size, "color": COLORS["slate"]},
+        selector=_is_subplot_title,
+    )
+    return fig
+
+
 # =============================================================================
 # PLOTLY TEMPLATE (optional — only used if Plotly is installed)
 # =============================================================================
@@ -331,6 +494,11 @@ def _register_plotly_template() -> None:
         )
     )
     pio.templates["ml4t"] = template
+    # Make it the default so every Plotly figure inherits the ML4T font,
+    # backgrounds, gridlines, and colorway — the palette applies repo-wide
+    # without each notebook having to opt in (matplotlib gets this via
+    # matplotlibrc; this is the Plotly equivalent).
+    pio.templates.default = "ml4t"
 
 
 # Auto-register Plotly template on import
@@ -786,6 +954,13 @@ __all__ = [
     "annotate_peak",
     "add_regime_shading",
     "format_pct_axis",
+    "add_message_title",
+    "show_with_alt",
+    "label_line_ends",
+    "zero_line",
+    "upper_triangle_mask",
+    "style_subplot_titles",
+    "SUBPLOT_TITLE_SIZE",
     # Book-specific
     "ML4T_STYLE",
     "HAS_PLOTLY",

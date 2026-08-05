@@ -11,7 +11,8 @@
 #   - Linux x86_64:     All services work, GPU optional
 #   - Windows x86_64:   All services via Docker Desktop (WSL2), GPU via WSL2+nvidia-toolkit
 #   - macOS Intel:      All services except GPU
-#   - Apple Silicon:    ml4t + benchmark (native arm64); ml4t-py312 not available (see below)
+#   - Apple Silicon:    ml4t + benchmark native arm64; ml4t-py312 amd64 only, runs under
+#                       Rosetta emulation (see below)
 #
 # IMAGES ON DOCKER HUB (docker.io/ml4t/):
 #   ml4t:latest           — All chapters, Python 3.14, PyTorch CUDA 12.8 (amd64+arm64)
@@ -21,7 +22,8 @@
 # WHICH IMAGE DO I NEED?
 #   Most readers: ml4t only (covers Ch01-Ch27 + case studies)
 #   Ch05 NB01/03/07, Ch09 NB06/12, Ch10 NB01-03, Ch12 NB10, Ch14 NB06, Ch15 NB06, Ch21 deep_hedging:
-#       ml4t-py312 (x86 only, Apple Silicon: see .ipynb outputs)
+#       ml4t-py312 (amd64; on Apple Silicon read the committed .ipynb outputs, or run it
+#       under Rosetta with DOCKER_DEFAULT_PLATFORM=linux/amd64)
 #   Ch02 storage benchmarks: benchmark + database services
 #   Ch12 GBM GPU benchmark: rapids (requires NVIDIA GPU)
 #
@@ -69,7 +71,7 @@ services:
       dockerfile: envs/ml4t/Dockerfile
     container_name: ml4t-review
     ports:
-      - "8888:8888"
+      - "127.0.0.1:8888:8888"
     command: ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root"]
 
   # ============================================
@@ -84,7 +86,7 @@ services:
       dockerfile: envs/ml4t/Dockerfile
     container_name: ml4t-review-gpu
     ports:
-      - "8889:8888"
+      - "127.0.0.1:8889:8888"
     command: ["jupyter", "lab", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root"]
     profiles: ["gpu"]
     deploy:
@@ -109,12 +111,29 @@ services:
       dockerfile: envs/benchmark/Dockerfile
     container_name: ml4t-benchmark
     ports:
-      - "8887:8888"
+      - "127.0.0.1:8887:8888"
     profiles: ["benchmark"]
+    # Re-declares the x-common volumes because a service-level `volumes:` key
+    # replaces the anchor's rather than extending it.
+    volumes:
+      - .:/app:rw
+      - ${ML4T_DATA_PATH:-./data}:/data:rw
+      # kdb+/PyKX licence + q binary, mounted read-only from the host at RUNTIME.
+      # Never baked into the image: the licence is personal and must not ship in
+      # a published image. If you have no kdb+ licence these resolve to empty
+      # directories, PyKX finds no licence, and 21_storage_benchmark_database
+      # skips kdb+ and says so. Get a free personal edition from
+      # https://kx.com/kdb-personal-edition-download/ and unpack it to ~/.kx.
+      - ${KX_HOME:-${HOME}/.kx}:/home/ml4t/.kx:ro
+      - ${PYKX_HOME:-${HOME}/.pykx}:/home/ml4t/.pykx:ro
     environment:
       - ML4T_DATA_PATH=/data
       - ML4T_PATH=/app
       - TEST=${TEST:-0}
+      # q resolves its licence from QLIC, not from the file's presence on disk;
+      # without this q starts and immediately fails "no license loaded".
+      - QLIC=/home/ml4t/.kx
+      - QHOME=/home/ml4t/.kx/q
       # Database connections (when running with database services)
       - CLICKHOUSE_HOST=ml4t-clickhouse
       - CLICKHOUSE_PORT=8123
@@ -149,7 +168,7 @@ services:
         - linux/amd64
     container_name: ml4t-benchmark-full
     ports:
-      - "8887:8888"
+      - "127.0.0.1:8887:8888"
     profiles: ["benchmark-full"]
     environment:
       - ML4T_DATA_PATH=/data
@@ -206,6 +225,8 @@ services:
   # Covers: Ch05 NB01/03/07, Ch09 NB06/12, Ch10 NB01-03, Ch12 NB10, Ch14 NB06,
   # Ch15 NB06, Ch21 deep_hedging.
   # Start with: docker compose --profile py312 run --rm py312 python ...
+  # This service reserves no GPU, so it starts on macOS and on any machine
+  # without NVIDIA. Use the py312-gpu service below where a GPU is available.
   # Apple Silicon: there is no native arm64 image (signatory/esig/gensim have no
   # arm64 wheels). Either read the committed .ipynb outputs for the notebooks
   # above, or run the amd64 image under Rosetta emulation (slow, no GPU):
@@ -221,6 +242,21 @@ services:
         - linux/amd64
     container_name: ml4t-py312
     profiles: ["py312"]
+
+  # Same image with an NVIDIA GPU attached, for the seven GPU-tagged py312 notebooks
+  # (Ch05 NB01/03/07, Ch10 NB03, Ch12 NB10, Ch14 NB06, Ch21 deep_hedging), whether they
+  # train or run inference. Linux and Windows WSL2 only, exactly like ml4t-gpu.
+  # Start with: docker compose --profile py312-gpu run --rm py312-gpu python ...
+  py312-gpu:
+    <<: *common
+    image: ml4t/ml4t-py312:latest
+    build:
+      context: .
+      dockerfile: envs/py312/Dockerfile
+      platforms:
+        - linux/amd64
+    container_name: ml4t-py312-gpu
+    profiles: ["py312-gpu"]
     deploy:
       resources:
         reservations:
@@ -238,8 +274,8 @@ services:
     container_name: ml4t-neo4j
     profiles: ["kg"]
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
     environment:
       - NEO4J_AUTH=${NEO4J_AUTH:-neo4j/password}
     volumes:
@@ -263,7 +299,7 @@ services:
       - POSTGRES_DB=ml4t
       - POSTGRES_USER=postgres
     ports:
-      - "5437:5432"
+      - "127.0.0.1:5437:5432"
     profiles: ["benchmark", "benchmark-full", "databases"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -279,7 +315,7 @@ services:
       - POSTGRES_DB=ml4t
       - POSTGRES_USER=postgres
     ports:
-      - "5436:5432"
+      - "127.0.0.1:5436:5432"
     profiles: ["benchmark", "benchmark-full", "databases"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -295,7 +331,7 @@ services:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=
     ports:
-      - "8123:8123"
+      - "127.0.0.1:8123:8123"
     profiles: ["benchmark", "benchmark-full", "databases"]
     deploy:
       resources:
@@ -311,8 +347,8 @@ services:
     image: questdb/questdb:latest
     container_name: ml4t-questdb
     ports:
-      - "9000:9000"
-      - "9009:9009"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9009:9009"
     profiles: ["benchmark", "benchmark-full", "databases"]
     deploy:
       resources:
@@ -335,7 +371,7 @@ services:
       - DOCKER_INFLUXDB_INIT_BUCKET=market_data
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=benchmark-token
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     profiles: ["benchmark", "benchmark-full", "databases"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8086/health"]

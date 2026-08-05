@@ -20,6 +20,8 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import random
 import warnings
@@ -36,12 +38,20 @@ from utils.artifact_specs import (
     load_feature_spec,
     load_label_spec,
     resolve_label_buffer,
+    resolve_label_horizon,
     resolve_market_semantics,
     resolve_storage_path,
 )
 from utils.cv_splits import generate_cv_splits, make_wf_config
 
 RANDOM_SEED = 42
+MIN_TEMPORAL_DATE_COVERAGE = 0.95  # Allow short calendar-edge gaps, not missing windows.
+# Burn-in a temporal model cannot emit through, excused only at the start of a
+# train window. Measured on crypto_perps_funding, whose GARCH and HMM features
+# carry a 90-bar rolling z-score: 97/2024 dates (4.8%) for fold 0 and 119/1935
+# (6.1%) for fold 1. A stale artifact whose fold IDs have shifted presents as a
+# leading gap of roughly half the window, so this bound still rejects it.
+MAX_TEMPORAL_WARMUP_FRACTION = 0.10
 
 
 def seed_everything(seed: int = RANDOM_SEED) -> None:
@@ -116,6 +126,93 @@ class ModelingDataset:
     # None for regression labels. When set, the column lives in ``dataset`` and
     # downstream IC computation must use it instead of the binary ``label_col``.
     eval_label_col: str | None = None
+    # Inputs ``input_lineage`` is derived from: the artifact paths and the
+    # universe reduction, which are not otherwise recoverable from this object.
+    lineage_inputs: dict[str, Any] = field(default_factory=dict, repr=False)
+    _input_lineage: dict[str, Any] | None = field(default=None, init=False, repr=False)
+
+    @property
+    def input_lineage(self) -> dict[str, Any]:
+        """Identity-defining input lineage, computed on first use.
+
+        A training spec that persists results includes this payload so changed
+        artifacts or CV windows cannot reuse an old training hash. It digests
+        every input artifact, and those run to gigabytes - nasdaq100's feature
+        parquet alone is 7 GB and takes ~12 s to hash - while only the notebooks
+        that pass it to ``build_training_spec`` need it. Computing it here rather
+        than in ``load_modeling_dataset`` keeps that cost off every other caller.
+        """
+        if self._input_lineage is None:
+            if not self.lineage_inputs:
+                raise ValueError(
+                    "input_lineage is unavailable: this ModelingDataset was built without "
+                    "lineage_inputs. Construct it via load_modeling_dataset()."
+                )
+            self._input_lineage = build_modeling_input_lineage(
+                artifacts=self.lineage_inputs["artifacts"],
+                feature_names=self.feature_names,
+                splits=self.splits,
+                label_buffer=self.label_buffer,
+                task_type=self.task_type,
+                eval_label_col=self.eval_label_col,
+                max_symbols=self.lineage_inputs["max_symbols"],
+                symbols=self.lineage_inputs["symbols"],
+            )
+        return self._input_lineage
+
+
+def _sha256_file(path: Path) -> str:
+    """Return a stable digest for an identity-defining input artifact."""
+    digest = hashlib.sha256()
+    with path.open("rb") as src:
+        for chunk in iter(lambda: src.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_modeling_input_lineage(
+    *,
+    artifacts: dict[str, Path],
+    feature_names: list[str],
+    splits: list[dict[str, Any]],
+    label_buffer: str,
+    task_type: str,
+    eval_label_col: str | None,
+    max_symbols: int,
+    symbols: list[str] | None,
+) -> dict[str, Any]:
+    """Build the portable input identity carried by persisted training runs."""
+    split_fields = ("fold", "train_start", "train_end", "val_start", "val_end")
+
+    def _normalize(key: str, value: Any) -> str:
+        # str() on a pd.Timestamp renders "2019-01-07 00:00:00" or "...+00:00"
+        # depending on whether the caller's boundaries are tz-aware, so the same
+        # window read two ways would fingerprint differently.
+        if key == "fold":
+            return str(value)
+        return pd.Timestamp(value).tz_localize(None).isoformat()
+
+    normalized_splits = [
+        {key: _normalize(key, split[key]) for key in split_fields if split.get(key) is not None}
+        for split in splits
+    ]
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "artifacts": {
+            name: {"sha256": _sha256_file(path), "size": path.stat().st_size}
+            for name, path in sorted(artifacts.items())
+        },
+        "feature_names": list(feature_names),
+        "splits": normalized_splits,
+        "label_buffer": label_buffer,
+        "task_type": task_type,
+        "eval_label_col": eval_label_col,
+        "max_symbols": int(max_symbols),
+        "symbols": sorted(symbols) if symbols else None,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["fingerprint"] = hashlib.sha256(canonical.encode()).hexdigest()
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -493,12 +590,23 @@ def load_modeling_dataset(
             f"case_studies/{case_study_id}/config/setup.yaml. "
             f"Add buffer to labels.buffer (primary) or labels.variant_buffers (variants)."
         )
+    # Fold identity belongs to the label contract. Deriving boundaries from the
+    # feature-joined frame lets warm-up nulls or feature availability shift the
+    # calendar and makes model selection disagree with canonical_window().
     splits = generate_cv_splits(
-        dataset,
+        labels,
         case_study_id=case_study_id,
         label_buffer=label_buffer,
+        outcome_horizon=resolve_label_horizon(case_study_id, primary_label, setup),
         date_col=date_col,
     )
+    if temporal_by_fold_pd is not None:
+        validate_temporal_fold_coverage(
+            dataset,
+            temporal,
+            splits,
+            date_col=date_col,
+        )
 
     # WalkForwardConfig for library integration
     # Normalize month-based buffers to days (pd.Timedelta rejects 'M' as ambiguous)
@@ -517,6 +625,7 @@ def load_modeling_dataset(
     # Classification labels: load the continuous-return label they were derived
     # from so IC can be computed against returns rather than the binary target.
     eval_label_col: str | None = None
+    eval_label_path: Path | None = None
     if task_type == "classification":
         eval_label_col = get_classification_eval_label(case_study_id, label_col)
         eval_label_path = resolve_storage_path(
@@ -543,6 +652,14 @@ def load_modeling_dataset(
             c for c in dataset.columns if c not in ID_COLS and c not in {label_col, eval_label_col}
         ]
 
+    input_artifacts = {
+        "financial": features_path,
+        "label": label_path,
+    }
+    if temporal_path.exists():
+        input_artifacts["model_based"] = temporal_path
+    if eval_label_path is not None:
+        input_artifacts["eval_label"] = eval_label_path
     return ModelingDataset(
         dataset=dataset,
         feature_names=feature_names,
@@ -560,6 +677,11 @@ def load_modeling_dataset(
         temporal_keys=_temporal_keys,
         temporal_feature_names=_temporal_feature_names,
         eval_label_col=eval_label_col,
+        lineage_inputs={
+            "artifacts": input_artifacts,
+            "max_symbols": max_symbols,
+            "symbols": symbols,
+        },
     )
 
 
@@ -628,6 +750,10 @@ def append_holdout_fold_if_needed(
         "val_end": ho_end_ts,
     }
     mds.splits.append(holdout_fold)
+    # input_lineage digests the fold set and memoizes on first access, so a caller
+    # that read it before this append would otherwise persist a spec whose lineage
+    # describes a fold set that no longer exists.
+    mds._input_lineage = None  # noqa: SLF001 — same module, and the cache is this call's to invalidate
 
 
 # ---------------------------------------------------------------------------
@@ -829,6 +955,96 @@ def resolve_linear_params(
 # ---------------------------------------------------------------------------
 # CV fold preparation
 # ---------------------------------------------------------------------------
+
+
+def validate_temporal_fold_coverage(
+    dataset: pl.DataFrame | pd.DataFrame,
+    temporal_by_fold: pl.DataFrame | pd.DataFrame,
+    splits: list[dict[str, Any]],
+    *,
+    date_col: str,
+    min_date_coverage: float = MIN_TEMPORAL_DATE_COVERAGE,
+    max_warmup_fraction: float = MAX_TEMPORAL_WARMUP_FRACTION,
+) -> None:
+    """Fail when a fold-specific temporal artifact does not cover a CV window.
+
+    Coverage is measured on unique decision timestamps rather than entity keys.
+    Temporal model fitting may legitimately skip individual symbols, whose
+    missing values are imputed downstream, but a missing date range indicates
+    that artifact fold IDs or windows do not match the canonical CV splits.
+
+    A temporal model cannot emit a value before it has been fitted, so the start
+    of a *training* window carries a burn-in prefix that no regeneration removes.
+    A leading run of uncovered dates in a train window is therefore excused up to
+    ``max_warmup_fraction`` of that window and coverage is measured on the
+    remainder. Validation windows get no such allowance: every date a model is
+    scored on must carry a temporal value. The excused prefix is bounded because
+    a stale artifact whose fold IDs have shifted also presents as a leading gap,
+    one that spans a large share of the window rather than a burn-in.
+    """
+    if not 0 < min_date_coverage <= 1:
+        raise ValueError("min_date_coverage must be in (0, 1]")
+    if not 0 <= max_warmup_fraction < 1:
+        raise ValueError("max_warmup_fraction must be in [0, 1)")
+
+    if isinstance(dataset, pl.DataFrame):
+        dataset_dates = dataset.select(date_col).unique()[date_col].to_pandas()
+    else:
+        dataset_dates = dataset[date_col].drop_duplicates()
+    if isinstance(temporal_by_fold, pl.DataFrame):
+        temporal_pd = temporal_by_fold.select([date_col, "fold"]).unique().to_pandas()
+    else:
+        temporal_pd = temporal_by_fold[[date_col, "fold"]].drop_duplicates()
+
+    dataset_index = pd.DatetimeIndex(pd.to_datetime(dataset_dates, utc=True)).unique().sort_values()
+    temporal_pd = temporal_pd.copy()
+    temporal_pd[date_col] = pd.to_datetime(temporal_pd[date_col], utc=True)
+    available_folds = set(temporal_pd["fold"].dropna().astype(int).unique())
+    failures: list[str] = []
+
+    for split in splits:
+        fold_id = int(split["fold"])
+        if fold_id not in available_folds:
+            failures.append(f"fold {fold_id}: artifact fold is missing")
+            continue
+
+        fold_dates = pd.DatetimeIndex(
+            temporal_pd.loc[temporal_pd["fold"] == fold_id, date_col].unique()
+        )
+        for window, start_key, end_key in (
+            ("train", "train_start", "train_end"),
+            ("validation", "val_start", "val_end"),
+        ):
+            start = pd.Timestamp(split[start_key])
+            end = pd.Timestamp(split[end_key])
+            start = start.tz_localize("UTC") if start.tzinfo is None else start.tz_convert("UTC")
+            end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+            expected = dataset_index[(dataset_index >= start) & (dataset_index <= end)]
+            if len(expected) == 0:
+                failures.append(f"fold {fold_id} {window}: dataset window is empty")
+                continue
+            present = expected.isin(fold_dates)
+            warmup = 0
+            if window == "train" and present.any() and not present[0]:
+                leading = int(present.argmax())
+                if leading <= max_warmup_fraction * len(expected):
+                    warmup = leading
+            scored = present[warmup:]
+            covered = int(scored.sum())
+            coverage = covered / len(scored)
+            if coverage < min_date_coverage:
+                excused = f", excusing a {warmup}-date warm-up prefix" if warmup else ""
+                failures.append(
+                    f"fold {fold_id} {window}: temporal date coverage "
+                    f"{covered}/{len(scored)} ({coverage:.1%}){excused}"
+                )
+
+    if failures:
+        detail = "; ".join(failures)
+        raise ValueError(
+            "Fold-specific temporal artifact is not aligned with the canonical CV splits: "
+            f"{detail}. Regenerate the artifact with generate_cv_splits or migrate its fold IDs."
+        )
 
 
 def _replace_temporal_columns(

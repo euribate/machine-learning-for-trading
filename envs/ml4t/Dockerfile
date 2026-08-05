@@ -67,7 +67,7 @@ RUN /opt/ml4t/bin/pip freeze | grep -E '^(torch|torchaudio|torchvision)==' > /tm
 # step below, so this only needs the lower bounds (--pre allows the pre-only builds).
 RUN /opt/ml4t/bin/pip install --no-cache-dir --pre \
     "ml4t-data>=0.1.0b15" \
-    "ml4t-diagnostic>=0.1.0b19" \
+    "ml4t-diagnostic>=0.1.0b25" \
     "ml4t-engineer>=0.1.0b8" \
     "ml4t-live>=0.1.0b3" \
     "ml4t-backtest>=0.1.0b16" \
@@ -103,10 +103,20 @@ COPY pyproject.toml uv.lock /build/
 # held to the lock's torch-2.10.0-consistent versions. torch/torchvision/torchaudio +
 # lightgbm (CUDA-built separately) are excluded too. Everything else is pinned to the
 # lock. Generated BEFORE the strip so uv.lock still matches pyproject.toml for --frozen.
+#
+# lightgbm is excluded from the constraint but still has to match the lock, so its exact
+# version is written to /tmp/lightgbm-pin.txt for the two build steps below to install.
+# A floating "lightgbm>=4.6" there silently drifted 4.6.0 -> 4.7.0 on 2026-07-27, and 4.7
+# device-links the CUDA-13-built libnccl_static.a, which nvcc 12.6's nvlink cannot read
+# ("nvlink error: Uncompress failed (target: sm_80)"). Reading the version from the lock
+# means the image cannot drift off the version readers get from `uv sync`.
 RUN cd /build && uv export --frozen --no-emit-project --no-hashes --format requirements-txt \
-      | grep -iE '^[a-z0-9._-]+==' \
-      | grep -viE '^(torch|torchvision|torchaudio|lightgbm|triton|setuptools)==|^nvidia-' \
-      > /tmp/locked-constraints.txt
+      | grep -iE '^[a-z0-9._-]+==' > /tmp/locked-all.txt && \
+    grep -viE '^(torch|torchvision|torchaudio|lightgbm|triton|setuptools)==|^nvidia-' \
+      /tmp/locked-all.txt > /tmp/locked-constraints.txt && \
+    grep -iE '^lightgbm==' /tmp/locked-all.txt | head -1 | cut -d';' -f1 | tr -d '[:space:]' \
+      > /tmp/lightgbm-pin.txt && \
+    test -s /tmp/lightgbm-pin.txt && cat /tmp/lightgbm-pin.txt
 
 # Remove packages that need special handling from pyproject copy:
 # - lightgbm: installed separately with CUDA build on amd64
@@ -148,7 +158,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
       CUDACXX=/usr/local/cuda/bin/nvcc CUDAHOSTCXX=/usr/bin/g++-12 \
       /opt/ml4t/bin/pip install --no-cache-dir --force-reinstall --no-deps \
         --no-binary lightgbm \
-        --config-settings=cmake.define.USE_CUDA=ON "lightgbm>=4.6" && \
+        --config-settings=cmake.define.USE_CUDA=ON "$(cat /tmp/lightgbm-pin.txt)" && \
       /opt/ml4t/bin/python -c "\
 import lightgbm as lgb; \
 print(f'LightGBM {lgb.__version__}'); \
@@ -156,7 +166,7 @@ print('CUDA build: OK (runtime verification requires GPU)')"; \
     fi
 # arm64: standard pip wheel (no GPU on macOS)
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      /opt/ml4t/bin/pip install --no-cache-dir "lightgbm>=4.6"; \
+      /opt/ml4t/bin/pip install --no-cache-dir "$(cat /tmp/lightgbm-pin.txt)"; \
     fi
 
 # Install optional dependency groups (bayesian, advanced, mlops)
@@ -180,13 +190,15 @@ ENV PYTHONPATH="/app"
 # - NVIDIA_VISIBLE_DEVICES
 # - LD_LIBRARY_PATH (for libnvidia-ml.so, etc.)
 
-# Jupyter configuration - disable token authentication
+# Jupyter runs without a token so the reader's first command is the only step.
+# That is safe only because docker-compose.yml publishes 8888 on 127.0.0.1 alone.
+# Origin and XSRF checks stay ON: loopback does not stop a page the reader browses
+# from POSTing to localhost:8888, and with no token those checks are the only thing
+# standing between a visited web page and code execution on the reader's machine.
 ENV JUPYTER_ENABLE_LAB=yes
 RUN mkdir -p /etc/jupyter && \
     echo "c.ServerApp.token = ''" >> /etc/jupyter/jupyter_server_config.py && \
-    echo "c.ServerApp.password = ''" >> /etc/jupyter/jupyter_server_config.py && \
-    echo "c.ServerApp.allow_origin = '*'" >> /etc/jupyter/jupyter_server_config.py && \
-    echo "c.ServerApp.disable_check_xsrf = True" >> /etc/jupyter/jupyter_server_config.py
+    echo "c.ServerApp.password = ''" >> /etc/jupyter/jupyter_server_config.py
 
 # NOTE: jupyterlab-plotly extension is required for Plotly widget rendering
 # It is installed automatically by plotly pip package - do NOT delete it

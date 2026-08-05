@@ -57,12 +57,14 @@
 """Feature Selection and Deduplication — reduce feature candidates to a focused production-ready set."""
 
 import warnings
+from datetime import date
 
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import seaborn as sns
 import statsmodels.api as sm
+import yaml
 from ml4t.diagnostic.metrics import pooled_ic
 from scipy.cluster.hierarchy import fcluster, leaves_list, linkage
 from scipy.spatial.distance import squareform
@@ -101,9 +103,24 @@ if not FEATURES_PATH.exists():
 features_df = pl.read_parquet(FEATURES_PATH)
 prices_df = load_etfs()
 
-# Apply date filter
-features_df = features_df.filter(pl.col("timestamp") >= pl.lit(START_DATE).str.to_date())
-prices_df = prices_df.filter(pl.col("timestamp") >= pl.lit(START_DATE).str.to_date())
+# Holdout boundary: feature selection is a development decision, and the
+# sealed holdout (setup.yaml `evaluation.holdout_start`; see the rule in
+# 06_strategy_definition/02_cv_foundations) must not inform it. Every step
+# below — IC ranking, BH-FDR, stability selection, ML importance — sees only
+# pre-holdout rows, and the forward-return labels computed from the filtered
+# prices never span into the holdout.
+setup = yaml.safe_load((CASE_DIR / "config" / "setup.yaml").read_text())
+HOLDOUT_START = date.fromisoformat(setup["evaluation"]["holdout_start"])
+
+# Apply date filters: development window only ([START_DATE, HOLDOUT_START))
+features_df = features_df.filter(
+    (pl.col("timestamp") >= pl.lit(START_DATE).str.to_date())
+    & (pl.col("timestamp") < HOLDOUT_START)
+)
+prices_df = prices_df.filter(
+    (pl.col("timestamp") >= pl.lit(START_DATE).str.to_date())
+    & (pl.col("timestamp") < HOLDOUT_START)
+)
 
 if MAX_SYMBOLS > 0:
     top_symbols = (
@@ -127,6 +144,7 @@ labels_df = (
 
 print(f"Features: {features_df.shape}")
 print(f"Labels: {labels_df.shape}")
+print(f"Development window: {START_DATE} to {HOLDOUT_START} (holdout sealed)")
 
 # %% tags=[]
 all_feature_cols = [c for c in features_df.columns if c not in ["timestamp", "symbol"]]
@@ -164,9 +182,14 @@ analysis = features_df.join(
 print(f"Analysis dataset: {analysis.shape}")
 
 # %% tags=[]
-# Compute cross-sectional IC per date
-ic_by_date = analysis.group_by("timestamp").agg(
-    [pl.corr(col, "fwd_return_1m", method="spearman").alias(col) for col in all_feature_cols]
+# Compute cross-sectional IC per date. Sort by timestamp: ``group_by`` does not
+# preserve order, and the Newey-West HAC t-stat below regresses each feature's
+# daily IC series on a constant with an autocovariance correction, which is only
+# meaningful on a chronologically ordered series.
+ic_by_date = (
+    analysis.group_by("timestamp")
+    .agg([pl.corr(col, "fwd_return_1m", method="spearman").alias(col) for col in all_feature_cols])
+    .sort("timestamp")
 )
 
 # Summary statistics. The daily IC series is serially correlated (overlapping
@@ -250,8 +273,11 @@ ic_pd = ic_df.to_pandas().sort_values("ic_abs", ascending=True)
 colors = [COLORS["positive"] if ic > 0 else COLORS["negative"] for ic in ic_pd["ic"]]
 ax.barh(ic_pd["feature"], ic_pd["ic"], color=colors)
 ax.axvline(0, color="black", linewidth=0.5)
-ax.axvline(0.02, color="orange", linestyle="--", alpha=0.7, label="IC threshold (0.02)")
-ax.axvline(-0.02, color="orange", linestyle="--", alpha=0.7)
+# Reference line at the |IC| threshold used for the final selection in §6, so
+# the ranking chart and the selection step agree (features kept in §6 sit at or
+# beyond this line).
+ax.axvline(0.01, color="orange", linestyle="--", alpha=0.7, label="IC threshold (0.01)")
+ax.axvline(-0.01, color="orange", linestyle="--", alpha=0.7)
 ax.set_xlabel("Information Coefficient (Spearman)")
 ax.set_title("Feature IC Ranking")
 ax.legend()

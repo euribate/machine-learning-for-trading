@@ -16,8 +16,14 @@ except (ImportError, ModuleNotFoundError):  # pragma: no cover - import depends 
     EngineBacktestConfig = None
 
 
+# The token names the bar a signal is filled on, not the price within it. Every
+# entry here that maps to "next_bar" fills on the bar after the decision bar; which
+# price that is belongs to the dataset. `NEXT_SESSION_CLOSE` is `sp500_options`,
+# whose AlgoSeek option chain carries one end-of-session quote per contract per day
+# and no open, so the next bar's only price is its close.
 _EXECUTION_MODE_BY_DELAY = {
     "NEXT_BAR_OPEN": "next_bar",
+    "NEXT_SESSION_CLOSE": "next_bar",
     "MONDAY_OPEN": "next_bar",
     "1_BAR": "next_bar",
     "AT_FUNDING_TIMESTAMP": "same_bar",
@@ -292,6 +298,10 @@ def ensure_backtest_spec(
     """
     if is_backtest_spec(strategy_spec):
         spec = deepcopy(strategy_spec)
+        if case_study == "sp500_options":
+            spec.setdefault("strategy", {}).setdefault("signal", {}).setdefault(
+                "schedule_contract", SP500_OPTIONS_SCHEDULE_CONTRACT
+            )
         spec.setdefault(
             "chapter", spec.get("backtest_config", {}).get("metadata", {}).get("chapter")
         )
@@ -351,6 +361,8 @@ def ensure_backtest_spec(
         "signal": deepcopy(strategy_spec.get("signal", {})),
         "rebalance": rebalance,
     }
+    if case_study == "sp500_options":
+        strategy["signal"].setdefault("schedule_contract", SP500_OPTIONS_SCHEDULE_CONTRACT)
     if "allocation" in strategy_spec:
         strategy["allocation"] = deepcopy(strategy_spec["allocation"])
     if "risk" in strategy_spec:
@@ -389,6 +401,8 @@ _COST_PASSTHROUGH_KEYS = (
     "spread_convention",
 )
 
+SP500_OPTIONS_SCHEDULE_CONTRACT = "last_available_session_per_iso_week_v1"
+
 
 def _costs_block_from_case_config(
     case_config: CaseStudyBacktestConfig,
@@ -424,8 +438,12 @@ def build_backtest_spec(
     min_weight_change: float | None = None,
     min_trade_value: float | None = None,
 ) -> dict[str, Any]:
+    resolved_signal = deepcopy(signal)
+    if case_study == "sp500_options":
+        resolved_signal.setdefault("schedule_contract", SP500_OPTIONS_SCHEDULE_CONTRACT)
+
     strategy_spec: dict[str, Any] = {
-        "signal": deepcopy(signal),
+        "signal": resolved_signal,
         "execution": {
             "mode": (
                 execution_mode

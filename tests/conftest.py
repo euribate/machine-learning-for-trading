@@ -10,10 +10,13 @@ import json
 import os
 import shutil
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tests.preset_patches import _patch_presets_for_testing, _trim_label_configs
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -31,6 +34,23 @@ CASE_STUDY_IDS = [
 ]
 
 
+def generated_env_contents(repo_root: Path, environ: Mapping[str, str]) -> str:
+    """What a generated ``.env`` should contain, given the environment.
+
+    Carries only a data path someone actually chose. ``sitecustomize.py`` sets
+    ML4T_DATA_PATH to ``<repo>/data`` when nothing else did, and marks it as a
+    default; writing that into ``.env`` would promote the default to an explicit
+    setting that step 2 of ``_resolve_data_path()`` returns — shadowing the
+    populated test-data checkout and silently skipping every data-dependent
+    notebook test on a clean clone.
+    """
+    lines = [f"ML4T_PATH={repo_root}\n"]
+    data_path = environ.get("ML4T_DATA_PATH")
+    if data_path and not environ.get("ML4T_DATA_PATH_IS_DEFAULT"):
+        lines.append(f"ML4T_DATA_PATH={data_path}\n")
+    return "".join(lines)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ci_env_setup():
     """Create .env file if running in CI (where ML4T_DATA_PATH is set externally).
@@ -43,11 +63,7 @@ def ci_env_setup():
     created = False
 
     if not env_file.exists():
-        # Create minimal .env for CI
-        env_file.write_text(
-            f"ML4T_PATH={REPO_ROOT}\n"
-            f"ML4T_DATA_PATH={os.environ.get('ML4T_DATA_PATH', REPO_ROOT / 'data')}\n"
-        )
+        env_file.write_text(generated_env_contents(REPO_ROOT, os.environ))
         created = True
 
     yield
@@ -63,9 +79,14 @@ def _resolve_data_path() -> Path | None:
     pytest-xdist workers may not inherit env vars set by the parent process,
     so we also check the .env file and well-known test-data locations.
     """
-    # 1. Explicit env var (works in single-process pytest and CI)
+    # 1. Explicit env var (works in single-process pytest and CI).
+    #    sitecustomize.py sets ML4T_DATA_PATH to <repo>/data when nothing else
+    #    did, and marks it. That default must not win here: the tracked data/
+    #    tree is never empty, so taking it would shadow the populated test-data
+    #    checkout below and silently skip every data-dependent notebook test.
+    #    Step 4 applies the real test — does it hold parquet — to that path.
     env_path = os.environ.get("ML4T_DATA_PATH")
-    if env_path:
+    if env_path and not os.environ.get("ML4T_DATA_PATH_IS_DEFAULT"):
         p = Path(env_path).expanduser().resolve()
         if p.exists() and any(p.iterdir()):
             return p
@@ -269,29 +290,12 @@ def seeded_output_dir(tmp_path_factory):
     return output_dir
 
 
-# ---------------------------------------------------------------------------
-# Preset patching — reduce workload for CI/test runs
-# ---------------------------------------------------------------------------
-
-# Per-model-type overrides applied to copied preset YAMLs.
-# Goal: minimal workload that still exercises the training loop + registry.
-_TEST_PRESET_PATCHES: dict[str, dict] = {
-    "lgb": {"max_iterations": 2, "checkpoint_interval": 1},
-    # DL families: 2 epochs, checkpoint every epoch
-    "lstm": {"n_epochs": 2, "checkpoint_interval": 1},
-    "tsmixer": {"n_epochs": 2, "checkpoint_interval": 1},
-    "tcn": {"n_epochs": 2, "checkpoint_interval": 1},
-    "nlinear": {"n_epochs": 2, "checkpoint_interval": 1},
-    "patchtst": {"n_epochs": 2, "checkpoint_interval": 1},
-    # TabDL: 2 epochs
-    "tabm": {"n_epochs": 2, "checkpoint_interval": 1},
-    # Latent factors: 2 epochs
-    "cae": {"n_epochs": 2, "checkpoint_interval": 1},
-    "sdf": {"n_epochs": 2, "checkpoint_interval": 1},
-    "sae": {"n_epochs": 2, "checkpoint_interval": 1},
-    "ipca": {"n_epochs": 2, "checkpoint_interval": 1},
-}
-
+# _patch_presets_for_testing and _trim_label_configs (imported above), and the
+# _TEST_PRESET_PATCHES table the first reads, live in tests/preset_patches.py,
+# which tests/generate_intermediates.py also imports - that script runs
+# standalone without pytest installed, so they can't live in this module.
+# _trim_label_configs was duplicated here until 2026-07-30; the copy in
+# generate_intermediates.py globbed the wrong directory and trimmed nothing.
 
 _PREDICTION_COL_RENAMES = {
     "y_score": "prediction",
@@ -318,51 +322,6 @@ def _migrate_predictions_schema(preds_root: Path) -> None:
             continue
         df = pl.read_parquet(parquet).rename(renames)
         df.write_parquet(parquet)
-
-
-def _patch_presets_for_testing(config_dir: Path) -> None:
-    """Patch copied preset YAMLs with reduced-workload values for testing."""
-    for model_type, overrides in _TEST_PRESET_PATCHES.items():
-        model_dir = config_dir / model_type
-        if not model_dir.exists():
-            continue
-        for preset_path in model_dir.glob("*.yaml"):
-            preset = yaml.safe_load(preset_path.read_text())
-            if preset is None:
-                continue
-            preset.update(overrides)
-            with open(preset_path, "w") as f:
-                yaml.dump(preset, f, default_flow_style=False)
-
-
-# Max configs per family in label config files (keep tests fast but comprehensive).
-# Only applied to families with homogeneous sweep configs (linear, gbm).
-# DL/TabDL/latent/causal families are NOT trimmed because each config often
-# maps to a dedicated notebook (e.g., 09_dl_lstm, 10_dl_tsmixer).
-_MAX_CONFIGS_PER_FAMILY = 2
-_TRIM_FAMILIES = {"linear", "gbm"}
-
-
-def _trim_label_configs(cs_config_dir: Path) -> None:
-    """Trim training menu YAMLs to at most _MAX_CONFIGS_PER_FAMILY for sweep families."""
-    training_dir = cs_config_dir / "training"
-    label_root = training_dir if training_dir.exists() else cs_config_dir
-    for label_yaml in label_root.glob("fwd_*.yaml"):
-        data = yaml.safe_load(label_yaml.read_text())
-        if data is None or not isinstance(data, dict):
-            continue
-        trimmed = False
-        for family, configs in data.items():
-            if (
-                family in _TRIM_FAMILIES
-                and isinstance(configs, list)
-                and len(configs) > _MAX_CONFIGS_PER_FAMILY
-            ):
-                data[family] = configs[:_MAX_CONFIGS_PER_FAMILY]
-                trimmed = True
-        if trimmed:
-            with open(label_yaml, "w") as f:
-                yaml.dump(data, f, default_flow_style=False)
 
 
 # ---------------------------------------------------------------------------
