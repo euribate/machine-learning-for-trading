@@ -1,0 +1,1516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03_financial_features.ipynb — cell-by-cell walkthrough</title>
+<style>
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+
+    --serif: "Iowan Old Style", Charter, "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101820;
+      --surface: #16212b;
+      --ink: #dce5ec;
+      --ink-soft: #9dadba;
+      --ink-faint: #6f818e;
+      --rule: #27343f;
+      --rule-soft: #1e2a34;
+      --accent: #6ec2e6;
+      --accent-soft: #163140;
+      --alert: #e5a071;
+      --alert-soft: #2c1f16;
+      --alert-rule: #5c3d26;
+      --code-bg: #1a2530;
+      --code-ink: #c6d5e0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101820;
+    --surface: #16212b;
+    --ink: #dce5ec;
+    --ink-soft: #9dadba;
+    --ink-faint: #6f818e;
+    --rule: #27343f;
+    --rule-soft: #1e2a34;
+    --accent: #6ec2e6;
+    --accent-soft: #163140;
+    --alert: #e5a071;
+    --alert-soft: #2c1f16;
+    --alert-rule: #5c3d26;
+    --code-bg: #1a2530;
+    --code-ink: #c6d5e0;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  @media (min-width: 1020px) {
+    .shell {
+      grid-template-columns: 210px minmax(0, 1fr);
+      gap: 3.5rem;
+      padding-top: 4.5rem;
+    }
+    .toc { position: sticky; top: 2rem; align-self: start; }
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { grid-column: 1 / -1; border-bottom: 2px solid var(--ink); padding-bottom: 1.5rem; }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.9rem;
+  }
+
+  .masthead h1 {
+    font-family: var(--sans);
+    font-size: clamp(1.9rem, 4.5vw, 2.7rem);
+    line-height: 1.1;
+    letter-spacing: -0.028em;
+    font-weight: 700;
+    text-wrap: balance;
+    margin-bottom: 0.6rem;
+  }
+
+  .masthead h1 code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .standfirst {
+    color: var(--ink-soft);
+    max-width: 62ch;
+    font-size: 1.05rem;
+  }
+
+  .masthead-meta {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    margin-top: 1.1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.4rem;
+  }
+
+  /* ---------- table of contents ---------- */
+
+  .toc h2 {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.7rem;
+  }
+
+  .toc ol { list-style: none; display: flex; flex-direction: column; gap: 0.05rem; }
+
+  .toc a {
+    display: grid;
+    grid-template-columns: 1.6rem 1fr;
+    gap: 0.3rem;
+    font-family: var(--sans);
+    font-size: 0.79rem;
+    line-height: 1.35;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 0.3rem 0.3rem 0.3rem 0;
+    border-radius: 3px;
+  }
+
+  .toc a:hover { color: var(--accent); background: var(--accent-soft); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .toc .n { font-variant-numeric: tabular-nums; color: var(--ink-faint); }
+  .toc a.flag .n, .toc a.flag { color: var(--alert); }
+  .toc a.flag:hover { background: var(--alert-soft); }
+
+  /* ---------- article ---------- */
+
+  article { min-width: 0; display: flex; flex-direction: column; gap: 2.75rem; }
+
+  section { scroll-margin-top: 1.5rem; }
+
+  .cell-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.55rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .cell-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 0.16rem 0.45rem;
+    border-radius: 3px;
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cell-head h2 {
+    font-family: var(--sans);
+    font-size: 1.42rem;
+    letter-spacing: -0.02em;
+    font-weight: 650;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 1.9rem 0 0.7rem;
+    text-wrap: balance;
+  }
+
+  h4 {
+    font-family: var(--sans);
+    font-size: 0.73rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    margin: 1.6rem 0 0.6rem;
+  }
+
+  p { max-width: 66ch; margin-bottom: 0.95rem; }
+  p:last-child { margin-bottom: 0; }
+
+  ul, ol.prose-list { max-width: 64ch; padding-left: 1.15rem; margin-bottom: 0.95rem; }
+  li { margin-bottom: 0.45rem; }
+  li::marker { color: var(--ink-faint); }
+
+  strong { font-weight: 700; }
+  em { font-style: italic; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.855em;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule-soft);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    margin-bottom: 1.1rem;
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  pre code { background: none; padding: 0; font-size: 1em; color: var(--code-ink); }
+
+  blockquote {
+    border-left: 2px solid var(--rule);
+    padding-left: 1.1rem;
+    color: var(--ink-soft);
+    font-style: italic;
+    max-width: 62ch;
+    margin-bottom: 1rem;
+  }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap { overflow-x: auto; margin-bottom: 1.1rem; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 30rem;
+    font-family: var(--sans);
+    font-size: 0.83rem;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.69rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--ink-soft);
+    padding: 0.45rem 0.8rem 0.45rem 0;
+  }
+
+  td {
+    padding: 0.5rem 0.8rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+
+  td:first-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.flagged td { color: var(--alert); }
+
+  /* ---------- callouts ---------- */
+
+  .alert {
+    background: var(--alert-soft);
+    border: 1px solid var(--alert-rule);
+    border-left: 3px solid var(--alert);
+    border-radius: 4px;
+    padding: 1.4rem 1.5rem;
+  }
+
+  .alert-label {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--alert);
+    margin-bottom: 0.5rem;
+  }
+
+  .alert h2 {
+    font-family: var(--sans);
+    font-size: 1.18rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+    margin-bottom: 0.9rem;
+    text-wrap: balance;
+  }
+
+  .alert .status {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--alert);
+    margin-bottom: 1rem;
+    max-width: 66ch;
+  }
+
+  .alert pre { background: var(--surface); border-left-color: var(--alert); }
+  .alert code { background: var(--surface); }
+
+  .alert-inline {
+    background: var(--alert-soft);
+    border-left: 3px solid var(--alert);
+    border-radius: 0 4px 4px 0;
+    padding: 1rem 1.2rem;
+    margin: 1.3rem 0;
+  }
+
+  .alert-inline p { max-width: 62ch; margin-bottom: 0; font-size: 0.94rem; }
+  .alert-inline code { background: var(--surface); }
+
+  /* ---------- misc ---------- */
+
+  .result {
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    max-width: 64ch;
+    margin-bottom: 1.1rem;
+    color: var(--ink);
+  }
+
+  .result .k {
+    font-family: var(--sans);
+    font-size: 0.67rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 0.5rem 0;
+  }
+
+  .closing {
+    border-top: 2px solid var(--ink);
+    padding-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* Aim / Shows / Outcome brief opening each section */
+  ul.brief {
+    list-style: none;
+    margin: 0 0 1.6rem;
+    padding: 0.9rem 0 0.9rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  ul.brief li {
+    font-family: var(--sans);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    padding-right: 1.1rem;
+  }
+
+  ul.brief li strong {
+    font-size: 0.68rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--accent);
+    display: inline-block;
+    min-width: 5.5rem;
+  }
+
+  section.alert ul.brief {
+    border-left-color: var(--alert);
+    background: var(--alert-soft);
+  }
+
+  section.alert ul.brief li strong { color: var(--alert); }
+
+/* syntax highlighting */
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+@media (prefers-color-scheme: dark) {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="dark"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="light"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+}
+
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow">case_studies · etfs</div>
+    <h1><code>03_financial_features.ipynb</code> — cell-by-cell walkthrough</h1>
+    <p class="standfirst">Companion notes for the ETF case study's feature-engineering stage. The notebook itself explains <em>why</em> each section exists; this document explains <em>what each cell does mechanically</em>, which functions it calls, and where the values come from.</p>
+    <div class="masthead-meta">
+      <span>case_studies/etfs/03_financial_features_walkthrough.md</span>
+      <span>generated by tools/build_docs.py &mdash; do not edit</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#c0"><span class="n">0</span><span>✅ RESOLVED — the narrative digest no longer duplicates the artifact</span></a></li>
+      <li><a href="#c1"><span class="n">1</span><span>0. Imports and helpers</span></a></li>
+      <li><a href="#c2"><span class="n">2</span><span>1. Run parameters</span></a></li>
+      <li><a href="#c3"><span class="n">3</span><span>2. Configuration</span></a></li>
+      <li><a href="#c4"><span class="n">4</span><span>3. Section A — the thesis, and the register</span></a></li>
+      <li><a href="#c5"><span class="n">5</span><span>4. Section B — inputs and their observability</span></a></li>
+      <li><a href="#c6"><span class="n">6</span><span>5. Section C.1 — momentum, volatility and their differences</span></a></li>
+      <li><a href="#c7"><span class="n">7</span><span>6. Section C.2 — oscillators, trend ratios and range</span></a></li>
+      <li><a href="#c8"><span class="n">8</span><span>7. Section C.3 — drawdown, volume and distance from extremes</span></a></li>
+      <li><a href="#c9"><span class="n">9</span><span>8. Section C.4 — cross-asset and macro state</span></a></li>
+      <li><a href="#c10"><span class="n">10</span><span>9. The pipeline — where the eligibility gate sits</span></a></li>
+      <li><a href="#c11"><span class="n">11</span><span>10. Section D.1–D.2 — the timing contract and warmup</span></a></li>
+      <li><a href="#c12"><span class="n">12</span><span>11. Section D.3 — rebuilding without the holdout</span></a></li>
+      <li><a href="#c13"><span class="n">13</span><span>12. Section E — matrix assembly and the null policy</span></a></li>
+      <li><a href="#c14"><span class="n">14</span><span>13. Figures F1 and F4 — coverage and the timing contract</span></a></li>
+      <li><a href="#c15"><span class="n">15</span><span>14. Figures F2 and F3 — distributions and dispersion</span></a></li>
+      <li><a href="#c16"><span class="n">16</span><span>15. Figure F5 — redundancy structure</span></a></li>
+      <li><a href="#c17"><span class="n">17</span><span>16. Figure F6 — persistence and rank stability</span></a></li>
+      <li><a href="#c18"><span class="n">18</span><span>17. Section G — emit</span></a></li>
+      <li><a href="#c19"><span class="n">19</span><span>18. Key takeaways and limitations</span></a></li>
+    </ol>
+  </nav>
+
+  <article>
+<p>This stage turns the price panel into the 57-column matrix every model
+downstream sees. Its central claim is not that the features predict — that
+is <code>05_evaluation</code>'s question — but that every value was computable at the
+moment it is dated.</p>
+<hr />
+
+<section id="c0">
+  <div class="cell-head"><span class="cell-num">0</span><h2>✅ RESOLVED — the narrative digest no longer duplicates the artifact</h2></div>
+<p><strong>Status: fixed in the notebook and its paired script. No feature value
+was touched.</strong></p>
+<p>The summary markdown after section G stated a content digest of
+<code>a1e90493a7de9d0f</code>, while the cell immediately below printed
+<code>260b3945031e1849</code>. Every other figure in that sentence — 57 features,
+396,186 rows, 99 ETFs, the date range, 22 clusters — agreed. Only the
+digest had drifted.</p>
+<p><strong>Why this mattered more than a typo.</strong> Section G's whole rationale is
+that a content digest moves when any feature value moves, precisely so a
+corrected feature cannot pass silently downstream. A hand-typed digest in
+the prose is a second copy of exactly that number, and it had already
+drifted — the failure the digest exists to prevent, reproduced one cell
+above the digest itself.</p>
+<p><strong>The fix.</strong> The clause now points at the printed value instead of
+restating it:</p>
+<pre><code class="language-markdown">..., under the content digest the cell below prints. Cutting the
+redundancy tree leaves <span class="gs">**22 clusters**</span>, ...
+</code></pre>
+<p>Correcting the hex string would have fixed this instance and left the
+mechanism: a digest changes on every rebuild, so a copy of it in prose is
+guaranteed to go stale again. It is also the one value in that sentence a
+human reader cannot use — the counts and dates are meaningful on sight, a
+sixteen-character hash is not, and it is printed immediately below.</p>
+<p>Applied in both places, since the two are jupytext-paired and carried the
+same sentence:</p>
+<ul>
+<li><code>case_studies/etfs/03_financial_features.ipynb</code>, the <code>results</code>-tagged
+markdown cell</li>
+<li><code>case_studies/etfs/03_financial_features.py:686</code></li>
+</ul>
+<p>The remaining counts and dates in that sentence are still hand-typed
+copies of printed values. They are stable across reruns on fixed data, so
+they have not drifted — but they are the same kind of duplication, and
+<code>02_labels</code>'s audit record shows the alternative: build the statement from
+the computed values so it cannot describe an artifact different from the
+one written.</p>
+<hr />
+<p><strong>Contents</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Cell</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Imports</td>
+<td>Shared feature helpers and the <code>ml4t.engineer</code> indicators</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Parameters</td>
+<td>The single CI knob</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Configuration</td>
+<td>Windows, ranked list, thresholds from <code>setup.yaml</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Section A</td>
+<td>The thesis, and the register that encodes it</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Section B</td>
+<td>Prices, eligibility, the yield curve</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Section C.1</td>
+<td>Momentum, volatility, and their differences</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Section C.2</td>
+<td>Oscillators, trend ratios, range</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Section C.3</td>
+<td>Drawdown, volume, distance from extremes</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Section C.4</td>
+<td>Cross-asset and macro state</td>
+</tr>
+<tr>
+<td>9</td>
+<td>The pipeline</td>
+<td>Where the eligibility gate sits, and why</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Section D.1–2</td>
+<td>The timing contract and the warmup audit</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Section D.3</td>
+<td>Rebuilding without the holdout</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Section E</td>
+<td>Matrix assembly and the null policy</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Figures F1, F4</td>
+<td>Coverage through time; the timing contract</td>
+</tr>
+<tr>
+<td>14</td>
+<td>Figures F2, F3</td>
+<td>Distributions; cross-sectional dispersion</td>
+</tr>
+<tr>
+<td>15</td>
+<td>Figure F5</td>
+<td>Redundancy clusters</td>
+</tr>
+<tr>
+<td>16</td>
+<td>Figure F6</td>
+<td>Persistence and rank stability</td>
+</tr>
+<tr>
+<td>17</td>
+<td>Section G</td>
+<td>Emit, with digest sidecar</td>
+</tr>
+<tr>
+<td>18</td>
+<td>Takeaways</td>
+<td>Four rules, four limitations</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+
+</section>
+<section id="c1">
+  <div class="cell-head"><span class="cell-num">1</span><h2>0. Imports and helpers</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — pull in the indicator implementations and the shared feature
+utilities, so this notebook writes only what is specific to ETFs.</li>
+<li><strong>Shows</strong> — the split: <code>ml4t.engineer</code> owns the indicator conventions,
+<code>case_studies.utils.feature_engineering</code> owns the panel-safe statistics
+and the figures.</li>
+<li><strong>Outcome</strong> — roughly thirty imported names, <code>CASE_DIR</code> and
+<code>FEATURES_DIR</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="kn">from</span><span class="w"> </span><span class="nn">ml4t.engineer.features.momentum</span><span class="w"> </span><span class="kn">import</span> <span class="n">adx</span><span class="p">,</span> <span class="n">aroon</span><span class="p">,</span> <span class="n">cci</span><span class="p">,</span> <span class="n">macd</span><span class="p">,</span> <span class="n">rsi</span><span class="p">,</span> <span class="n">stochastic</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">case_studies.utils.feature_engineering</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">EPS</span><span class="p">,</span> <span class="n">assert_values_agree</span><span class="p">,</span> <span class="n">assign_families</span><span class="p">,</span> <span class="n">clip_within_date</span><span class="p">,</span>
+    <span class="n">cross_sectional_percentile</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">warmup_audit</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre>
+<p>The reason indicators are imported rather than written is given in C.2 and
+is worth stating up front: <strong>the smoothing convention inside an oscillator
+is where two implementations of the same name diverge.</strong> Wilder's
+recursive average and a simple moving average of the same gains produce
+different numbers, both correctly called &quot;RSI&quot;. A shared implementation is
+what makes <code>rsi_14</code> mean one thing across all nine case studies.</p>
+<p><code>EPS</code> recurs throughout as <code>.clip(lower_bound=EPS)</code> on every denominator.</p>
+
+</section>
+<section id="c2">
+  <div class="cell-head"><span class="cell-num">2</span><h2>1. Run parameters</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — hold the one knob papermill overrides in CI.</li>
+<li><strong>Shows</strong> — why there is no symbol cap here, unlike a stage that works
+per entity.</li>
+<li><strong>Outcome</strong> — <code>START_DATE = None</code> in production.</li>
+</ul>
+<pre><code class="language-python"><span class="n">START_DATE</span> <span class="o">=</span> <span class="kc">None</span>
+</code></pre>
+<p>The notebook's comment carries the reasoning: the CI fixture is already
+reduced in breadth, and <strong>the cross-sectional families need a
+cross-section to rank within</strong>. Capping symbols would not merely shrink
+the run, it would change the value of every percentile feature, because a
+percentile is a property of the population it is taken over.</p>
+
+</section>
+<section id="c3">
+  <div class="cell-head"><span class="cell-num">3</span><h2>2. Configuration</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — bind every window, threshold and list to <code>setup.yaml</code>.</li>
+<li><strong>Shows</strong> — that the notebook invents no constant; a value typed here
+would be a second source of truth for a decision the rest of the
+pipeline reads from one place.</li>
+<li><strong>Outcome</strong> — 10 declared families, decision cycle 21 sessions, holdout
+starting 2024-01-01.</li>
+</ul>
+<pre><code class="language-python"><span class="n">FAMILIES</span> <span class="o">=</span> <span class="n">families_from_config</span><span class="p">(</span><span class="n">setup</span><span class="p">)</span>
+<span class="n">WINDOWS</span> <span class="o">=</span> <span class="n">setup</span><span class="p">[</span><span class="s2">&quot;features&quot;</span><span class="p">][</span><span class="s2">&quot;windows&quot;</span><span class="p">]</span>
+<span class="n">RANKED</span> <span class="o">=</span> <span class="n">setup</span><span class="p">[</span><span class="s2">&quot;features&quot;</span><span class="p">][</span><span class="s2">&quot;ranked&quot;</span><span class="p">]</span>
+<span class="n">DECISION_CYCLE</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">resolve_label_horizon</span><span class="p">(</span><span class="s2">&quot;etfs&quot;</span><span class="p">,</span> <span class="n">setup</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">][</span><span class="s2">&quot;primary&quot;</span><span class="p">],</span> <span class="n">setup</span><span class="p">)</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">))</span>
+</code></pre>
+<p><code>DECISION_CYCLE</code> comes through the same <code>resolve_label_horizon</code> chain
+documented in the <code>02_labels</code> walkthrough, and it is used for one purpose:
+fixing how far the persistence figure has to look. The logic is that <strong>a
+feature must hold its ordering for at least one decision cycle to be
+usable at that cadence</strong>, so the axis is set by the label, not chosen.</p>
+<p>The concrete windows: momentum at <code>[5, 10, 21, 42, 63, 126, 189, 252]</code>,
+volatility at <code>[21, 63, 126, 252]</code>, <code>skip_recent</code> 21, ranked columns
+<code>[&quot;ret_126d&quot;, &quot;sharpe_126d&quot;, &quot;vol_63d&quot;]</code>, regime threshold 0.005.</p>
+
+</section>
+<section id="c4">
+  <div class="cell-head"><span class="cell-num">4</span><h2>3. Section A — the thesis, and the register</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — state the hypothesis precisely enough that the matrix's shape
+follows from it.</li>
+<li><strong>Shows</strong> — three consequences: eight horizons rather than one, regime
+features that rank nothing, and percentile representations alongside raw
+levels.</li>
+<li><strong>Outcome</strong> — the register table: one row per family with its inputs,
+lookback, lag and frame.</li>
+</ul>
+<p>Three claims drive the design:</p>
+<ul>
+<li><strong>The carrier is trailing relative performance</strong>, so returns and
+risk-adjusted returns are carried at <em>eight</em> horizons. Which horizon the
+effect lives at is treated as an empirical question rather than a
+modelling assumption. The skip-recent construction drops the most recent
+month from the long window, because that month reverses where the twelve
+before it continue.</li>
+<li><strong>The conditioning is regime.</strong> Volatility, drawdown, trend strength,
+the equity-bond correlation and the curve shape rank nothing against
+each other; they say which environment a ranking is formed in. That
+distinction lives in the register's <code>role</code> column (<code>signal</code> vs <code>state</code>)
+and <strong>no assertion can recover it from the values</strong> — it is a statement
+about intent.</li>
+<li><strong>Representation matters as much as quantity.</strong> A raw return's
+distribution drifts with the period's volatility, so the three carrier
+features are also carried as within-date percentiles.</li>
+</ul>
+<p><strong>The lag column is the register's sharpest field.</strong> A lag of 0 means the
+input is on the tape at the decision itself, which every price-derived
+family is: the decision is taken at the close and executes at the next
+open. The yield curve is the sole exception at one session, and that lag
+is <em>why it is a family of its own</em> rather than sharing one with the
+cross-asset correlation, which reads prices.</p>
+
+</section>
+<section id="c5">
+  <div class="cell-head"><span class="cell-num">5</span><h2>4. Section B — inputs and their observability</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — load the three inputs and note what each one's calendar
+implies.</li>
+<li><strong>Shows</strong> — that the Treasury series and the price panel do not share a
+calendar, which dictates the join strategy in C.4.</li>
+<li><strong>Outcome</strong> — 470,662 bars over 100 ETFs; 9,495 sessions of 10y–2y
+spread; the eligibility gate.</li>
+</ul>
+<pre><code class="language-python"><span class="n">yield_curve</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">load_macro</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="p">((</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;dgs10&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;dgs2&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="mi">100</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;slope&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">drop_nulls</span><span class="p">()</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+</code></pre>
+<p>Three observations the rest of the notebook depends on:</p>
+<ul>
+<li><strong>Bars are split- and dividend-adjusted</strong>, so a trailing return spans a
+corporate action without a jump.</li>
+<li><strong>Eligibility is a per-year tradability gate</strong>, stopping a fund listed
+in 2019 from appearing in a 2011 ranking. It arrives from
+<code>01_feasibility_analysis</code>.</li>
+<li><strong>The Treasury series skips market holidays.</strong> This is why C.4 joins it
+backward in time rather than on an exact date — an equality join would
+drop every NYSE session that FRED did not publish on.</li>
+</ul>
+
+</section>
+<section id="c6">
+  <div class="cell-head"><span class="cell-num">6</span><h2>5. Section C.1 — momentum, volatility and their differences</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — build the carrier block: trailing returns, volatility, and
+risk-adjusted returns at every declared horizon.</li>
+<li><strong>Shows</strong> — what is shared with other case studies and what is specific
+to this one.</li>
+<li><strong>Outcome</strong> — returns and volatility at eight and four horizons, plus
+skip-recent, acceleration and volatility-ratio columns.</li>
+</ul>
+<pre><code class="language-python"><span class="n">df</span> <span class="o">=</span> <span class="n">momentum_volatility_block</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">entity</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span>
+                              <span class="n">return_windows</span><span class="o">=</span><span class="n">WINDOWS</span><span class="p">[</span><span class="s2">&quot;momentum&quot;</span><span class="p">],</span>
+                              <span class="n">volatility_windows</span><span class="o">=</span><span class="n">WINDOWS</span><span class="p">[</span><span class="s2">&quot;volatility&quot;</span><span class="p">])</span>
+<span class="n">held</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="n">WINDOWS</span><span class="p">[</span><span class="s2">&quot;skip_recent&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+</code></pre>
+<p><strong>Why the block is shared.</strong> The notebook states that three case studies
+had computed this &quot;character for character with five different denominator
+guards between them&quot;. Consolidating removes the divergence, not the
+duplication.</p>
+<p><strong>Skip-recent is the interesting construction.</strong> <code>held</code> is the close 21
+sessions ago, and <code>skip_recent_12_1</code> divides it by the close 252 sessions
+ago. So the window runs from t−252 to t−21 and deliberately <strong>excludes the
+most recent month</strong>, isolating the twelve-month continuation from the
+one-month reversal that would otherwise contaminate it.</p>
+<p>The acceleration columns (<code>mom_accel_short/medium/long</code>) are differences
+between adjacent horizons, and the <code>vol_ratio_*</code> columns are short
+volatility over long. Both are cheap ways to express <em>change</em> in the
+carrier without adding a new lookback.</p>
+
+</section>
+<section id="c7">
+  <div class="cell-head"><span class="cell-num">7</span><h2>6. Section C.2 — oscillators, trend ratios and range</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — add bounded oscillators and moving-average ratios from the
+shared indicator library.</li>
+<li><strong>Shows</strong> — that indicator identity depends on smoothing convention, so
+the implementation is imported rather than rewritten.</li>
+<li><strong>Outcome</strong> — RSI at 7 and 14, MACD, ADX, CCI, stochastic, Aroon, NATR,
+choppiness, Hurst, SMA ratios at 50/200, an EMA ratio, Bollinger %B.</li>
+</ul>
+<p>Two details in this cell are load-bearing.</p>
+<p><strong>The Hurst exponent is the only rounded column</strong>, and the notebook
+explains why at length. It is the slope of a log-log least-squares fit
+over rescaled-range statistics, so its last bits depend on the order the
+cumulative sums accumulate in — which differs between a full panel and a
+truncated one on some BLAS builds. On this data the two agree exactly, but
+CI trips D.3's <code>1e-12</code> tolerance. Rounding to six decimals is &quot;far below
+any reading of a persistence exponent and far above the noise&quot;, so <strong>D.3
+tests the feature rather than the platform</strong>. This is a deliberate,
+documented weakening of one assertion, not an oversight.</p>
+<p><strong>Bollinger %B is guarded by a <code>when</code></strong>, not a clip:</p>
+<pre><code class="language-python"><span class="n">pl</span><span class="o">.</span><span class="n">when</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;_sd&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">then</span><span class="p">((</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;_mid&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;_sd&quot;</span><span class="p">)))</span> <span class="o">/</span> <span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;_sd&quot;</span><span class="p">)))</span>
+</code></pre>
+<p>With no <code>otherwise</code>, a zero-dispersion window yields <code>null</code> rather than a
+fabricated number. That is the same choice <code>02_labels</code> makes for an
+incomplete forward window, for the same reason.</p>
+
+</section>
+<section id="c8">
+  <div class="cell-head"><span class="cell-num">8</span><h2>7. Section C.3 — drawdown, volume and distance from extremes</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — add state features describing where price sits relative to its
+own recent range.</li>
+<li><strong>Shows</strong> — that <code>max_dd_63d</code> is the <em>current</em> drawdown, not the worst
+decline in the window; these are different statistics.</li>
+<li><strong>Outcome</strong> — drawdown at 63 and 126, OBV z-score, positive-day share,
+and distance from the 52-week high and low.</li>
+</ul>
+<p><code>max_dd_63d</code> is the share by which price sits below its highest close of
+the trailing quarter — <strong>zero at a new high and negative otherwise</strong>. The
+maximum drawdown <em>within</em> the window is a different quantity, and the
+notebook names the distinction explicitly so a reader does not assume the
+more familiar one.</p>
+<p>Relative volume is computed here but <strong>clipped later</strong>, at the 1st and
+99th percentile of its own date. The reason is that an index rebalance
+puts one ETF orders of magnitude above its own average, and one such row
+otherwise sets the scale every model sees.</p>
+
+</section>
+<section id="c9">
+  <div class="cell-head"><span class="cell-num">9</span><h2>8. Section C.4 — cross-asset and macro state</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — add the two features that are one number per date, shared by
+every ETF.</li>
+<li><strong>Shows</strong> — two calendar hazards: a rolling window that reads row order,
+and two series with different holiday calendars.</li>
+<li><strong>Outcome</strong> — <code>corr_spy_tlt_63d</code>, <code>regime</code>, <code>yield_curve_slope</code>,
+<code>yield_curve_zscore</code>, broadcast to every row.</li>
+</ul>
+<p><strong>The re-sort is not cosmetic.</strong> <code>pl.rolling_corr</code> reads <em>row order</em>, not
+the timestamp column. The SPY/TLT pair is assembled by an inner join,
+which does not guarantee order, so <code>.sort(&quot;timestamp&quot;)</code> runs before the
+rolling correlation. Without it the window would silently correlate
+whatever rows happened to be adjacent.</p>
+<p><strong>The curve is stamped with its availability date, not its observation
+date:</strong></p>
+<pre><code class="language-python"><span class="n">curve</span> <span class="o">=</span> <span class="n">yield_curve</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
+    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">offset_by</span><span class="p">(</span><span class="s2">&quot;1d&quot;</span><span class="p">),</span> <span class="o">...</span>
+<span class="p">)</span>
+<span class="o">...</span>
+<span class="o">.</span><span class="n">join_asof</span><span class="p">(</span><span class="n">curve</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="n">strategy</span><span class="o">=</span><span class="s2">&quot;backward&quot;</span><span class="p">)</span>
+</code></pre>
+<p>Two decisions are packed in there, and the notebook is explicit about
+both:</p>
+<ul>
+<li><strong><code>offset_by(&quot;1d&quot;)</code> is a calendar day, not a shift down the series.</strong> A
+shift would mean &quot;the next day the Treasury published&quot;, so on Columbus
+Day — when NYSE trades and FRED does not — it would add a <em>second</em>
+session of delay. The policy <code>setup.yaml</code> declares is
+<code>alfred_initial_release_close_lagged</code>: a value dated <code>t</code> is available at
+the close of <code>t+1</code>.</li>
+<li><strong><code>join_asof(..., strategy=&quot;backward&quot;)</code></strong> carries the most recent value
+at or before the row's timestamp, so a market holiday inherits the
+previous session's spread and never a later one's.</li>
+</ul>
+
+</section>
+<section id="c10">
+  <div class="cell-head"><span class="cell-num">10</span><h2>9. The pipeline — where the eligibility gate sits</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — compose the family functions into one build, in an order that
+is itself a correctness claim.</li>
+<li><strong>Shows</strong> — that the gate must sit <em>after</em> per-entity work and <em>before</em>
+anything computed within a date.</li>
+<li><strong>Outcome</strong> — <code>build_features</code>, and a built panel of 396,186 eligible
+bars carrying 57 features.</li>
+</ul>
+<pre><code class="language-python"><span class="k">def</span><span class="w"> </span><span class="nf">build_features</span><span class="p">(</span><span class="n">df</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">df</span><span class="o">.</span><span class="n">pipe</span><span class="p">(</span><span class="n">per_entity_features</span><span class="p">)</span><span class="o">.</span><span class="n">pipe</span><span class="p">(</span><span class="n">gate_to_eligible</span><span class="p">)</span><span class="o">.</span><span class="n">pipe</span><span class="p">(</span><span class="n">clip_and_rank</span><span class="p">)</span>
+</code></pre>
+<p><strong>This ordering is the most consequential decision in the notebook</strong>, and
+both halves of it are argued:</p>
+<ul>
+<li><strong>The gate goes before <code>clip_and_rank</code></strong> because a percentile and a clip
+are properties of the cross-section they are taken over. An ETF the
+strategy cannot trade must not be in that cross-section — ranking
+against it <em>moves the number written for every ETF that is</em>.</li>
+<li><strong>The gate goes after <code>per_entity_features</code></strong>, and the relative-volume
+ratio is specifically placed on the earlier side. Its trailing mean has
+to read every bar the ETF traded; otherwise a fund admitted this year
+divides by a mean of its first few eligible days, and one that re-enters
+after a gap averages across the gap.</li>
+</ul>
+<p>So the rule is: <strong>anything reading one entity's own history runs on the
+full panel; anything reading across entities runs on the gated panel.</strong>
+Only the clip is a cross-sectional step in that block, which is why it is
+separated from the ratio that feeds it.</p>
+<p><code>EXCLUDED</code> drops <code>symbol</code>, <code>timestamp</code>, OHLC, <code>volume</code> and <code>log_return</code>
+from the feature list — the inputs, not the features.</p>
+
+</section>
+<section id="c11">
+  <div class="cell-head"><span class="cell-num">11</span><h2>10. Section D.1–D.2 — the timing contract and warmup</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — classify every operation used, then assert that trailing
+windows do not produce values before they could have filled.</li>
+<li><strong>Shows</strong> — three operation kinds (rolling, cross-sectional, as-of), and
+a per-column check that leading nulls match declared lookbacks.</li>
+<li><strong>Outcome</strong> — a nine-row audit, every column <code>populated = true</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">warmup_audit</span><span class="p">(</span><span class="n">per_entity</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;ret_252d&quot;</span><span class="p">:</span> <span class="mi">252</span><span class="p">,</span> <span class="s2">&quot;sma_ratio_200&quot;</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span> <span class="o">...</span><span class="p">},</span> <span class="n">entity</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+</code></pre>
+<p><strong>The audit asserts rather than describes</strong>: a column carrying a value
+before its window could have filled is reading bars that do not exist.</p>
+<p><strong>It runs on <code>per_entity</code>, before the gate</strong> — deliberately, because the
+gate drops exactly the early rows the warmup stretch is made of. Auditing
+the gated panel would test nothing.</p>
+<p>Reading the output, <code>ret_252d</code> first populates at bar <strong>253</strong> while
+<code>dist_52w_high</code> populates at <strong>252</strong>, both declared 252. That is not an
+inconsistency: a 252-session <em>return</em> needs 253 bars because it compares
+two endpoints, whereas a rolling <em>max</em> over 252 bars is complete at the
+252nd. The audit passes both because it checks the declared lookback is
+not <em>undershot</em>.</p>
+
+</section>
+<section id="c12">
+  <div class="cell-head"><span class="cell-num">12</span><h2>11. Section D.3 — rebuilding without the holdout</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — prove no transform in the whole construction fits across the
+sample.</li>
+<li><strong>Shows</strong> — that building the panel twice, once truncated, reproduces
+identical values on shared rows.</li>
+<li><strong>Outcome</strong> — 349,500 rows compared per column, <code>0</code> nulls on one side
+only, max abs difference <code>0.0</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">seal</span> <span class="o">=</span> <span class="n">assert_values_agree</span><span class="p">(</span>
+    <span class="n">built</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">HOLDOUT_START</span><span class="p">),</span>
+    <span class="n">build_features</span><span class="p">(</span><span class="n">prices</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">HOLDOUT_START</span><span class="p">)),</span>
+    <span class="n">columns</span><span class="o">=</span><span class="n">feature_cols</span><span class="p">,</span> <span class="n">keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+</code></pre>
+<p><strong>This is the strongest check in the notebook</strong>, and its strength comes
+from what it does <em>not</em> require. A trailing statistic is unaffected by
+truncation; a fitted parameter — a winsorization bound, a scaler, an
+encoder — is not, because truncating the column moves the parameter and
+with it every row. So rebuilding and comparing tests <strong>every emitted
+column at once, and does not depend on anyone having remembered to flag
+the transform that fits</strong>.</p>
+<p>Two design choices make the test honest:</p>
+<ul>
+<li><strong>A value against a null counts as a difference.</strong> A null-skipping
+comparison would hide exactly the failure where truncation changes
+whether a value exists.</li>
+<li><strong>All 57 columns are compared, not a sample.</strong> The frame shown in the
+notebook filters to three representative columns for display only.</li>
+</ul>
+<p>Note this seal covers the <em>construction</em>. It says the features are
+trailing; it says nothing about whether they predict.</p>
+
+</section>
+<section id="c13">
+  <div class="cell-head"><span class="cell-num">13</span><h2>12. Section E — matrix assembly and the null policy</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — select the final columns, apply one null policy, and assert
+the panel key is unique.</li>
+<li><strong>Shows</strong> — that raw inputs are excluded so a model cannot read its own
+answer.</li>
+<li><strong>Outcome</strong> — the <code>features</code> frame, and the register re-rendered with
+realized column counts per family.</li>
+</ul>
+<pre><code class="language-python"><span class="n">features</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">built</span><span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">feature_cols</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">drop_nulls</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;sharpe_126d&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="p">)</span>
+<span class="k">assert</span> <span class="n">features</span><span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">is_duplicated</span><span class="p">()</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">==</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;duplicate panel key&quot;</span>
+</code></pre>
+<p><strong>Excluding <code>log_return</code> matters more than it looks.</strong> A model handed the
+contemporaneous log return beside a label derived from the same prices
+would be reading its own answer.</p>
+<p><strong>The null policy is currently a no-op, and that is worth knowing.</strong> The
+gated panel has 396,186 rows and <code>features</code> has 396,186 rows, so
+<code>drop_nulls(subset=[&quot;sharpe_126d&quot;])</code> removes nothing. The reason is that
+the eligibility gate already requires a prior full year above the volume
+floor, so a fund's first eligible bar is at least a year after listing —
+well past a 126-session warmup. The line is not dead: it would bite if the
+gate were relaxed or the ranked list moved to a longer window. But as
+configured, the gate subsumes it, and the &quot;one null policy applied once&quot;
+the markdown describes is doing no filtering today.</p>
+
+</section>
+<section id="c14">
+  <div class="cell-head"><span class="cell-num">14</span><h2>13. Figures F1 and F4 — coverage and the timing contract</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — show that no family is materially incomplete, and draw each
+family's lookback and lag.</li>
+<li><strong>Shows</strong> — where residual thinness sits, and which family waits for its
+input to publish.</li>
+<li><strong>Outcome</strong> — no family below about 99% coverage; one bar short of the
+decision line.</li>
+</ul>
+<p><strong>F1's axis is scaled to the data, not pinned to zero</strong>, and the notebook
+justifies it: on a zero-based axis every family would draw as one flat
+line at the top, and the point is <em>where the residual percent sits</em>. It
+sits in the long-window families, because an ETF admitted partway through
+a year has not yet filled a 252-session lookback.</p>
+<p><strong>F4 draws the register, not the code.</strong> Every family's bar reaches the
+decision line except the yield curve, which stops one session short — the
+lag from section 3 made visible. A gap at the right edge is an information
+lag by construction.</p>
+
+</section>
+<section id="c15">
+  <div class="cell-head"><span class="cell-num">15</span><h2>14. Figures F2 and F3 — distributions and dispersion</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — read the scale each feature arrives on, and whether the
+cross-section disagrees enough to rank.</li>
+<li><strong>Shows</strong> — that a longer window widens the return and narrows the
+ratio; and that dispersion widens sharply in stress.</li>
+<li><strong>Outcome</strong> — six histograms; a 10th–90th percentile band through time.</li>
+</ul>
+<p>The F2 pairing is the informative part: trailing returns broaden with
+horizon (about ±0.2 at 21 sessions to a body reaching 0.75 at 252) while
+the annualized risk-adjusted returns move the <em>other way</em>, narrowing from
+roughly −5…10 to −2…3. Dividing by dispersion is what stabilises the
+scale.</p>
+<p>F3's premise is stated in one line worth keeping: <strong>on a date where the
+band narrows to nothing there is nothing to rank</strong>, whatever the average
+level of the feature.</p>
+
+</section>
+<section id="c16">
+  <div class="cell-head"><span class="cell-num">16</span><h2>15. Figure F5 — redundancy structure</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — find how much of the matrix is one ordering under several
+names.</li>
+<li><strong>Shows</strong> — clustering on <code>1 - |ρ|</code>, so features carrying the same
+ordering group regardless of sign.</li>
+<li><strong>Outcome</strong> — 22 clusters from 57 features.</li>
+</ul>
+<p>Above the 0.7 cut, two features are close enough that a linear model
+cannot separate their contributions. Adjacent horizons pair off tightly —
+the 5- and 10-day returns with their risk-adjusted twins — while the
+short-horizon and long-horizon blocks only merge near the root.</p>
+<p>The notebook is careful about scope: this <strong>states</strong> the clusters.
+Choosing one representative from each needs a fold-aware criterion and
+belongs to <code>05_evaluation</code>. Picking representatives here, on the full
+sample, would be a selection fitted across the data the seal in section 11
+just proved nothing else fits across.</p>
+
+</section>
+<section id="c17">
+  <div class="cell-head"><span class="cell-num">17</span><h2>16. Figure F6 — persistence and rank stability</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — measure how long a feature's value and its ordering last.</li>
+<li><strong>Shows</strong> — autocorrelation to two decision cycles, and rank correlation
+between consecutive rebalances.</li>
+<li><strong>Outcome</strong> — long-window carriers still above 0.7 at 42 sessions; the
+21-day return reaches zero at exactly 21.</li>
+</ul>
+<pre><code class="language-python"><span class="n">DECISION_DATES</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">features</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">truncate</span><span class="p">(</span><span class="s2">&quot;1mo&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;decision&quot;</span><span class="p">))[</span><span class="s2">&quot;decision&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sort</span><span class="p">()</span><span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+<span class="p">)</span>
+</code></pre>
+<p><strong>Rebalances, not a fixed lag.</strong> <code>setup.yaml</code> declares
+<code>monthly_month_end</code>, and consecutive month-ends are a <em>varying</em> number of
+sessions apart. A fixed lag would correlate dates the strategy never puts
+side by side.</p>
+<p><strong>The autocorrelation is per ETF, then summarised by the median</strong>, with a
+bootstrap interval over ETFs. Pooling over every ETF-date pair would read
+high whenever ETFs sit at different levels, whether or not any one of them
+persists — the same panel hazard <code>01_feasibility_analysis</code> avoids with
+<code>panel_acf</code>.</p>
+<p>The most legible result: <strong><code>ret_21d</code> reaches zero autocorrelation at
+exactly 21 sessions, the length of its own window</strong>, and its
+rebalance-to-rebalance rank correlation is almost nothing. A feature whose
+ordering decays inside a cycle cannot support that rebalance cadence
+however well it predicts on the day it is computed.</p>
+
+</section>
+<section id="c18">
+  <div class="cell-head"><span class="cell-num">18</span><h2>17. Section G — emit</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — write the matrix with enough provenance to distinguish two
+vintages.</li>
+<li><strong>Shows</strong> — a content digest over values, not file bytes.</li>
+<li><strong>Outcome</strong> — <code>features/financial.parquet</code> plus a <code>.digest.json</code>
+sidecar recording three input digests.</li>
+</ul>
+<pre><code class="language-python"><span class="n">record</span> <span class="o">=</span> <span class="n">write_artifact</span><span class="p">(</span>
+    <span class="n">features</span><span class="p">,</span> <span class="n">FEATURES_DIR</span> <span class="o">/</span> <span class="s2">&quot;financial.parquet&quot;</span><span class="p">,</span>
+    <span class="n">keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">],</span>
+    <span class="n">written_by</span><span class="o">=</span><span class="s2">&quot;case_studies/etfs/03_financial_features.py&quot;</span><span class="p">,</span>
+    <span class="n">inputs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;eligibility.csv&quot;</span><span class="p">:</span> <span class="o">...</span><span class="p">,</span> <span class="s2">&quot;load_etfs&quot;</span><span class="p">:</span> <span class="o">...</span><span class="p">,</span> <span class="s2">&quot;load_macro:dgs10-dgs2&quot;</span><span class="p">:</span> <span class="o">...</span><span class="p">},</span>
+<span class="p">)</span>
+</code></pre>
+<p>The digest is computed over content, so row order and parquet metadata
+leave it alone while <strong>any feature value moves it</strong>. The notebook names
+the gap this fills: a feature-set <em>name</em> reaches the registry, a
+feature-set <em>value</em> does not, so a corrected feature would otherwise move
+every number downstream without changing anything the registry stores.</p>
+<p>The prose summarising this section used to restate the digest by hand and
+had gone stale; it now points at the printed value — see the resolved
+issue at the top.</p>
+
+</section>
+<section id="c19">
+  <div class="cell-head"><span class="cell-num">19</span><h2>18. Key takeaways and limitations</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — state the four transferable rules and the four places the
+matrix is weaker than it looks.</li>
+<li><strong>Shows</strong> — each rule as a failure avoided.</li>
+<li><strong>Outcome</strong> — the handoff to <code>04_model_based_features</code> and
+<code>05_evaluation</code>.</li>
+</ul>
+<p>The rules: state the timing contract before writing the feature; test the
+seal by construction rather than inspection; rank inside the date; read
+the matrix for distribution, dispersion, redundancy and decay before
+modelling it.</p>
+<p>The limitations, all stated by the notebook:</p>
+<ul>
+<li><strong>The cross-asset regime feature is one pair</strong>, SPY against TLT. It
+describes the equity-bond relationship and says nothing about
+commodities or currencies — which are a third of the universe.</li>
+<li><strong>The eligibility gate is annual</strong>, so an ETF that lost liquidity in
+June stays in the cross-section until December.</li>
+<li><strong>The yield curve reads revised history, not the initial release.</strong> The
+configured one-session lag is applied honestly, but a value revised
+later is not the value the decision could have seen, whatever its
+timestamp says. This is the subtlest of the four: the timing contract is
+satisfied in form while the underlying number may not be the
+contemporaneous one.</li>
+<li><strong>Every feature here is a rule written in advance.</strong>
+<code>04_model_based_features</code> adds features that are themselves model
+outputs, where the rule is estimated from the data.</li>
+</ul>
+<p><strong>Next</strong>: <code>04_model_based_features</code> builds regime and memory-preserving
+features on top of this matrix; <code>05_evaluation</code> tests fold by fold whether
+any of it predicts.</p>
+
+</section>
+  </article>
+</div>
+
+</body>
+</html>

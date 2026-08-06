@@ -683,7 +683,7 @@ print(f"Wrote {display_path(FEATURES_DIR / 'financial.parquet')}")
 
 # %% [markdown] tags=["results"]
 # The matrix carries **57 features** on **396,186 rows** across **99 ETFs**, from **2007-01-03**
-# to **2025-12-31**, under content digest **a1e90493a7de9d0f**. Cutting the redundancy tree
+# to **2025-12-31**, under the content digest the cell below prints. Cutting the redundancy tree
 # leaves **22 clusters**, so well over half the columns repeat an ordering another column
 # already carries.
 
