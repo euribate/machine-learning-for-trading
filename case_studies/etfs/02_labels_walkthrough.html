@@ -785,29 +785,21 @@ pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
   </nav>
 
   <article>
-<p>The configuration cell (section 0 below) is documented in depth — it is
-the cell that binds the notebook to <code>config/setup.yaml</code>, and the
-resolution chain behind it is not obvious from reading the line.
-Everything else is covered at normal depth.</p>
+<p>Section 0 is documented in depth — it binds the notebook to
+<code>config/setup.yaml</code>, and the resolution chain behind it is not obvious
+from reading the line. Everything else is covered at normal depth.</p>
 <hr />
 
 <section id="c0" class="alert">
   <div class="cell-head"><span class="cell-num">0</span><h2>⚠️ OPEN ISSUE — section G will raise <code>TypeError</code> on re-run</h2></div>
 <p><strong>Status: unresolved, awaiting review. Nothing has been changed in the
 notebook or the environment.</strong></p>
-<p>The section G cell calls:</p>
-<pre><code class="language-python"><span class="n">stats</span> <span class="o">=</span> <span class="n">compute_ic_hac_stats</span><span class="p">(</span>
-    <span class="n">ic</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">label_horizon</span><span class="o">=</span><span class="n">PRIMARY_HORIZON</span>
-<span class="p">)</span>
-</code></pre>
-<p>The <code>ml4t_diagnostic</code> build installed in <code>.venv</code> (<strong>0.1.0b21</strong>) exposes:</p>
+<p>Section G calls <code>compute_ic_hac_stats(ic, ic_col=&quot;ic&quot;, label_horizon=PRIMARY_HORIZON)</code>. The <code>ml4t_diagnostic</code> installed in
+<code>.venv</code> (<strong>0.1.0b21</strong>) exposes no such parameter, and takes no
+<code>**kwargs</code>, so the call fails outright:</p>
 <pre><code class="language-python"><span class="n">compute_ic_hac_stats</span><span class="p">(</span><span class="n">ic_series</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">maxlags</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                      <span class="n">kernel</span><span class="o">=</span><span class="s2">&quot;bartlett&quot;</span><span class="p">,</span> <span class="n">use_correction</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</code></pre>
-<p>There is <strong>no <code>label_horizon</code> parameter</strong>, and the signature takes no
-<code>**kwargs</code>, so the call fails outright:</p>
-<pre><code class="language-">TypeError: compute_ic_hac_stats() got an unexpected
-           keyword argument &#39;label_horizon&#39;
+<span class="c1"># TypeError: unexpected keyword argument &#39;label_horizon&#39;</span>
 </code></pre>
 <p>Verified by introspection against the active environment:</p>
 <pre><code class="language-bash">.venv/bin/python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
@@ -816,27 +808,24 @@ notebook or the environment.</strong></p>
 <span class="s2">print(inspect.signature(f))</span>
 <span class="s2">&quot;</span>
 </code></pre>
-<p><strong>What this means.</strong> The stored outputs in the notebook (mean IC 0.0203,
-naive t 3.77, HAC t 1.08, p 0.282) were produced against a <strong>newer</strong>
-<code>ml4t_diagnostic</code> than the one now installed. The notebook currently
-executes cleanly up to section G and then stops there.</p>
-<p><strong>Two possible fixes — not applied, decision pending:</strong></p>
+<p><strong>What this means.</strong> The stored outputs (mean IC 0.0203, naive t 3.77,
+HAC t 1.08, p 0.282) came from a <strong>newer</strong> build than the one installed.
+The notebook executes cleanly up to section G and stops there.</p>
+<p><strong>Two fixes — not applied, decision pending:</strong></p>
 <ol>
-<li><strong>Upgrade <code>ml4t_diagnostic</code></strong> to the build that accepts
-<code>label_horizon</code>. Correct if that parameter does something the
-notebook depends on — most likely setting the HAC lag window from the
-label horizon (21) rather than from the Newey–West rule <code>floor(4 * (T/100)^(2/9))</code>. This preserves the recorded numbers.</li>
-<li><strong>Change the call to <code>maxlags=PRIMARY_HORIZON</code></strong> against the
-installed version. Only equivalent if <code>label_horizon</code> was in fact
-just a lag-setter; if the newer build derives the lag differently
-(e.g. <code>horizon - 1</code>, or a multiple), the HAC t-statistic will shift
-and the markdown commentary quoting 1.08 will no longer match the
-output.</li>
+<li><strong>Upgrade <code>ml4t_diagnostic</code></strong> to the build accepting <code>label_horizon</code>,
+most likely a setter for the HAC lag window using the label horizon
+(21) instead of the Newey–West rule <code>floor(4 * (T/100)^(2/9))</code>.
+Preserves the recorded numbers.</li>
+<li><strong>Change the call to <code>maxlags=PRIMARY_HORIZON</code>.</strong> Equivalent only if
+<code>label_horizon</code> was just a lag-setter; if the newer build derives the
+lag differently (<code>horizon - 1</code>, or a multiple), the HAC t shifts and
+the commentary quoting 1.08 stops matching.</li>
 </ol>
-<p>Option 1 is the safer default, since option 2 risks silently changing
-the reported significance of the baseline floor — the number the whole
-section exists to establish. Confirming which requires reading the newer
-build's source; I have not done so.</p>
+<p>Option 1 is safer — option 2 risks silently changing the reported
+significance of the baseline floor, the number the section exists to
+establish. Confirming requires reading the newer build's source, which I
+have not done.</p>
 <hr />
 <p><strong>Contents</strong></p>
 <div class="table-wrap"><table>
@@ -947,26 +936,16 @@ build's source; I have not done so.</p>
 <p>Two names and two numbers. Everything below in the notebook is a loop
 over that dict.</p>
 <h3>Why the <code>HORIZONS</code> line is written this way</h3>
-<p>The notebook needs the integer <code>21</code> to build the label:</p>
-<pre><code class="language-python"><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="n">horizon</span><span class="p">)</span>   <span class="c1"># look 21 sessions ahead</span>
-</code></pre>
-<p>The only real question is <em>where <code>21</code> comes from</em>:</p>
-<pre><code class="language-python"><span class="c1"># Option A — type it into the notebook</span>
-<span class="n">HORIZONS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;fwd_ret_21d&quot;</span><span class="p">:</span> <span class="mi">21</span><span class="p">,</span> <span class="s2">&quot;fwd_ret_5d&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">}</span>
-
-<span class="c1"># Option B — what the notebook does</span>
-<span class="n">HORIZONS</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">resolve_label_horizon</span><span class="p">(</span><span class="s2">&quot;etfs&quot;</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">setup</span><span class="p">)</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">))</span>
-    <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">LABEL_NAMES</span>
-<span class="p">}</span>
-</code></pre>
-<p>Option A creates a <strong>second copy of the number</strong>. The rest of the
+<p>The notebook needs the integer <code>21</code> for <code>pl.col(&quot;close&quot;).shift(-horizon)</code>.
+The only real question is where <code>21</code> comes from — typed into the notebook,
+or resolved from config.</p>
+<p>Typing it creates a <strong>second copy of the number</strong>. The rest of the
 pipeline — cross-validation windows (<code>case_studies/utils/cv_window.py</code>),
 the backtest, stage 03's feature evaluation — reads the horizon from
-<code>setup.yaml</code>. Change the strategy to a two-month hold, edit
-<code>setup.yaml</code>, and Option A would keep labelling at 21 while the CV purge
-gap moved to 42. No exception, no warning, just a leak. Option B keeps
-<strong>one source of truth</strong>.</p>
+<code>setup.yaml</code>. Change the strategy to a two-month hold, edit <code>setup.yaml</code>,
+and the notebook would keep labelling at 21 while the CV purge gap moved
+to 42. No exception, no warning, just a leak. Resolving keeps <strong>one
+source of truth</strong>.</p>
 <h3>The resolution chain, step by step</h3>
 <p><code>resolve_label_horizon</code> (<code>utils/artifact_specs.py:125</code>) tries three
 sources in order and returns the first hit:</p>
@@ -1024,37 +1003,22 @@ fields.</p>
 <li><strong>buffer</strong> — the gap dropped between train and test folds, so the last
 training label has finished resolving before the test window starts</li>
 </ul>
-<p>They are usually equal and here they are — both 21. They need not be.
-You might use a 5-day horizon but purge 21 days between folds because a
-<em>feature</em> has a 21-day lookback that would leak. Different jobs,
-separate config fields.</p>
-<p>The notebook's markdown says exactly this:</p>
-<blockquote>
-<p>They are separate fields — the buffer that keeps folds
-independent is not always the horizon the outcome resolves
-over — and coincide here.</p>
-</blockquote>
-<p><strong>The risk it is flagging:</strong> because source 2 is absent, the horizon is
-being read out of the buffer field. If someone later sets <code>buffer: 30D</code>
-as a safety margin while still intending a 21-day label, this cell would
-silently start building <strong>30-day labels</strong>. Adding an explicit
-<code>horizons:</code> block (source 2) closes that hole.</p>
+<p>They are usually equal and here they are — both 21, which is why reading
+one from the other works. They need not be: you might use a 5-day horizon
+but purge 21 days because a <em>feature</em> has a 21-day lookback that would
+leak. Different jobs, separate fields — as the notebook's markdown says.</p>
+<p><strong>The risk this flags:</strong> with source 2 absent, the horizon is read out of
+the buffer field. Set <code>buffer: 30D</code> later as a safety margin while still
+intending a 21-day label, and this cell silently builds <strong>30-day
+labels</strong>. An explicit <code>horizons:</code> block closes that hole.</p>
 <h3><code>.rstrip(&quot;Dd&quot;)</code> and <code>int(...)</code></h3>
-<p><code>setup.yaml</code> stores durations as strings with a unit suffix (<code>21D</code>,
-<code>5D</code>) because that is the format the backtest and CV code also consume.
-Converting to something <code>shift()</code> accepts:</p>
-<pre><code class="language-">&quot;21D&quot;  →  rstrip(&quot;Dd&quot;)  →  &quot;21&quot;  →  int()  →  21
-</code></pre>
-<p><code>rstrip</code> takes a <strong>set of characters</strong>, not a suffix — it strips any of
-them from the right end repeatedly:</p>
-<pre><code class="language-python"><span class="s2">&quot;21D&quot;</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">)</span>   <span class="err">→</span> <span class="s2">&quot;21&quot;</span>
-<span class="s2">&quot;5d&quot;</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">)</span>    <span class="err">→</span> <span class="s2">&quot;5&quot;</span>     <span class="c1"># lowercase handled too</span>
-<span class="s2">&quot;21DD&quot;</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">)</span>  <span class="err">→</span> <span class="s2">&quot;21&quot;</span>    <span class="c1"># strips both</span>
-</code></pre>
-<p>Practically, <code>setup.yaml</code> may write <code>21D</code> or <code>21d</code>. The downside of a
-char set is that it strips blindly: a value like <code>21W</code> (weeks) or <code>3M</code>
-(months) survives <code>rstrip</code> intact and then explodes on <code>int()</code>. It only
-handles the day convention.</p>
+<p><code>setup.yaml</code> stores durations with a unit suffix (<code>21D</code>, <code>5D</code>), the
+format the backtest and CV code also consume, so
+<code>&quot;21D&quot; → rstrip(&quot;Dd&quot;) → &quot;21&quot; → int() → 21</code>.</p>
+<p><code>rstrip</code> takes a <strong>set of characters</strong>, not a suffix, stripping any of
+them repeatedly from the right — so <code>&quot;5d&quot;</code> and <code>&quot;21DD&quot;</code> work too. It also
+strips blindly: <code>21W</code> (weeks) or <code>3M</code> (months) survive intact and then
+explode on <code>int()</code>. It handles the day convention only.</p>
 <h3>What <code>variants:</code> controls</h3>
 <p><code>LABEL_NAMES</code> is built from <code>setup[&quot;labels&quot;][&quot;variants&quot;]</code>, so that YAML
 list decides <strong>how many labels the notebook builds</strong>. Add <code>fwd_ret_63d</code>
@@ -1170,28 +1134,25 @@ window crosses an entity boundary — asserted in section D, property 3.
 Rows without a full forward window get <code>null</code> from the shift, which is
 the correct representation of &quot;unknown&quot;, not zero.</p>
 <h3>The two bookkeeping columns</h3>
-<p>Two bookkeeping columns are numbered here, on the <strong>complete</strong> price
-series, because both mean something only before any row is dropped:</p>
 <pre><code class="language-python"><span class="n">labels_df</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
     <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">pl</span><span class="o">.</span><span class="n">int_range</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">())</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;from_end&quot;</span><span class="p">),</span>
     <span class="n">pl</span><span class="o">.</span><span class="n">int_range</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">())</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;session&quot;</span><span class="p">),</span>
 <span class="p">)</span>
 </code></pre>
-<p><strong><code>.over(&quot;symbol&quot;)</code></strong> is a window partition — SQL's
-<code>OVER (PARTITION BY symbol)</code>. Polars evaluates the expression once per
-symbol and scatters the results back to the rows they came from, so the
-frame keeps its shape and its order. Nothing is grouped away.</p>
-<p>Read the two pieces separately:</p>
-<ul>
-<li><strong><code>pl.int_range(pl.len())</code></strong> — inside <code>.over()</code>, <code>pl.len()</code> is <em>that
-symbol's</em> row count, so the range yields <code>0, 1, 2, … n-1</code> down the
-group. That is <code>session</code>: each symbol's bars numbered forward from its
-own first bar, independently of every other symbol.</li>
-<li><strong><code>pl.len().over(&quot;symbol&quot;)</code></strong> — the same group count, but broadcast
-unchanged onto every row of the group. Subtracting the session number
-from <code>n - 1</code> flips the count around: <code>from_end</code> is <code>0</code> on the symbol's
-last bar, <code>1</code> on the one before it, and so on backwards.</li>
-</ul>
+<p><strong>Why they exist.</strong> Both record where a row sat in its symbol's own
+history, while that is still knowable. Everything downstream drops rows —
+the null tail, the eligibility screen, the holdout cut — and survivors
+renumber from zero. So position is stamped on now, on the complete
+series. The two columns are the same position anchored to opposite ends,
+because two diagnostics need different ends.</p>
+<p><strong>How they are built.</strong> <code>.over(&quot;symbol&quot;)</code> is SQL's
+<code>OVER (PARTITION BY symbol)</code>: evaluate once per symbol, scatter results
+back to their own rows, shape and order preserved. Inside it <code>pl.len()</code>
+is <em>that symbol's</em> row count, so <code>pl.int_range(pl.len())</code> yields
+<code>0 … n-1</code> down the group — that is <code>session</code>. A bare
+<code>pl.len().over(&quot;symbol&quot;)</code> instead broadcasts <code>n</code> onto every row, and
+<code>n - 1 - session</code> flips the count around, so <code>from_end</code> is <code>0</code> on the
+symbol's last bar.</p>
 <p>With <code>horizon = 2</code> and two symbols of 5 and 3 bars:</p>
 <div class="table-wrap"><table>
 <thead>
@@ -1262,35 +1223,25 @@ last bar, <code>1</code> on the one before it, and so on backwards.</li>
 </tr>
 </tbody>
 </table></div>
-<p>Two properties fall out of the table, and both are relied on downstream:</p>
-<ul>
-<li><code>session + from_end</code> is constant within a symbol (<code>n - 1</code>). The two
-columns are the same position counted from opposite ends.</li>
-<li><strong>A row's label is null exactly when <code>from_end &lt; horizon</code>.</strong> The null
-tail is not approximately the last <code>h</code> bars, it is precisely them. This
-is what figure F2 checks: the share of non-null labels must fall to
-zero over exactly <code>h</code> positions, and a fabricated or padded tail would
-sit flat instead of stepping down.</li>
-</ul>
-<p>Because <code>from_end</code> is measured per symbol, it stays correct for ETFs that
-were delisted or that simply start late — each one's tail is cut relative
-to its own last bar, not to the panel's last date.</p>
-<p><strong>The row order is load-bearing.</strong> <code>int_range</code> numbers <em>positions</em>, not
-dates: it has no idea what is in the <code>date</code> column. It only means
-&quot;trading sessions&quot; because section B already sorted by symbol then date.
-Feed it unsorted rows and the numbering silently follows whatever order
-the frame happens to be in — no error, no null, just a quietly wrong
-<code>session</code>. The same positional assumption is what <code>shift(-horizon)</code>
-depends on, which is why the sort happens once, up front, for both.</p>
-<p><strong>The order of operations is load-bearing too.</strong> Both columns are
-computed before any row is dropped. Filter first — the null tail, the
-eligibility screen, the holdout window — and the surviving rows are
-renumbered from zero within whatever is left, so <code>from_end</code> would no
-longer point at the real end of the series and F2's boundary profile
-would measure the filter instead of the label.</p>
-<p>Neither column reaches the parquet — section H selects three columns.
-They exist to let the diagnostics in sections E and F keep counting in
-trading sessions after the frame has been filtered down.</p>
+<p>Two properties fall out, both relied on downstream: <code>session + from_end</code>
+is constant within a symbol (<code>n - 1</code>), and <strong>a label is null exactly when
+<code>from_end &lt; horizon</code></strong> — precisely the last <code>h</code> bars, not approximately.</p>
+<p><strong><code>from_end</code> is anchored to the last bar</strong>, because the null tail is
+defined by the end. Section D's first assertion filters <code>from_end &lt; horizon</code> to select the rows that must be null, and figure F2 groups on it
+to check the tail steps down over exactly <code>h</code> positions rather than
+sitting flat. Measured per symbol, so ETFs that were delisted or started
+late are cut relative to their own last bar, not the panel's last date.</p>
+<p><strong><code>session</code> is anchored to the first bar</strong>, because section F needs a
+time axis and passes it as <code>bar_col=&quot;session&quot;</code>. Lags there must be in
+trading sessions — the horizon is — and calendar days are not uniform
+across weekends and holidays. It also cannot be row position within
+<code>dev</code>, which holds only surviving rows: counting among survivors would
+make rows either side of a missing bar look adjacent.</p>
+<p><strong>Row order is load-bearing.</strong> <code>int_range</code> numbers <em>positions</em>, not
+dates. It means &quot;trading sessions&quot; only because section B already sorted
+by symbol then date — the same assumption <code>shift(-horizon)</code> rests on.
+Unsorted input yields a silently wrong <code>session</code>: no error, no null.</p>
+<p>Neither column reaches the parquet; section H selects three.</p>
 <p>The notebook computes the arithmetic locally rather than calling
 <code>fixed_time_horizon_labels</code>. That helper computes the identical quantity
 but agrees only to a rounding step — enough to change the digest and
@@ -1414,14 +1365,12 @@ consumes <code>h</code> return <em>intervals</em>, not <code>h+1</code> bars. Tr
 bar interval <code>[i, i+h]</code> would make consecutive labels appear to share
 one interval even when they share none — and would report <code>N_eff = N/2</code>
 for a one-day label that is in fact fully independent.</p>
-<p>Both functions take <code>bar_col</code> for the same reason: <code>dev</code> holds only
-non-null rows, and counting positions among survivors would make rows
-either side of a missing bar look adjacent. <code>session</code> was numbered in
-section C on the complete series. The distinction is vacuous for this
-case study (property 3 proves the only nulls are each symbol's last <code>h</code>
-sessions, and the holdout filter cuts a prefix, so <code>dev</code> holds an
-unbroken run per symbol) but not for a case study whose bars can go
-missing mid-series.</p>
+<p>Both take <code>bar_col</code> for the reason given in section C: <code>dev</code> holds only
+non-null rows, so counting positions among survivors would make rows
+either side of a missing bar look adjacent. The distinction is vacuous
+here — property 3 proves the only nulls are each symbol's last <code>h</code>
+sessions, and the holdout cuts a prefix, so <code>dev</code> holds an unbroken run
+per symbol — but not for a case study whose bars go missing mid-series.</p>
 <p>Recorded result: 418,362 rows carry <strong>20,017 effective observations —
 4.78%</strong>, against the <code>1/21 = 4.76%</code> that a fully-overlapped window
 implies. Autocorrelation runs from 0.942 at lag one to -0.019 at lag 21.</p>
