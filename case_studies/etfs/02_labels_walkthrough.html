@@ -1,0 +1,1425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02_labels.ipynb — cell-by-cell walkthrough</title>
+<style>
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+
+    --serif: "Iowan Old Style", Charter, "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101820;
+      --surface: #16212b;
+      --ink: #dce5ec;
+      --ink-soft: #9dadba;
+      --ink-faint: #6f818e;
+      --rule: #27343f;
+      --rule-soft: #1e2a34;
+      --accent: #6ec2e6;
+      --accent-soft: #163140;
+      --alert: #e5a071;
+      --alert-soft: #2c1f16;
+      --alert-rule: #5c3d26;
+      --code-bg: #1a2530;
+      --code-ink: #c6d5e0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101820;
+    --surface: #16212b;
+    --ink: #dce5ec;
+    --ink-soft: #9dadba;
+    --ink-faint: #6f818e;
+    --rule: #27343f;
+    --rule-soft: #1e2a34;
+    --accent: #6ec2e6;
+    --accent-soft: #163140;
+    --alert: #e5a071;
+    --alert-soft: #2c1f16;
+    --alert-rule: #5c3d26;
+    --code-bg: #1a2530;
+    --code-ink: #c6d5e0;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  @media (min-width: 1020px) {
+    .shell {
+      grid-template-columns: 210px minmax(0, 1fr);
+      gap: 3.5rem;
+      padding-top: 4.5rem;
+    }
+    .toc { position: sticky; top: 2rem; align-self: start; }
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { grid-column: 1 / -1; border-bottom: 2px solid var(--ink); padding-bottom: 1.5rem; }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.9rem;
+  }
+
+  .masthead h1 {
+    font-family: var(--sans);
+    font-size: clamp(1.9rem, 4.5vw, 2.7rem);
+    line-height: 1.1;
+    letter-spacing: -0.028em;
+    font-weight: 700;
+    text-wrap: balance;
+    margin-bottom: 0.6rem;
+  }
+
+  .masthead h1 code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .standfirst {
+    color: var(--ink-soft);
+    max-width: 62ch;
+    font-size: 1.05rem;
+  }
+
+  .masthead-meta {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    margin-top: 1.1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.4rem;
+  }
+
+  /* ---------- table of contents ---------- */
+
+  .toc h2 {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.7rem;
+  }
+
+  .toc ol { list-style: none; display: flex; flex-direction: column; gap: 0.05rem; }
+
+  .toc a {
+    display: grid;
+    grid-template-columns: 1.6rem 1fr;
+    gap: 0.3rem;
+    font-family: var(--sans);
+    font-size: 0.79rem;
+    line-height: 1.35;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 0.3rem 0.3rem 0.3rem 0;
+    border-radius: 3px;
+  }
+
+  .toc a:hover { color: var(--accent); background: var(--accent-soft); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .toc .n { font-variant-numeric: tabular-nums; color: var(--ink-faint); }
+  .toc a.flag .n, .toc a.flag { color: var(--alert); }
+  .toc a.flag:hover { background: var(--alert-soft); }
+
+  /* ---------- article ---------- */
+
+  article { min-width: 0; display: flex; flex-direction: column; gap: 2.75rem; }
+
+  section { scroll-margin-top: 1.5rem; }
+
+  .cell-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.55rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .cell-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 0.16rem 0.45rem;
+    border-radius: 3px;
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cell-head h2 {
+    font-family: var(--sans);
+    font-size: 1.42rem;
+    letter-spacing: -0.02em;
+    font-weight: 650;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 1.9rem 0 0.7rem;
+    text-wrap: balance;
+  }
+
+  h4 {
+    font-family: var(--sans);
+    font-size: 0.73rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    margin: 1.6rem 0 0.6rem;
+  }
+
+  p { max-width: 66ch; margin-bottom: 0.95rem; }
+  p:last-child { margin-bottom: 0; }
+
+  ul, ol.prose-list { max-width: 64ch; padding-left: 1.15rem; margin-bottom: 0.95rem; }
+  li { margin-bottom: 0.45rem; }
+  li::marker { color: var(--ink-faint); }
+
+  strong { font-weight: 700; }
+  em { font-style: italic; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.855em;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule-soft);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    margin-bottom: 1.1rem;
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  pre code { background: none; padding: 0; font-size: 1em; color: var(--code-ink); }
+
+  blockquote {
+    border-left: 2px solid var(--rule);
+    padding-left: 1.1rem;
+    color: var(--ink-soft);
+    font-style: italic;
+    max-width: 62ch;
+    margin-bottom: 1rem;
+  }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap { overflow-x: auto; margin-bottom: 1.1rem; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 30rem;
+    font-family: var(--sans);
+    font-size: 0.83rem;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.69rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--ink-soft);
+    padding: 0.45rem 0.8rem 0.45rem 0;
+  }
+
+  td {
+    padding: 0.5rem 0.8rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+
+  td:first-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.flagged td { color: var(--alert); }
+
+  /* ---------- callouts ---------- */
+
+  .alert {
+    background: var(--alert-soft);
+    border: 1px solid var(--alert-rule);
+    border-left: 3px solid var(--alert);
+    border-radius: 4px;
+    padding: 1.4rem 1.5rem;
+  }
+
+  .alert-label {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--alert);
+    margin-bottom: 0.5rem;
+  }
+
+  .alert h2 {
+    font-family: var(--sans);
+    font-size: 1.18rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+    margin-bottom: 0.9rem;
+    text-wrap: balance;
+  }
+
+  .alert .status {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--alert);
+    margin-bottom: 1rem;
+    max-width: 66ch;
+  }
+
+  .alert pre { background: var(--surface); border-left-color: var(--alert); }
+  .alert code { background: var(--surface); }
+
+  .alert-inline {
+    background: var(--alert-soft);
+    border-left: 3px solid var(--alert);
+    border-radius: 0 4px 4px 0;
+    padding: 1rem 1.2rem;
+    margin: 1.3rem 0;
+  }
+
+  .alert-inline p { max-width: 62ch; margin-bottom: 0; font-size: 0.94rem; }
+  .alert-inline code { background: var(--surface); }
+
+  /* ---------- misc ---------- */
+
+  .result {
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    max-width: 64ch;
+    margin-bottom: 1.1rem;
+    color: var(--ink);
+  }
+
+  .result .k {
+    font-family: var(--sans);
+    font-size: 0.67rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 0.5rem 0;
+  }
+
+  .closing {
+    border-top: 2px solid var(--ink);
+    padding-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+/* syntax highlighting */
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+@media (prefers-color-scheme: dark) {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="dark"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="light"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+}
+
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow">case_studies · etfs</div>
+    <h1><code>02_labels.ipynb</code> — cell-by-cell walkthrough</h1>
+    <p class="standfirst">Companion notes for the ETF case study's label-engineering stage. The notebook itself explains <em>why</em> each section exists; this document explains <em>what each cell does mechanically</em>, which functions it calls, and where the values come from.</p>
+    <div class="masthead-meta">
+      <span>case_studies/etfs/02_labels_walkthrough.md</span>
+      <span>generated by tools/build_docs.py &mdash; do not edit</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a class="flag" href="#c0"><span class="n">0</span><span>OPEN ISSUE — section G will raise TypeError on re-run ⚠</span></a></li>
+      <li><a href="#c1"><span class="n">1</span><span>0. The configuration cell (in depth)</span></a></li>
+      <li><a href="#c2"><span class="n">2</span><span>1. Imports and paths</span></a></li>
+      <li><a href="#c3"><span class="n">3</span><span>2. Run parameters</span></a></li>
+      <li><a href="#c4"><span class="n">4</span><span>3. Section B — load and digest the prices</span></a></li>
+      <li><a href="#c5"><span class="n">5</span><span>4. Section C — build the labels</span></a></li>
+      <li><a href="#c6"><span class="n">6</span><span>5. Section D — four assertions</span></a></li>
+      <li><a href="#c7"><span class="n">7</span><span>6. Figure F2 — boundary profile</span></a></li>
+      <li><a href="#c8"><span class="n">8</span><span>7. Section E — the development window</span></a></li>
+      <li><a href="#c9"><span class="n">9</span><span>8. Figure F1 — distribution and scale</span></a></li>
+      <li><a href="#c10"><span class="n">10</span><span>9. Figure F4 — dispersion through time</span></a></li>
+      <li><a href="#c11"><span class="n">11</span><span>10. Figure F3 — overlap and effective sample size</span></a></li>
+      <li><a href="#c12"><span class="n">12</span><span>11. Section G — the baseline floor</span></a></li>
+      <li><a href="#c13"><span class="n">13</span><span>12. Section H — artifacts</span></a></li>
+      <li><a href="#c14"><span class="n">14</span><span>13. The audit record</span></a></li>
+      <li><a href="#c15"><span class="n">15</span><span>Downstream</span></a></li>
+      <li><a href="#c16"><span class="n">16</span><span>Known limitations (as stated in the notebook)</span></a></li>
+    </ol>
+  </nav>
+
+  <article>
+<p>The configuration cell (section 0 below) is documented in depth — it is
+the cell that binds the notebook to <code>config/setup.yaml</code>, and the
+resolution chain behind it is not obvious from reading the line.
+Everything else is covered at normal depth.</p>
+<hr />
+
+<section id="c0" class="alert">
+  <div class="cell-head"><span class="cell-num">0</span><h2>⚠️ OPEN ISSUE — section G will raise <code>TypeError</code> on re-run</h2></div>
+<p><strong>Status: unresolved, awaiting review. Nothing has been changed in the
+notebook or the environment.</strong></p>
+<p>The section G cell calls:</p>
+<pre><code class="language-python"><span class="n">stats</span> <span class="o">=</span> <span class="n">compute_ic_hac_stats</span><span class="p">(</span>
+    <span class="n">ic</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">label_horizon</span><span class="o">=</span><span class="n">PRIMARY_HORIZON</span>
+<span class="p">)</span>
+</code></pre>
+<p>The <code>ml4t_diagnostic</code> build installed in <code>.venv</code> (<strong>0.1.0b21</strong>) exposes:</p>
+<pre><code class="language-python"><span class="n">compute_ic_hac_stats</span><span class="p">(</span><span class="n">ic_series</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">maxlags</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                     <span class="n">kernel</span><span class="o">=</span><span class="s2">&quot;bartlett&quot;</span><span class="p">,</span> <span class="n">use_correction</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</code></pre>
+<p>There is <strong>no <code>label_horizon</code> parameter</strong>, and the signature takes no
+<code>**kwargs</code>, so the call fails outright:</p>
+<pre><code class="language-">TypeError: compute_ic_hac_stats() got an unexpected
+           keyword argument &#39;label_horizon&#39;
+</code></pre>
+<p>Verified by introspection against the active environment:</p>
+<pre><code class="language-bash">.venv/bin/python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
+<span class="s2">import inspect</span>
+<span class="s2">from ml4t.diagnostic.metrics import compute_ic_hac_stats as f</span>
+<span class="s2">print(inspect.signature(f))</span>
+<span class="s2">&quot;</span>
+</code></pre>
+<p><strong>What this means.</strong> The stored outputs in the notebook (mean IC 0.0203,
+naive t 3.77, HAC t 1.08, p 0.282) were produced against a <strong>newer</strong>
+<code>ml4t_diagnostic</code> than the one now installed. The notebook currently
+executes cleanly up to section G and then stops there.</p>
+<p><strong>Two possible fixes — not applied, decision pending:</strong></p>
+<ol>
+<li><strong>Upgrade <code>ml4t_diagnostic</code></strong> to the build that accepts
+<code>label_horizon</code>. Correct if that parameter does something the
+notebook depends on — most likely setting the HAC lag window from the
+label horizon (21) rather than from the Newey–West rule <code>floor(4 * (T/100)^(2/9))</code>. This preserves the recorded numbers.</li>
+<li><strong>Change the call to <code>maxlags=PRIMARY_HORIZON</code></strong> against the
+installed version. Only equivalent if <code>label_horizon</code> was in fact
+just a lag-setter; if the newer build derives the lag differently
+(e.g. <code>horizon - 1</code>, or a multiple), the HAC t-statistic will shift
+and the markdown commentary quoting 1.08 will no longer match the
+output.</li>
+</ol>
+<p>Option 1 is the safer default, since option 2 risks silently changing
+the reported significance of the baseline floor — the number the whole
+section exists to establish. Confirming which requires reading the newer
+build's source; I have not done so.</p>
+<hr />
+<p><strong>Contents</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Cell</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Configuration</td>
+<td>Resolves label names and horizons</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Imports</td>
+<td>Modules, <code>CASE_DIR</code>, <code>LABELS_DIR</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td>Parameters</td>
+<td>Run knobs for CI vs production</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Section B</td>
+<td>Load prices, digest the input</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Section C</td>
+<td>Build the forward-return labels</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Section D</td>
+<td>Four assertions on window validity</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Figure F2</td>
+<td>Boundary profile — the null tail</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Section E</td>
+<td>Seal on the label endpoint</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Figure F1</td>
+<td>Root-horizon scaling check</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Figure F4</td>
+<td>Cross-sectional dispersion by year</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Figure F3</td>
+<td>Overlap decay, effective sample size</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Section G</td>
+<td>Baseline IC floor — ⚠️ <strong>open issue</strong></td>
+</tr>
+<tr>
+<td>12</td>
+<td>Section H</td>
+<td>Write parquet + digest sidecars</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Audit record</td>
+<td>Printed label definition table</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+
+</section>
+<section id="c1">
+  <div class="cell-head"><span class="cell-num">1</span><h2>0. The configuration cell (in depth)</h2></div>
+<pre><code class="language-python"><span class="n">setup</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">((</span><span class="n">CASE_DIR</span> <span class="o">/</span> <span class="s2">&quot;config&quot;</span> <span class="o">/</span> <span class="s2">&quot;setup.yaml&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">read_text</span><span class="p">())</span>
+
+<span class="n">PRIMARY_LABEL</span> <span class="o">=</span> <span class="n">setup</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">][</span><span class="s2">&quot;primary&quot;</span><span class="p">]</span>
+<span class="n">LABEL_NAMES</span> <span class="o">=</span> <span class="p">[</span><span class="n">PRIMARY_LABEL</span><span class="p">,</span> <span class="o">*</span><span class="n">setup</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;variants&quot;</span><span class="p">,</span> <span class="p">[])]</span>
+<span class="n">HORIZONS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">resolve_label_horizon</span><span class="p">(</span><span class="s2">&quot;etfs&quot;</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">setup</span><span class="p">)</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">LABEL_NAMES</span>
+<span class="p">}</span>
+<span class="n">HOLDOUT_START</span> <span class="o">=</span> <span class="n">date</span><span class="o">.</span><span class="n">fromisoformat</span><span class="p">(</span><span class="n">setup</span><span class="p">[</span><span class="s2">&quot;evaluation&quot;</span><span class="p">][</span><span class="s2">&quot;holdout_start&quot;</span><span class="p">])</span>
+<span class="n">PRIMARY_HORIZON</span> <span class="o">=</span> <span class="n">HORIZONS</span><span class="p">[</span><span class="n">PRIMARY_LABEL</span><span class="p">]</span>
+<span class="n">VARIANT_LABEL</span> <span class="o">=</span> <span class="n">LABEL_NAMES</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+</code></pre>
+<h3>What comes out</h3>
+<pre><code class="language-python"><span class="n">PRIMARY_LABEL</span>   <span class="o">=</span> <span class="s2">&quot;fwd_ret_21d&quot;</span>
+<span class="n">LABEL_NAMES</span>     <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;fwd_ret_21d&quot;</span><span class="p">,</span> <span class="s2">&quot;fwd_ret_5d&quot;</span><span class="p">]</span>
+<span class="n">HORIZONS</span>        <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;fwd_ret_21d&quot;</span><span class="p">:</span> <span class="mi">21</span><span class="p">,</span> <span class="s2">&quot;fwd_ret_5d&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">}</span>
+<span class="n">PRIMARY_HORIZON</span> <span class="o">=</span> <span class="mi">21</span>
+<span class="n">VARIANT_LABEL</span>   <span class="o">=</span> <span class="s2">&quot;fwd_ret_5d&quot;</span>
+</code></pre>
+<p>Two names and two numbers. Everything below in the notebook is a loop
+over that dict.</p>
+<h3>Why the <code>HORIZONS</code> line is written this way</h3>
+<p>The notebook needs the integer <code>21</code> to build the label:</p>
+<pre><code class="language-python"><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="n">horizon</span><span class="p">)</span>   <span class="c1"># look 21 sessions ahead</span>
+</code></pre>
+<p>The only real question is <em>where <code>21</code> comes from</em>:</p>
+<pre><code class="language-python"><span class="c1"># Option A — type it into the notebook</span>
+<span class="n">HORIZONS</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;fwd_ret_21d&quot;</span><span class="p">:</span> <span class="mi">21</span><span class="p">,</span> <span class="s2">&quot;fwd_ret_5d&quot;</span><span class="p">:</span> <span class="mi">5</span><span class="p">}</span>
+
+<span class="c1"># Option B — what the notebook does</span>
+<span class="n">HORIZONS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">resolve_label_horizon</span><span class="p">(</span><span class="s2">&quot;etfs&quot;</span><span class="p">,</span> <span class="n">n</span><span class="p">,</span> <span class="n">setup</span><span class="p">)</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">LABEL_NAMES</span>
+<span class="p">}</span>
+</code></pre>
+<p>Option A creates a <strong>second copy of the number</strong>. The rest of the
+pipeline — cross-validation windows (<code>case_studies/utils/cv_window.py</code>),
+the backtest, stage 03's feature evaluation — reads the horizon from
+<code>setup.yaml</code>. Change the strategy to a two-month hold, edit
+<code>setup.yaml</code>, and Option A would keep labelling at 21 while the CV purge
+gap moved to 42. No exception, no warning, just a leak. Option B keeps
+<strong>one source of truth</strong>.</p>
+<h3>The resolution chain, step by step</h3>
+<p><code>resolve_label_horizon</code> (<code>utils/artifact_specs.py:125</code>) tries three
+sources in order and returns the first hit:</p>
+<pre><code class="language-python"><span class="k">def</span><span class="w"> </span><span class="nf">resolve_label_horizon</span><span class="p">(</span><span class="n">case_study_id</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="n">setup</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="c1"># source 1</span>
+    <span class="n">label_spec</span> <span class="o">=</span> <span class="n">load_label_spec</span><span class="p">(</span><span class="n">case_study_id</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">label_spec</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">definition</span> <span class="o">=</span> <span class="n">label_spec</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;definition&quot;</span><span class="p">,</span> <span class="p">{})</span>
+        <span class="k">if</span> <span class="n">definition</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;horizon&quot;</span><span class="p">):</span>
+            <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">definition</span><span class="p">[</span><span class="s2">&quot;horizon&quot;</span><span class="p">])</span>
+
+    <span class="c1"># source 2</span>
+    <span class="n">labels</span> <span class="o">=</span> <span class="p">(</span><span class="n">setup</span> <span class="ow">or</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;labels&quot;</span><span class="p">,</span> <span class="p">{})</span>
+    <span class="n">horizon</span> <span class="o">=</span> <span class="p">(</span><span class="n">labels</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;horizons&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">label</span><span class="p">)</span>
+
+    <span class="c1"># source 3</span>
+    <span class="k">if</span> <span class="n">horizon</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">horizon</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">resolve_label_buffer</span><span class="p">(</span><span class="n">case_study_id</span><span class="p">,</span> <span class="n">label</span><span class="p">,</span> <span class="n">setup</span><span class="p">)</span>
+</code></pre>
+<p><strong>Source 1 — a per-label spec file.</strong> Would live at
+<code>case_studies/etfs/config/artifacts/labels/fwd_ret_21d.yaml</code>, field
+<code>definition.horizon</code>. The <code>etfs</code> config directory contains only
+<code>backtest/</code>, <code>exploration/</code>, <code>training/</code> and <code>setup.yaml</code> — there is no
+<code>artifacts/</code> directory. <code>load_label_spec</code> returns <code>None</code>; branch
+skipped.</p>
+<p><strong>Source 2 — an explicit <code>horizons:</code> block in <code>setup.yaml</code>.</strong> For this
+to fire the file would need:</p>
+<pre><code class="language-yaml"><span class="nt">labels</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">primary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fwd_ret_21d</span>
+<span class="w">  </span><span class="c1"># ← this block does not exist in etfs/config/setup.yaml</span>
+<span class="w">  </span><span class="nt">horizons</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">fwd_ret_21d</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">21D</span>
+<span class="w">    </span><span class="nt">fwd_ret_5d</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5D</span>
+</code></pre>
+<p>There is no <code>horizons:</code> key, so <code>labels.get(&quot;horizons&quot;)</code> is <code>None</code>,
+<code>(None or {}).get(label)</code> is <code>None</code>, and the <code>if horizon</code> test fails.</p>
+<p><strong>Source 3 — the fallback, <code>resolve_label_buffer</code></strong>
+(<code>utils/artifact_specs.py:103</code>). This is what actually runs. It reads
+the <strong>CV buffer</strong> fields:</p>
+<pre><code class="language-yaml"><span class="nt">labels</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">primary</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fwd_ret_21d</span>
+<span class="w">  </span><span class="nt">buffer</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">21D</span><span class="w">                    </span><span class="c1"># ← used for the primary label</span>
+<span class="w">  </span><span class="nt">variants</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fwd_ret_5d</span>
+<span class="w">  </span><span class="nt">variant_buffers</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">fwd_ret_5d</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5D</span><span class="w">               </span><span class="c1"># ← used for the variant</span>
+</code></pre>
+<p>So both horizons in this case study come from buffer fields, not horizon
+fields.</p>
+<h3>Horizon vs buffer — two different things</h3>
+<ul>
+<li><strong>horizon</strong> — how far forward the label looks:
+<code>close[t+21] / close[t] - 1</code></li>
+<li><strong>buffer</strong> — the gap dropped between train and test folds, so the last
+training label has finished resolving before the test window starts</li>
+</ul>
+<p>They are usually equal and here they are — both 21. They need not be.
+You might use a 5-day horizon but purge 21 days between folds because a
+<em>feature</em> has a 21-day lookback that would leak. Different jobs,
+separate config fields.</p>
+<p>The notebook's markdown says exactly this:</p>
+<blockquote>
+<p>They are separate fields — the buffer that keeps folds
+independent is not always the horizon the outcome resolves
+over — and coincide here.</p>
+</blockquote>
+<p><strong>The risk it is flagging:</strong> because source 2 is absent, the horizon is
+being read out of the buffer field. If someone later sets <code>buffer: 30D</code>
+as a safety margin while still intending a 21-day label, this cell would
+silently start building <strong>30-day labels</strong>. Adding an explicit
+<code>horizons:</code> block (source 2) closes that hole.</p>
+<h3><code>.rstrip(&quot;Dd&quot;)</code> and <code>int(...)</code></h3>
+<p><code>setup.yaml</code> stores durations as strings with a unit suffix (<code>21D</code>,
+<code>5D</code>) because that is the format the backtest and CV code also consume.
+Converting to something <code>shift()</code> accepts:</p>
+<pre><code class="language-">&quot;21D&quot;  →  rstrip(&quot;Dd&quot;)  →  &quot;21&quot;  →  int()  →  21
+</code></pre>
+<p><code>rstrip</code> takes a <strong>set of characters</strong>, not a suffix — it strips any of
+them from the right end repeatedly:</p>
+<pre><code class="language-python"><span class="s2">&quot;21D&quot;</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">)</span>   <span class="err">→</span> <span class="s2">&quot;21&quot;</span>
+<span class="s2">&quot;5d&quot;</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">)</span>    <span class="err">→</span> <span class="s2">&quot;5&quot;</span>     <span class="c1"># lowercase handled too</span>
+<span class="s2">&quot;21DD&quot;</span><span class="o">.</span><span class="n">rstrip</span><span class="p">(</span><span class="s2">&quot;Dd&quot;</span><span class="p">)</span>  <span class="err">→</span> <span class="s2">&quot;21&quot;</span>    <span class="c1"># strips both</span>
+</code></pre>
+<p>Practically, <code>setup.yaml</code> may write <code>21D</code> or <code>21d</code>. The downside of a
+char set is that it strips blindly: a value like <code>21W</code> (weeks) or <code>3M</code>
+(months) survives <code>rstrip</code> intact and then explodes on <code>int()</code>. It only
+handles the day convention.</p>
+<h3>What <code>variants:</code> controls</h3>
+<p><code>LABEL_NAMES</code> is built from <code>setup[&quot;labels&quot;][&quot;variants&quot;]</code>, so that YAML
+list decides <strong>how many labels the notebook builds</strong>. Add <code>fwd_ret_63d</code>
+to <code>variants</code> plus a matching <code>variant_buffers: {fwd_ret_63d: 63D}</code>
+entry, and without touching notebook code you get a third parquet file,
+a third row in every loop, a third curve on the boundary-profile chart.</p>
+<h3>Failure mode worth knowing</h3>
+<p><code>resolve_label_horizon</code> is typed <code>-&gt; str | None</code>, and all three sources
+can miss. Add a name to <code>variants</code> <strong>without</strong> a matching
+<code>variant_buffers</code> entry (and without an explicit <code>horizons</code> entry) and
+this line dies with:</p>
+<pre><code class="language-">AttributeError: &#39;NoneType&#39; object has no attribute &#39;rstrip&#39;
+</code></pre>
+<p>— an unhelpful message for what is really a missing-config error.</p>
+<h3>The remaining assignments</h3>
+<ul>
+<li><code>HOLDOUT_START = date.fromisoformat(setup[&quot;evaluation&quot;][&quot;holdout_start&quot;])</code> — parses the
+ISO date string into a <code>datetime.date</code> so it can be compared against
+Polars date columns in section E.</li>
+<li><code>PRIMARY_HORIZON</code> / <code>VARIANT_LABEL</code> — convenience handles, so figure
+code reads <code>PRIMARY_HORIZON</code> instead of
+<code>HORIZONS[setup[&quot;labels&quot;][&quot;primary&quot;]]</code>.</li>
+<li><code>VARIANT_LABEL = LABEL_NAMES[1]</code> assumes at least one variant. With
+<code>variants:</code> emptied, this raises <code>IndexError</code> — and figure F1, which
+compares exactly two labels, would need rewriting anyway.</li>
+</ul>
+<hr />
+
+</section>
+<section id="c2">
+  <div class="cell-head"><span class="cell-num">2</span><h2>1. Imports and paths</h2></div>
+<pre><code class="language-python"><span class="n">CASE_DIR</span> <span class="o">=</span> <span class="n">get_case_study_dir</span><span class="p">(</span><span class="s2">&quot;etfs&quot;</span><span class="p">)</span>
+<span class="n">LABELS_DIR</span> <span class="o">=</span> <span class="n">CASE_DIR</span> <span class="o">/</span> <span class="s2">&quot;labels&quot;</span>
+</code></pre>
+<p><code>get_case_study_dir</code> (<code>utils/paths.py</code>) resolves the case-study root
+from the repo layout rather than from the notebook's own location, so
+the notebook works the same whether run in Jupyter or through papermill
+via <code>02_labels.py</code>.</p>
+<p>The imports fall into four groups:</p>
+<ul>
+<li><strong><code>ml4t.diagnostic.metrics</code></strong> — <code>cross_sectional_ic_series</code>,
+<code>compute_ic_hac_stats</code> (installed package, used in section G).</li>
+<li><strong><code>case_studies.utils</code></strong> — <code>value_digest</code> / <code>write_artifact</code> (content
+hashing and the sidecar format), <code>effective_sample_size</code> /
+<code>panel_autocorrelation</code> (overlap diagnostics).</li>
+<li><strong><code>data.load_etfs</code></strong> — the adjusted daily bars, verified in
+<code>01_feasibility_analysis</code>.</li>
+<li><strong><code>utils</code></strong> — <code>resolve_label_horizon</code>, <code>get_case_study_dir</code>, and the
+shared plot style (<code>COLORS</code>, <code>FIGSIZE</code>, <code>add_message_title</code>).</li>
+</ul>
+<p><code>warnings.filterwarnings(&quot;ignore&quot;)</code> keeps the rendered notebook clean.</p>
+
+</section>
+<section id="c3">
+  <div class="cell-head"><span class="cell-num">3</span><h2>2. Run parameters</h2></div>
+<pre><code class="language-python"><span class="n">MAX_SYMBOLS</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="n">START_DATE</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="n">MIN_SYMBOLS_FOR_DISPERSION</span> <span class="o">=</span> <span class="mi">10</span>
+</code></pre>
+<p>Papermill-injectable knobs. Production leaves the first two as <code>None</code>;
+CI overrides only <code>START_DATE</code> to shorten the run. <code>MAX_SYMBOLS</code>
+deliberately stays unset even in CI — stage 03 needs 10+ non-null labels
+per date to compute a cross-sectional IC, and thinning the universe
+would break that.</p>
+<p><code>MIN_SYMBOLS_FOR_DISPERSION</code> is used only by figure F4, which takes a
+standard deviation across symbols per date. Across two or three symbols
+that number is noise, so thin dates are dropped.</p>
+
+</section>
+<section id="c4">
+  <div class="cell-head"><span class="cell-num">4</span><h2>3. Section B — load and digest the prices</h2></div>
+<pre><code class="language-python"><span class="n">prices</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">load_etfs</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">])</span>
+<span class="p">)</span>
+</code></pre>
+<p>The sort is load-bearing: <code>shift(-h).over(&quot;symbol&quot;)</code> means &quot;h rows down
+within this symbol&quot;, which is only &quot;h sessions forward&quot; if the rows are
+in date order within symbol.</p>
+<p><strong>No eligibility filter is applied here, and the ordering is the
+point.</strong> Dropping ineligible rows first would make <code>shift</code> count
+<em>surviving</em> rows, so the horizon would stop being measured in trading
+sessions and the label would silently span the gap. Eligibility
+(<code>eligibility.csv</code>) is applied later — to the section G baseline, and to
+the trainable panel in <code>03_financial_features</code>.</p>
+<pre><code class="language-python"><span class="n">MARKET_DATA_DIGEST</span> <span class="o">=</span> <span class="n">value_digest</span><span class="p">(</span>
+    <span class="n">prices</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">]</span>
+<span class="p">)</span>
+</code></pre>
+<p><code>value_digest</code> (<code>case_studies/utils/artifact_digest.py</code>) hashes each
+row, sorts the row hashes, then hashes the result — so the digest is
+invariant to row order and to parquet metadata churn, but sensitive to
+any value change. It is recorded as every label's <code>inputs</code> in section H:
+without it, a re-run against a refreshed download is indistinguishable
+from this one.</p>
+
+</section>
+<section id="c5">
+  <div class="cell-head"><span class="cell-num">5</span><h2>4. Section C — build the labels</h2></div>
+<pre><code class="language-python"><span class="k">def</span><span class="w"> </span><span class="nf">forward_return</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">horizon</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">df</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+        <span class="p">(</span>
+            <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="n">horizon</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+            <span class="o">/</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span>
+            <span class="o">-</span> <span class="mi">1</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+    <span class="p">)</span>
+</code></pre>
+<p>Close-to-close forward return, <code>P[t+h]/P[t] - 1</code>, Chapter 7.2's
+convention. <code>.over(&quot;symbol&quot;)</code> confines the shift inside each ETF, so no
+window crosses an entity boundary — asserted in section D, property 3.
+Rows without a full forward window get <code>null</code> from the shift, which is
+the correct representation of &quot;unknown&quot;, not zero.</p>
+<p>Two bookkeeping columns are numbered here, on the <strong>complete</strong> price
+series, because both mean something only before any row is dropped:</p>
+<ul>
+<li><code>from_end</code> — sessions counted back from each symbol's last bar; drives
+figure F2's boundary profile.</li>
+<li><code>session</code> — each symbol's bars numbered forward; lets section F's
+overlap statistics keep counting trading sessions after the null tail
+and the holdout are filtered out.</li>
+</ul>
+<p>Neither reaches the parquet — section H selects three columns.</p>
+<p>The notebook computes the arithmetic locally rather than calling
+<code>fixed_time_horizon_labels</code>. That helper computes the identical quantity
+but agrees only to a rounding step — enough to change the digest and
+everything derived from it.</p>
+
+</section>
+<section id="c6">
+  <div class="cell-head"><span class="cell-num">6</span><h2>5. Section D — four assertions</h2></div>
+<p>Assertions, not printed descriptions, because all four failures are
+silent and produce plausible-looking numbers.</p>
+<ol>
+<li><strong>Incomplete windows are null, never valued.</strong> Every row in the last
+<code>h</code> sessions of a symbol must be null. Catches a fabricated tail.</li>
+<li><strong>No window spans a data gap.</strong> Tolerance is derived, not tuned:
+<code>ceil(h * 7/5) + 7</code> calendar days — <code>h</code> sessions span roughly <code>7h/5</code>
+calendar days on a five-session week, plus a week for exchange
+holidays. This bounds the <em>calendar</em> span; it catches a hole of a
+week or more, but not one missing session, which widens the window by
+a day and stays inside tolerance. Proving exactly <code>h</code> <em>exchange</em>
+sessions needs a session calendar the notebook does not carry.</li>
+<li><strong>No label crosses an entity boundary.</strong> <code>labelled.height == len(prices) - h * n_symbols</code>. That identity holds only if every
+symbol lost exactly <code>h</code> rows to the shift.</li>
+<li><strong>Dtype is <code>Float64</code>.</strong> Vacuous here by construction — the notebook
+writes continuous labels only. The defect it guards against lives in
+direction labels, where a null predicate falls through to the &quot;down&quot;
+class.</li>
+</ol>
+
+</section>
+<section id="c7">
+  <div class="cell-head"><span class="cell-num">7</span><h2>6. Figure F2 — boundary profile</h2></div>
+<p>Plots, for each position counted back from a symbol's last session, the
+share of symbols with a non-null label. The curve must be flat at 1 and
+fall to 0 over exactly the last <code>h</code> positions, with the dotted line
+marking <code>h</code>.</p>
+<p>A scalar &quot;N valid&quot; would show neither failure this catches: a label
+masked by another label's null set, or a tail fabricated instead of
+nulled (which would sit flat across the dotted line).</p>
+<p>It reads only the null structure, never a value, so it is deliberately
+<strong>not</strong> sealed to the development window — it describes the artifact's
+shape, not its content.</p>
+
+</section>
+<section id="c8">
+  <div class="cell-head"><span class="cell-num">8</span><h2>7. Section E — the development window</h2></div>
+<pre><code class="language-python"><span class="n">dev</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">labels_df</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="o">-</span><span class="n">horizon</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;_label_end&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;_label_end&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">HOLDOUT_START</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">drop_nulls</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">horizon</span> <span class="ow">in</span> <span class="n">HORIZONS</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre>
+<p>The key idea: the filter is on <code>_label_end</code>, <strong>the date the label
+resolves</strong>, not on <code>timestamp</code>, the date it is observed. A row observed
+three weeks before the holdout starts resolves <em>inside</em> the holdout, so
+it is a holdout row. Filtering on the observation date looks sealed and
+is not.</p>
+<p>The seal governs what this notebook <em>looks at</em>. The parquet files
+written in section H keep every row.</p>
+
+</section>
+<section id="c9">
+  <div class="cell-head"><span class="cell-num">9</span><h2>8. Figure F1 — distribution and scale</h2></div>
+<p>Both labels on one axis with identical bins (<code>np.linspace(-0.20, 0.20, 61)</code>), so the width comparison is visual rather than a column of
+moments. The claim under test is square-root-of-horizon scaling: a
+horizon-<code>h</code> label should be about <code>sqrt(h)</code> times as wide.</p>
+<pre><code class="language-python"><span class="c1"># observed</span>
+<span class="n">ratio</span>  <span class="o">=</span> <span class="n">std</span><span class="p">[</span><span class="n">PRIMARY_LABEL</span><span class="p">]</span> <span class="o">/</span> <span class="n">std</span><span class="p">[</span><span class="n">VARIANT_LABEL</span><span class="p">]</span>
+
+<span class="c1"># theoretical: sqrt(21/5) ≈ 2.05</span>
+<span class="n">theory</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">PRIMARY_HORIZON</span> <span class="o">/</span> <span class="n">HORIZONS</span><span class="p">[</span><span class="n">VARIANT_LABEL</span><span class="p">])</span>
+</code></pre>
+<p>Recorded result: std 0.0612 monthly vs 0.0311 weekly, a ratio of
+<strong>1.97</strong> against a theoretical <strong>2.05</strong> — close, and the small shortfall
+is consistent with mild mean reversion over the longer window.</p>
+
+</section>
+<section id="c10">
+  <div class="cell-head"><span class="cell-num">10</span><h2>9. Figure F4 — dispersion through time</h2></div>
+<p>A cross-sectional label is comparable across regimes only if the spread
+the model ranks within is roughly stable; where it is not, the same IC
+buys a different amount of return.</p>
+<p>Order of operations matters and is deliberate:</p>
+<ol>
+<li>std <strong>across symbols on each date</strong> (this is what a cross-sectional
+ranking model is scored on),</li>
+<li>dates with fewer than <code>MIN_SYMBOLS_FOR_DISPERSION</code> symbols dropped,</li>
+<li>those daily values <strong>averaged within each year</strong>.</li>
+</ol>
+<p>Pooling every symbol-date in a year into one std would measure something
+else — it would add the movement of the panel's own mean from date to
+date into the spread across symbols on a date.</p>
+<p>Recorded result: dispersion peaks at <strong>6.7% in 2008</strong>, against a
+<strong>3.9%</strong> median year — about 1.7x. Far from constant.</p>
+
+</section>
+<section id="c11">
+  <div class="cell-head"><span class="cell-num">11</span><h2>10. Figure F3 — overlap and effective sample size</h2></div>
+<p>Daily sampling of a 21-session label means consecutive rows share 20 of
+their 21 forward return intervals, so the row count wildly overstates
+the information present. Two measurements from
+<code>case_studies/utils/label_diagnostics.py</code>:</p>
+<p><strong><code>panel_autocorrelation(frame, col, max_lag=..., bar_col=&quot;session&quot;)</code></strong>
+— autocorrelation at lags 1..max_lag, pooled across symbols. A pair is
+kept only if both rows are the same symbol <em>and</em> their <code>session</code>
+positions differ by exactly the lag, so no pair spans two entities or a
+hole in the grid. The column is demeaned within symbol first: without
+that, a panel whose symbols sit at different mean levels reports that
+level dispersion as persistence.</p>
+<p><strong><code>effective_sample_size(frame, horizon=..., bar_col=&quot;session&quot;)</code></strong> —
+returns <code>(rows, N_eff)</code> using Chapter 7.2's average-uniqueness
+weighting, computed per symbol because concurrency is a property of one
+entity's overlapping windows.</p>
+<p>Note the convention documented in that function: a horizon-<code>h</code> label
+consumes <code>h</code> return <em>intervals</em>, not <code>h+1</code> bars. Treating it as a closed
+bar interval <code>[i, i+h]</code> would make consecutive labels appear to share
+one interval even when they share none — and would report <code>N_eff = N/2</code>
+for a one-day label that is in fact fully independent.</p>
+<p>Both functions take <code>bar_col</code> for the same reason: <code>dev</code> holds only
+non-null rows, and counting positions among survivors would make rows
+either side of a missing bar look adjacent. <code>session</code> was numbered in
+section C on the complete series. The distinction is vacuous for this
+case study (property 3 proves the only nulls are each symbol's last <code>h</code>
+sessions, and the holdout filter cuts a prefix, so <code>dev</code> holds an
+unbroken run per symbol) but not for a case study whose bars can go
+missing mid-series.</p>
+<p>Recorded result: 418,362 rows carry <strong>20,017 effective observations —
+4.78%</strong>, against the <code>1/21 = 4.76%</code> that a fully-overlapped window
+implies. Autocorrelation runs from 0.942 at lag one to -0.019 at lag 21.</p>
+<p>Both say the same thing: the sample is worth about a twentieth of its
+height, and the purge gap between CV folds must be at least the horizon.</p>
+
+</section>
+<section id="c12">
+  <div class="cell-head"><span class="cell-num">12</span><h2>11. Section G — the baseline floor</h2></div>
+<p>One signal — raw 126-session (two-quarter) momentum, the lookback the
+hypothesis names — against the primary label, with no feature
+engineering. Establishing this before building features is what keeps a
+later improvement honest.</p>
+<p>Three details that decide whether the number means anything:</p>
+<p><strong>Eligibility is applied.</strong> <code>03_financial_features</code> keeps a feature row
+only where <code>(symbol, year)</code> appears in <code>eligibility.csv</code>; the same
+semi-join runs here. A baseline measured over a wider universe than the
+features it gates is not a floor.</p>
+<p><strong>IC is per-date, then averaged.</strong> <code>cross_sectional_ic_series</code> computes
+a Spearman rank correlation within each date and returns a time series;
+the mean is taken over dates. Pooling all symbol-dates into one
+correlation would mix a cross-sectional claim with a time-series one.
+<code>min_obs</code> is set to half the median cross-section rather than a fixed
+integer, so it means the same thing at a different universe size.</p>
+<p><strong>The standard error is HAC-adjusted.</strong> The IC series inherits the
+label's overlap, so consecutive dates are not independent evidence.
+<code>compute_ic_hac_stats</code> applies a Newey–West/Bartlett correction. The
+<code>.sort(&quot;timestamp&quot;)</code> before it is required — HAC autocovariances are
+meaningless over a permutation of time.</p>
+<p>Recorded result: mean IC <strong>0.0203</strong>; naive t <strong>3.77</strong>; HAC t <strong>1.08</strong>, p
+<strong>0.282</strong>. The bar a feature has to clear is the second number, and by
+it, raw momentum is not distinguishable from noise.</p>
+<blockquote>
+<h2>⚠️ THIS CELL IS BROKEN AGAINST THE INSTALLED ENVIRONMENT</h2>
+<p><code>compute_ic_hac_stats(..., label_horizon=PRIMARY_HORIZON)</code>
+raises <code>TypeError</code> with <code>ml4t_diagnostic</code> 0.1.0b21 in
+<code>.venv</code>, which has no such parameter. The stored outputs came
+from a newer build. <strong>Unresolved — see the open-issue section
+at the top of this document for the verification command and
+the two candidate fixes.</strong> No change has been made to the
+notebook or the environment.</p>
+</blockquote>
+
+</section>
+<section id="c13">
+  <div class="cell-head"><span class="cell-num">13</span><h2>12. Section H — artifacts</h2></div>
+<pre><code class="language-python"><span class="k">for</span> <span class="n">label_name</span> <span class="ow">in</span> <span class="n">LABEL_NAMES</span><span class="p">:</span>
+    <span class="n">record</span> <span class="o">=</span> <span class="n">write_artifact</span><span class="p">(</span>
+        <span class="n">labels_df</span>
+        <span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">label_name</span><span class="p">])</span>
+        <span class="o">.</span><span class="n">drop_nulls</span><span class="p">(),</span>
+        <span class="n">LABELS_DIR</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">label_name</span><span class="si">}</span><span class="s2">.parquet&quot;</span><span class="p">,</span>
+        <span class="n">keys</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">],</span>
+        <span class="n">written_by</span><span class="o">=</span><span class="s2">&quot;02_labels&quot;</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;market_data&quot;</span><span class="p">:</span> <span class="n">MARKET_DATA_DIGEST</span><span class="p">},</span>
+    <span class="p">)</span>
+</code></pre>
+<p>Writes <code>labels/fwd_ret_21d.parquet</code> and <code>labels/fwd_ret_5d.parquet</code>,
+each with a <code>&lt;name&gt;.parquet.digest.json</code> sidecar recording content
+digest, row count, columns, keys, the writing stage, and the digest of
+the price data it was built from.</p>
+<p>Three columns only — the <code>from_end</code> and <code>session</code> bookkeeping stays in
+memory. Every row is kept (the development seal governed diagnostics,
+not output), minus the null tail.</p>
+<p>Two things the notebook is explicit about:</p>
+<ul>
+<li><strong>The sidecars are not read anywhere yet.</strong> Stage 02 writes them and
+the chain stops. Model runs are separately pinned to their input bytes
+by <code>_training_input_identity</code>
+(<code>case_studies/utils/latent_factors/case_study.py</code>), which hashes the
+label parquet, the feature parquets and <code>setup.yaml</code> into one
+aggregate digest.</li>
+<li><strong>No <code>cv_config.json</code> is written.</strong> Folds are derived by
+<code>case_studies/utils/cv_window.py</code> from <code>setup.yaml</code> plus the label
+parquet's own timeline — from the artifact rather than from a second
+file describing it, which could only drift.</li>
+</ul>
+
+</section>
+<section id="c14">
+  <div class="cell-head"><span class="cell-num">14</span><h2>13. The audit record</h2></div>
+<p>Prints one block per label — anchor, horizon, resolution, overlap (<code>h-1</code>
+sessions), base rate (mean and std on the development window), and which
+stage consumes it. Built from the values computed above rather than
+typed by hand, so it cannot describe a label different from the one
+written.</p>
+<hr />
+
+</section>
+<section id="c15">
+  <div class="cell-head"><span class="cell-num">15</span><h2>Downstream</h2></div>
+<p><code>03_financial_features.py</code> reads whichever label is <code>labels.primary</code> in
+<code>setup.yaml</code>, for its feature evaluation. The variant is written but not
+consumed before modelling.</p>
+
+</section>
+<section id="c16">
+  <div class="cell-head"><span class="cell-num">16</span><h2>Known limitations (as stated in the notebook)</h2></div>
+<ul>
+<li>Close-to-close is not the backtest's next-open execution, and nothing
+here measures the gap. <code>16_costs</code> sweeps commission and half-spread,
+not the return definition.</li>
+<li>The universe is a fixed, backward-looking list carrying the
+survivorship bias that <code>01_feasibility_analysis</code> documents.</li>
+<li>The baseline is one signal at one lookback.</li>
+</ul>
+
+</section>
+  </article>
+</div>
+
+</body>
+</html>

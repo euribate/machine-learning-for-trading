@@ -101,6 +101,32 @@ rm -f .env.bak
 .venv/bin/python <chapter_dir>/<notebook>.py
 ```
 
+## Notebook Documentation
+
+Companion docs for notebooks follow a fixed standard. **Read
+`docs/notebook-docs.md` before writing or editing any notebook explainer.**
+
+Summary:
+
+- One notebook, one doc: `<notebook_stem>_walkthrough.md` plus a generated
+  `<notebook_stem>_walkthrough.html` beside it. No `_guide`/`_notes` variants.
+- The markdown is the source of truth. **Never hand-write or hand-edit the
+  HTML.** Build it with:
+
+  ```bash
+  .venv/bin/python tools/build_docs.py <path>/<stem>_walkthrough.md
+  .venv/bin/python tools/build_docs.py --all           # rebuild all
+  .venv/bin/python tools/build_docs.py --all --check   # fail if stale
+  ```
+
+- Rebuild the HTML in the same turn as any markdown edit -- a stale twin looks
+  current and is not.
+- Any standalone HTML **must** declare `<meta charset="utf-8">` in a real
+  `<head>`. Without it browsers decode UTF-8 as windows-1252 and every em dash
+  renders as `â€"`. The build script handles this; hand-written fragments that
+  start at `<title>` or `<div>` do not.
+- Shared styling lives in `tools/doc_style.css` and is inlined at build time.
+
 ## Key Technical Details
 
 - Python version: 3.12 (not 3.14 as pyproject.toml states -- see docs/environment-setup.md)
