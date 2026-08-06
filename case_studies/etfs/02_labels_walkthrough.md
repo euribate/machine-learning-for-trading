@@ -82,6 +82,15 @@ have not done.
 
 ## 0. The configuration cell (in depth)
 
+- **Aim** — bind the notebook to `config/setup.yaml` so the label horizon
+  has exactly one source of truth across labelling, cross-validation and
+  the backtest.
+- **Shows** — where the number `21` actually comes from: a three-source
+  resolution chain that falls through to the CV *buffer* field, which is
+  not the same concept as a horizon.
+- **Outcome** — two label names and two horizons. Every loop in the rest
+  of the notebook iterates that dict.
+
 ```python
 setup = yaml.safe_load((CASE_DIR / "config" / "setup.yaml").read_text())
 
@@ -252,6 +261,12 @@ AttributeError: 'NoneType' object has no attribute 'rstrip'
 
 ## 1. Imports and paths
 
+- **Aim** — resolve the case-study root from the repo layout rather than
+  from the notebook's own location.
+- **Shows** — which four families of dependency the stage draws on.
+- **Outcome** — `CASE_DIR` and `LABELS_DIR`, identical whether the
+  notebook runs under Jupyter or papermill.
+
 ```python
 CASE_DIR = get_case_study_dir("etfs")
 LABELS_DIR = CASE_DIR / "labels"
@@ -278,6 +293,12 @@ The imports fall into four groups:
 
 ## 2. Run parameters
 
+- **Aim** — expose the knobs papermill overrides when the notebook runs
+  in CI rather than in production.
+- **Shows** — why shortening a CI run is done by date and never by
+  thinning the universe.
+- **Outcome** — three constants; production leaves the first two `None`.
+
 ```python
 MAX_SYMBOLS = None
 START_DATE = None
@@ -295,6 +316,13 @@ standard deviation across symbols per date. Across two or three symbols
 that number is noise, so thin dates are dropped.
 
 ## 3. Section B — load and digest the prices
+
+- **Aim** — get the price panel into the one row order every later shift
+  depends on, and fingerprint the exact bytes it was built from.
+- **Shows** — why no eligibility filter is applied at this point, even
+  though one exists and is applied later.
+- **Outcome** — `prices`, sorted by symbol then timestamp, plus
+  `MARKET_DATA_DIGEST`, which section H records as every label's input.
 
 ```python
 prices = (
@@ -330,6 +358,18 @@ from this one.
 
 ## 4. Section C — build the labels
 
+- **Aim** — turn the price panel into the forward-return labels the rest
+  of the pipeline trains on, and record each row's position in its
+  symbol's history before any later step destroys it.
+- **Shows** — that the arithmetic stays inside one symbol, that an
+  incomplete forward window is `null` rather than a number, and that the
+  resulting null tail is exactly the last `h` bars of each symbol.
+- **Outcome** — `labels_df`: the price panel plus `fwd_ret_21d`,
+  `fwd_ret_5d`, and the `from_end` / `session` bookkeeping columns. This
+  is the frame every diagnostic below reads and section H writes from.
+
+### The label itself
+
 ```python
 def forward_return(df, horizon, name):
     return df.with_columns(
@@ -342,10 +382,15 @@ def forward_return(df, horizon, name):
 ```
 
 Close-to-close forward return, `P[t+h]/P[t] - 1`, Chapter 7.2's
-convention. `.over("symbol")` confines the shift inside each ETF, so no
-window crosses an entity boundary — asserted in section D, property 3.
-Rows without a full forward window get `null` from the shift, which is
-the correct representation of "unknown", not zero.
+convention. Two decisions in that expression carry the section:
+
+- **`.over("symbol")`** confines the shift inside each ETF, so no window
+  reaches across an entity boundary into an unrelated price. Section D's
+  third assertion is what proves it actually held.
+- **The shift yields `null`** where a full forward window does not exist.
+  That is the honest encoding of "unknown". Writing `0` instead would
+  claim a flat return the data never observed, and would survive every
+  downstream mean, correlation and IC as if it were evidence.
 
 ### The two bookkeeping columns
 
@@ -417,27 +462,71 @@ everything derived from it.
 
 ## 5. Section D — four assertions
 
-Assertions, not printed descriptions, because all four failures are
-silent and produce plausible-looking numbers.
+- **Aim** — make the label's correctness a condition of the notebook
+  running, rather than something a reader is asked to take on trust.
+- **Shows** — four ways a forward-return label fails *silently*: it
+  produces a full column of plausible numbers, and every downstream mean,
+  IC and t-statistic keeps working on top of the damage.
+- **Outcome** — the run halts on any breach. On success it prints, per
+  label, the labelled row count, the observed calendar span range, and
+  the tolerance it was checked against.
 
-1. **Incomplete windows are null, never valued.** Every row in the last
-   `h` sessions of a symbol must be null. Catches a fabricated tail.
-2. **No window spans a data gap.** Tolerance is derived, not tuned:
-   `ceil(h * 7/5) + 7` calendar days — `h` sessions span roughly `7h/5`
-   calendar days on a five-session week, plus a week for exchange
-   holidays. This bounds the *calendar* span; it catches a hole of a
-   week or more, but not one missing session, which widens the window by
-   a day and stays inside tolerance. Proving exactly `h` *exchange*
-   sessions needs a session calendar the notebook does not carry.
-3. **No label crosses an entity boundary.** `labelled.height ==
-   len(prices) - h * n_symbols`. That identity holds only if every
-   symbol lost exactly `h` rows to the shift.
-4. **Dtype is `Float64`.** Vacuous here by construction — the notebook
-   writes continuous labels only. The defect it guards against lives in
-   direction labels, where a null predicate falls through to the "down"
-   class.
+Assertions rather than printed descriptions, because a printed number
+only helps a reader who already knows what it should be. Each assertion
+below names the defect it exists to catch.
+
+```python
+tol = math.ceil(horizon * 7 / 5) + 7
+tail = spanned.filter(pl.col("from_end") < horizon)
+labelled = spanned.drop_nulls(label_name)
+```
+
+**1. An incomplete window is null, never valued.** `from_end < horizon`
+selects exactly the rows whose forward window runs off the end of their
+symbol (section C), and every one must be null. Catches a fabricated or
+padded tail — the failure where the last `h` bars carry invented returns
+that look like ordinary data.
+
+**2. No window spans a data gap.** The tolerance is derived, not tuned:
+`ceil(h * 7/5) + 7` calendar days, since `h` sessions span roughly `7h/5`
+calendar days on a five-session week, plus a week for exchange holidays.
+**Its reach is limited and the notebook says so.** It bounds the
+*calendar* span, so it catches a hole of a week or more but not a single
+missing session, which widens the window by one day and stays inside
+tolerance. Proving exactly `h` *exchange* sessions would need a session
+calendar this notebook does not carry.
+
+**3. No label crosses an entity boundary.** Checked by identity rather
+than by inspection:
+
+```python
+labelled.height == len(prices) - horizon * prices["symbol"].n_unique()
+```
+
+Every symbol must lose exactly `horizon` rows to the shift and no others.
+If one window had closed over the boundary into the next symbol, that
+symbol would keep a row it should have lost and the count would not
+balance. This is the assertion that makes `.over("symbol")` in section C
+a verified claim instead of an intention.
+
+**4. The dtype is `Float64`.** **Vacuous here by construction** — this
+notebook writes continuous labels only, so the check cannot fail. It is
+carried because the defect it guards against is real in the direction
+labels of later stages, where a null predicate falls through to the
+"down" class and turns missing data into a confident bearish call.
+
+Two of the four are therefore weaker than they look: assertion 2 is
+partial, assertion 4 currently proves nothing. Assertions 1 and 3 are the
+ones doing load-bearing work here.
 
 ## 6. Figure F2 — boundary profile
+
+- **Aim** — inspect the *shape* of the null tail, which no single count
+  can describe.
+- **Shows** — the share of symbols carrying a non-null label at each
+  position counted back from their last session.
+- **Outcome** — a curve flat at 1 that falls to 0 over exactly the last
+  `h` positions. Anything else is a defect.
 
 Plots, for each position counted back from a symbol's last session, the
 share of symbols with a non-null label. The curve must be flat at 1 and
@@ -453,6 +542,13 @@ It reads only the null structure, never a value, so it is deliberately
 shape, not its content.
 
 ## 7. Section E — the development window
+
+- **Aim** — seal this notebook's own diagnostics so nothing it reports is
+  informed by the holdout period.
+- **Shows** — that a label must be sealed on the date it *resolves*, not
+  the date it is observed; the two differ by the horizon.
+- **Outcome** — a `dev` frame per label, used by every figure below.
+  The parquet files in section H are unaffected and keep every row.
 
 ```python
 dev = {
@@ -479,6 +575,12 @@ written in section H keep every row.
 
 ## 8. Figure F1 — distribution and scale
 
+- **Aim** — check the two labels are the same quantity measured over
+  different horizons, not two unrelated constructions.
+- **Shows** — both distributions on one axis with identical bins, tested
+  against square-root-of-horizon scaling.
+- **Outcome** — a ratio of 1.97 against a theoretical 2.05.
+
 Both labels on one axis with identical bins (`np.linspace(-0.20, 0.20,
 61)`), so the width comparison is visual rather than a column of
 moments. The claim under test is square-root-of-horizon scaling: a
@@ -497,6 +599,13 @@ Recorded result: std 0.0612 monthly vs 0.0311 weekly, a ratio of
 is consistent with mild mean reversion over the longer window.
 
 ## 9. Figure F4 — dispersion through time
+
+- **Aim** — establish whether the label's cross-sectional spread is
+  stable enough that one IC means the same thing in every regime.
+- **Shows** — dispersion across symbols per date, averaged by year, with
+  the order of operations chosen so it measures spread and not drift.
+- **Outcome** — a 6.7% peak in 2008 against a 3.9% median year. Not
+  constant, and worth remembering when reading a single IC.
 
 A cross-sectional label is comparable across regimes only if the spread
 the model ranks within is roughly stable; where it is not, the same IC
@@ -517,6 +626,13 @@ Recorded result: dispersion peaks at **6.7% in 2008**, against a
 **3.9%** median year — about 1.7x. Far from constant.
 
 ## 10. Figure F3 — overlap and effective sample size
+
+- **Aim** — find out what the row count is actually worth once daily
+  sampling of a 21-session label is priced in.
+- **Shows** — how fast the overlap decays, and the same panel re-counted
+  under average-uniqueness weighting.
+- **Outcome** — 418,362 rows carry 20,017 effective observations. Sets
+  the floor on the CV purge gap.
 
 Daily sampling of a 21-session label means consecutive rows share 20 of
 their 21 forward return intervals, so the row count wildly overstates
@@ -557,6 +673,13 @@ Both say the same thing: the sample is worth about a twentieth of its
 height, and the purge gap between CV folds must be at least the horizon.
 
 ## 11. Section G — the baseline floor
+
+- **Aim** — record what a trivial signal already achieves, before any
+  feature engineering, so a later improvement can be judged against it.
+- **Shows** — the three choices that decide whether the number means
+  anything: eligibility, per-date IC, and an overlap-aware standard error.
+- **Outcome** — mean IC 0.0203 with a HAC t of 1.08. The floor is
+  indistinguishable from noise. ⚠️ This cell does not currently re-run.
 
 One signal — raw 126-session (two-quarter) momentum, the lookback the
 hypothesis names — against the primary label, with no feature
@@ -599,6 +722,12 @@ it, raw momentum is not distinguishable from noise.
 
 ## 12. Section H — artifacts
 
+- **Aim** — write the labels to disk together with enough provenance to
+  tell one run from another.
+- **Shows** — what is deliberately excluded: bookkeeping columns, and any
+  second file describing the folds.
+- **Outcome** — two parquet files and their digest sidecars.
+
 ```python
 for label_name in LABEL_NAMES:
     record = write_artifact(
@@ -635,6 +764,12 @@ Two things the notebook is explicit about:
   file describing it, which could only drift.
 
 ## 13. The audit record
+
+- **Aim** — leave a written definition of each label that cannot drift
+  from the label actually written.
+- **Shows** — anchor, horizon, resolution, overlap, base rate and
+  consumer, all derived from the computed values rather than typed.
+- **Outcome** — one printed block per label.
 
 Prints one block per label — anchor, horizon, resolution, overlap (`h-1`
 sessions), base rate (mean and std on the development window), and which

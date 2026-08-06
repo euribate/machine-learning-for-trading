@@ -417,6 +417,45 @@
     * { animation: none !important; transition: none !important; }
   }
 
+  /* Aim / Shows / Outcome brief opening each section */
+  ul.brief {
+    list-style: none;
+    margin: 0 0 1.6rem;
+    padding: 0.9rem 0 0.9rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  ul.brief li {
+    font-family: var(--sans);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    padding-right: 1.1rem;
+  }
+
+  ul.brief li strong {
+    font-size: 0.68rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--accent);
+    display: inline-block;
+    min-width: 5.5rem;
+  }
+
+  section.alert ul.brief {
+    border-left-color: var(--alert);
+    background: var(--alert-soft);
+  }
+
+  section.alert ul.brief li strong { color: var(--alert); }
+
 /* syntax highlighting */
 pre { line-height: 125%; }
 td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
@@ -914,6 +953,16 @@ have not done.</p>
 </section>
 <section id="c1">
   <div class="cell-head"><span class="cell-num">1</span><h2>0. The configuration cell (in depth)</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — bind the notebook to <code>config/setup.yaml</code> so the label horizon
+has exactly one source of truth across labelling, cross-validation and
+the backtest.</li>
+<li><strong>Shows</strong> — where the number <code>21</code> actually comes from: a three-source
+resolution chain that falls through to the CV <em>buffer</em> field, which is
+not the same concept as a horizon.</li>
+<li><strong>Outcome</strong> — two label names and two horizons. Every loop in the rest
+of the notebook iterates that dict.</li>
+</ul>
 <pre><code class="language-python"><span class="n">setup</span> <span class="o">=</span> <span class="n">yaml</span><span class="o">.</span><span class="n">safe_load</span><span class="p">((</span><span class="n">CASE_DIR</span> <span class="o">/</span> <span class="s2">&quot;config&quot;</span> <span class="o">/</span> <span class="s2">&quot;setup.yaml&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">read_text</span><span class="p">())</span>
 
 <span class="n">PRIMARY_LABEL</span> <span class="o">=</span> <span class="n">setup</span><span class="p">[</span><span class="s2">&quot;labels&quot;</span><span class="p">][</span><span class="s2">&quot;primary&quot;</span><span class="p">]</span>
@@ -1050,6 +1099,13 @@ compares exactly two labels, would need rewriting anyway.</li>
 </section>
 <section id="c2">
   <div class="cell-head"><span class="cell-num">2</span><h2>1. Imports and paths</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — resolve the case-study root from the repo layout rather than
+from the notebook's own location.</li>
+<li><strong>Shows</strong> — which four families of dependency the stage draws on.</li>
+<li><strong>Outcome</strong> — <code>CASE_DIR</code> and <code>LABELS_DIR</code>, identical whether the
+notebook runs under Jupyter or papermill.</li>
+</ul>
 <pre><code class="language-python"><span class="n">CASE_DIR</span> <span class="o">=</span> <span class="n">get_case_study_dir</span><span class="p">(</span><span class="s2">&quot;etfs&quot;</span><span class="p">)</span>
 <span class="n">LABELS_DIR</span> <span class="o">=</span> <span class="n">CASE_DIR</span> <span class="o">/</span> <span class="s2">&quot;labels&quot;</span>
 </code></pre>
@@ -1074,6 +1130,13 @@ shared plot style (<code>COLORS</code>, <code>FIGSIZE</code>, <code>add_message_
 </section>
 <section id="c3">
   <div class="cell-head"><span class="cell-num">3</span><h2>2. Run parameters</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — expose the knobs papermill overrides when the notebook runs
+in CI rather than in production.</li>
+<li><strong>Shows</strong> — why shortening a CI run is done by date and never by
+thinning the universe.</li>
+<li><strong>Outcome</strong> — three constants; production leaves the first two <code>None</code>.</li>
+</ul>
 <pre><code class="language-python"><span class="n">MAX_SYMBOLS</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="n">START_DATE</span> <span class="o">=</span> <span class="kc">None</span>
 <span class="n">MIN_SYMBOLS_FOR_DISPERSION</span> <span class="o">=</span> <span class="mi">10</span>
@@ -1090,6 +1153,14 @@ that number is noise, so thin dates are dropped.</p>
 </section>
 <section id="c4">
   <div class="cell-head"><span class="cell-num">4</span><h2>3. Section B — load and digest the prices</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — get the price panel into the one row order every later shift
+depends on, and fingerprint the exact bytes it was built from.</li>
+<li><strong>Shows</strong> — why no eligibility filter is applied at this point, even
+though one exists and is applied later.</li>
+<li><strong>Outcome</strong> — <code>prices</code>, sorted by symbol then timestamp, plus
+<code>MARKET_DATA_DIGEST</code>, which section H records as every label's input.</li>
+</ul>
 <pre><code class="language-python"><span class="n">prices</span> <span class="o">=</span> <span class="p">(</span>
     <span class="n">load_etfs</span><span class="p">()</span>
     <span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">])</span>
@@ -1119,6 +1190,18 @@ from this one.</p>
 </section>
 <section id="c5">
   <div class="cell-head"><span class="cell-num">5</span><h2>4. Section C — build the labels</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — turn the price panel into the forward-return labels the rest
+of the pipeline trains on, and record each row's position in its
+symbol's history before any later step destroys it.</li>
+<li><strong>Shows</strong> — that the arithmetic stays inside one symbol, that an
+incomplete forward window is <code>null</code> rather than a number, and that the
+resulting null tail is exactly the last <code>h</code> bars of each symbol.</li>
+<li><strong>Outcome</strong> — <code>labels_df</code>: the price panel plus <code>fwd_ret_21d</code>,
+<code>fwd_ret_5d</code>, and the <code>from_end</code> / <code>session</code> bookkeeping columns. This
+is the frame every diagnostic below reads and section H writes from.</li>
+</ul>
+<h3>The label itself</h3>
 <pre><code class="language-python"><span class="k">def</span><span class="w"> </span><span class="nf">forward_return</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">horizon</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">df</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
         <span class="p">(</span>
@@ -1129,10 +1212,16 @@ from this one.</p>
     <span class="p">)</span>
 </code></pre>
 <p>Close-to-close forward return, <code>P[t+h]/P[t] - 1</code>, Chapter 7.2's
-convention. <code>.over(&quot;symbol&quot;)</code> confines the shift inside each ETF, so no
-window crosses an entity boundary — asserted in section D, property 3.
-Rows without a full forward window get <code>null</code> from the shift, which is
-the correct representation of &quot;unknown&quot;, not zero.</p>
+convention. Two decisions in that expression carry the section:</p>
+<ul>
+<li><strong><code>.over(&quot;symbol&quot;)</code></strong> confines the shift inside each ETF, so no window
+reaches across an entity boundary into an unrelated price. Section D's
+third assertion is what proves it actually held.</li>
+<li><strong>The shift yields <code>null</code></strong> where a full forward window does not exist.
+That is the honest encoding of &quot;unknown&quot;. Writing <code>0</code> instead would
+claim a flat return the data never observed, and would survive every
+downstream mean, correlation and IC as if it were evidence.</li>
+</ul>
 <h3>The two bookkeeping columns</h3>
 <pre><code class="language-python"><span class="n">labels_df</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
     <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">pl</span><span class="o">.</span><span class="n">int_range</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">())</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;from_end&quot;</span><span class="p">),</span>
@@ -1250,29 +1339,65 @@ everything derived from it.</p>
 </section>
 <section id="c6">
   <div class="cell-head"><span class="cell-num">6</span><h2>5. Section D — four assertions</h2></div>
-<p>Assertions, not printed descriptions, because all four failures are
-silent and produce plausible-looking numbers.</p>
-<ol>
-<li><strong>Incomplete windows are null, never valued.</strong> Every row in the last
-<code>h</code> sessions of a symbol must be null. Catches a fabricated tail.</li>
-<li><strong>No window spans a data gap.</strong> Tolerance is derived, not tuned:
-<code>ceil(h * 7/5) + 7</code> calendar days — <code>h</code> sessions span roughly <code>7h/5</code>
-calendar days on a five-session week, plus a week for exchange
-holidays. This bounds the <em>calendar</em> span; it catches a hole of a
-week or more, but not one missing session, which widens the window by
-a day and stays inside tolerance. Proving exactly <code>h</code> <em>exchange</em>
-sessions needs a session calendar the notebook does not carry.</li>
-<li><strong>No label crosses an entity boundary.</strong> <code>labelled.height == len(prices) - h * n_symbols</code>. That identity holds only if every
-symbol lost exactly <code>h</code> rows to the shift.</li>
-<li><strong>Dtype is <code>Float64</code>.</strong> Vacuous here by construction — the notebook
-writes continuous labels only. The defect it guards against lives in
-direction labels, where a null predicate falls through to the &quot;down&quot;
-class.</li>
-</ol>
+<ul class="brief">
+<li><strong>Aim</strong> — make the label's correctness a condition of the notebook
+running, rather than something a reader is asked to take on trust.</li>
+<li><strong>Shows</strong> — four ways a forward-return label fails <em>silently</em>: it
+produces a full column of plausible numbers, and every downstream mean,
+IC and t-statistic keeps working on top of the damage.</li>
+<li><strong>Outcome</strong> — the run halts on any breach. On success it prints, per
+label, the labelled row count, the observed calendar span range, and
+the tolerance it was checked against.</li>
+</ul>
+<p>Assertions rather than printed descriptions, because a printed number
+only helps a reader who already knows what it should be. Each assertion
+below names the defect it exists to catch.</p>
+<pre><code class="language-python"><span class="n">tol</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">horizon</span> <span class="o">*</span> <span class="mi">7</span> <span class="o">/</span> <span class="mi">5</span><span class="p">)</span> <span class="o">+</span> <span class="mi">7</span>
+<span class="n">tail</span> <span class="o">=</span> <span class="n">spanned</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;from_end&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">horizon</span><span class="p">)</span>
+<span class="n">labelled</span> <span class="o">=</span> <span class="n">spanned</span><span class="o">.</span><span class="n">drop_nulls</span><span class="p">(</span><span class="n">label_name</span><span class="p">)</span>
+</code></pre>
+<p><strong>1. An incomplete window is null, never valued.</strong> <code>from_end &lt; horizon</code>
+selects exactly the rows whose forward window runs off the end of their
+symbol (section C), and every one must be null. Catches a fabricated or
+padded tail — the failure where the last <code>h</code> bars carry invented returns
+that look like ordinary data.</p>
+<p><strong>2. No window spans a data gap.</strong> The tolerance is derived, not tuned:
+<code>ceil(h * 7/5) + 7</code> calendar days, since <code>h</code> sessions span roughly <code>7h/5</code>
+calendar days on a five-session week, plus a week for exchange holidays.
+<strong>Its reach is limited and the notebook says so.</strong> It bounds the
+<em>calendar</em> span, so it catches a hole of a week or more but not a single
+missing session, which widens the window by one day and stays inside
+tolerance. Proving exactly <code>h</code> <em>exchange</em> sessions would need a session
+calendar this notebook does not carry.</p>
+<p><strong>3. No label crosses an entity boundary.</strong> Checked by identity rather
+than by inspection:</p>
+<pre><code class="language-python"><span class="n">labelled</span><span class="o">.</span><span class="n">height</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">prices</span><span class="p">)</span> <span class="o">-</span> <span class="n">horizon</span> <span class="o">*</span> <span class="n">prices</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span>
+</code></pre>
+<p>Every symbol must lose exactly <code>horizon</code> rows to the shift and no others.
+If one window had closed over the boundary into the next symbol, that
+symbol would keep a row it should have lost and the count would not
+balance. This is the assertion that makes <code>.over(&quot;symbol&quot;)</code> in section C
+a verified claim instead of an intention.</p>
+<p><strong>4. The dtype is <code>Float64</code>.</strong> <strong>Vacuous here by construction</strong> — this
+notebook writes continuous labels only, so the check cannot fail. It is
+carried because the defect it guards against is real in the direction
+labels of later stages, where a null predicate falls through to the
+&quot;down&quot; class and turns missing data into a confident bearish call.</p>
+<p>Two of the four are therefore weaker than they look: assertion 2 is
+partial, assertion 4 currently proves nothing. Assertions 1 and 3 are the
+ones doing load-bearing work here.</p>
 
 </section>
 <section id="c7">
   <div class="cell-head"><span class="cell-num">7</span><h2>6. Figure F2 — boundary profile</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — inspect the <em>shape</em> of the null tail, which no single count
+can describe.</li>
+<li><strong>Shows</strong> — the share of symbols carrying a non-null label at each
+position counted back from their last session.</li>
+<li><strong>Outcome</strong> — a curve flat at 1 that falls to 0 over exactly the last
+<code>h</code> positions. Anything else is a defect.</li>
+</ul>
 <p>Plots, for each position counted back from a symbol's last session, the
 share of symbols with a non-null label. The curve must be flat at 1 and
 fall to 0 over exactly the last <code>h</code> positions, with the dotted line
@@ -1287,6 +1412,14 @@ shape, not its content.</p>
 </section>
 <section id="c8">
   <div class="cell-head"><span class="cell-num">8</span><h2>7. Section E — the development window</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — seal this notebook's own diagnostics so nothing it reports is
+informed by the holdout period.</li>
+<li><strong>Shows</strong> — that a label must be sealed on the date it <em>resolves</em>, not
+the date it is observed; the two differ by the horizon.</li>
+<li><strong>Outcome</strong> — a <code>dev</code> frame per label, used by every figure below.
+The parquet files in section H are unaffected and keep every row.</li>
+</ul>
 <pre><code class="language-python"><span class="n">dev</span> <span class="o">=</span> <span class="p">{</span>
     <span class="n">name</span><span class="p">:</span> <span class="n">labels_df</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
         <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span>
@@ -1310,6 +1443,13 @@ written in section H keep every row.</p>
 </section>
 <section id="c9">
   <div class="cell-head"><span class="cell-num">9</span><h2>8. Figure F1 — distribution and scale</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — check the two labels are the same quantity measured over
+different horizons, not two unrelated constructions.</li>
+<li><strong>Shows</strong> — both distributions on one axis with identical bins, tested
+against square-root-of-horizon scaling.</li>
+<li><strong>Outcome</strong> — a ratio of 1.97 against a theoretical 2.05.</li>
+</ul>
 <p>Both labels on one axis with identical bins (<code>np.linspace(-0.20, 0.20, 61)</code>), so the width comparison is visual rather than a column of
 moments. The claim under test is square-root-of-horizon scaling: a
 horizon-<code>h</code> label should be about <code>sqrt(h)</code> times as wide.</p>
@@ -1326,6 +1466,14 @@ is consistent with mild mean reversion over the longer window.</p>
 </section>
 <section id="c10">
   <div class="cell-head"><span class="cell-num">10</span><h2>9. Figure F4 — dispersion through time</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — establish whether the label's cross-sectional spread is
+stable enough that one IC means the same thing in every regime.</li>
+<li><strong>Shows</strong> — dispersion across symbols per date, averaged by year, with
+the order of operations chosen so it measures spread and not drift.</li>
+<li><strong>Outcome</strong> — a 6.7% peak in 2008 against a 3.9% median year. Not
+constant, and worth remembering when reading a single IC.</li>
+</ul>
 <p>A cross-sectional label is comparable across regimes only if the spread
 the model ranks within is roughly stable; where it is not, the same IC
 buys a different amount of return.</p>
@@ -1345,6 +1493,14 @@ date into the spread across symbols on a date.</p>
 </section>
 <section id="c11">
   <div class="cell-head"><span class="cell-num">11</span><h2>10. Figure F3 — overlap and effective sample size</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — find out what the row count is actually worth once daily
+sampling of a 21-session label is priced in.</li>
+<li><strong>Shows</strong> — how fast the overlap decays, and the same panel re-counted
+under average-uniqueness weighting.</li>
+<li><strong>Outcome</strong> — 418,362 rows carry 20,017 effective observations. Sets
+the floor on the CV purge gap.</li>
+</ul>
 <p>Daily sampling of a 21-session label means consecutive rows share 20 of
 their 21 forward return intervals, so the row count wildly overstates
 the information present. Two measurements from
@@ -1380,6 +1536,14 @@ height, and the purge gap between CV folds must be at least the horizon.</p>
 </section>
 <section id="c12">
   <div class="cell-head"><span class="cell-num">12</span><h2>11. Section G — the baseline floor</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — record what a trivial signal already achieves, before any
+feature engineering, so a later improvement can be judged against it.</li>
+<li><strong>Shows</strong> — the three choices that decide whether the number means
+anything: eligibility, per-date IC, and an overlap-aware standard error.</li>
+<li><strong>Outcome</strong> — mean IC 0.0203 with a HAC t of 1.08. The floor is
+indistinguishable from noise. ⚠️ This cell does not currently re-run.</li>
+</ul>
 <p>One signal — raw 126-session (two-quarter) momentum, the lookback the
 hypothesis names — against the primary label, with no feature
 engineering. Establishing this before building features is what keeps a
@@ -1417,6 +1581,13 @@ notebook or the environment.</p>
 </section>
 <section id="c13">
   <div class="cell-head"><span class="cell-num">13</span><h2>12. Section H — artifacts</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — write the labels to disk together with enough provenance to
+tell one run from another.</li>
+<li><strong>Shows</strong> — what is deliberately excluded: bookkeeping columns, and any
+second file describing the folds.</li>
+<li><strong>Outcome</strong> — two parquet files and their digest sidecars.</li>
+</ul>
 <pre><code class="language-python"><span class="k">for</span> <span class="n">label_name</span> <span class="ow">in</span> <span class="n">LABEL_NAMES</span><span class="p">:</span>
     <span class="n">record</span> <span class="o">=</span> <span class="n">write_artifact</span><span class="p">(</span>
         <span class="n">labels_df</span>
@@ -1452,6 +1623,13 @@ file describing it, which could only drift.</li>
 </section>
 <section id="c14">
   <div class="cell-head"><span class="cell-num">14</span><h2>13. The audit record</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — leave a written definition of each label that cannot drift
+from the label actually written.</li>
+<li><strong>Shows</strong> — anchor, horizon, resolution, overlap, base rate and
+consumer, all derived from the computed values rather than typed.</li>
+<li><strong>Outcome</strong> — one printed block per label.</li>
+</ul>
 <p>Prints one block per label — anchor, horizon, resolution, overlap (<code>h-1</code>
 sessions), base rate (mean and std on the development window), and which
 stage consumes it. Built from the values computed above rather than

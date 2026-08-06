@@ -87,11 +87,43 @@ meaning:
 - **Headings inside blockquotes or lists** — treated as content, not section
   breaks. Safe to use.
 
+### Every section opens with a brief
+
+**Required.** Each numbered section starts with a three-item list — nothing
+else may come between the heading and it:
+
+```markdown
+## 4. Section C — build the labels
+
+- **Aim** — what the section is trying to achieve, in one sentence.
+- **Shows** — what it demonstrates or puts beyond doubt; the failure it
+  would expose.
+- **Outcome** — what actually comes out: the variable, artifact, figure
+  shape, or recorded number.
+
+<the mechanical detail follows>
+```
+
+The build script detects a list whose first item begins with `**Aim**` and
+renders it as a styled standfirst block (`ul.brief`). Matching is on the
+`Aim` label, not on position, so an ordinary list that happens to open a
+section is left alone.
+
+Keep each item to one or two lines. The brief exists so a reader can decide
+whether to read the section; if it needs a paragraph, it is doing the
+section's job instead of its own.
+
+Sections that are not notebook cells — the ⚠️ open-issue block, `Downstream`,
+`Known limitations` — do not take a brief.
+
 Content conventions:
 
 - Explain *what each cell does mechanically*, which functions it calls, and
   where values come from. The notebook itself explains *why*.
 - Quote real output values rather than describing them vaguely.
+- Say plainly when a check is weaker than it looks — partial, vacuous, or
+  true only by construction. A reader who trusts a vacuous assertion is
+  worse off than one who was told nothing.
 - Record open issues at the top under a ⚠️ heading, and state plainly whether
   anything was changed. Never silently fix a notebook to make a doc true.
 

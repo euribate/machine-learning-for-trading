@@ -409,3 +409,42 @@
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
   }
+
+  /* Aim / Shows / Outcome brief opening each section */
+  ul.brief {
+    list-style: none;
+    margin: 0 0 1.6rem;
+    padding: 0.9rem 0 0.9rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  ul.brief li {
+    font-family: var(--sans);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    padding-right: 1.1rem;
+  }
+
+  ul.brief li strong {
+    font-size: 0.68rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--accent);
+    display: inline-block;
+    min-width: 5.5rem;
+  }
+
+  section.alert ul.brief {
+    border-left-color: var(--alert);
+    background: var(--alert-soft);
+  }
+
+  section.alert ul.brief li strong { color: var(--alert); }

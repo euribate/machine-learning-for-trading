@@ -127,6 +127,13 @@ def _sections(md: MarkdownIt, body: str) -> tuple[str, list[tuple[str, str, bool
         inner = md.renderer.render([toks[1]], md.options, {})
         rest = md.renderer.render(toks[3:], md.options, {}) if len(toks) > 3 else ""
 
+        # A section-opening list whose first item is "**Aim** — …" is the
+        # Aim/Shows/Outcome brief (see docs/notebook-docs.md); style it as a
+        # standfirst. Matching on the Aim label rather than on position keeps
+        # an ordinary list that merely opens a section from being restyled.
+        rest = re.sub(r"\A(\s*)<ul>(\s*<li><strong>Aim</strong>.*?)</ul>",
+                      r'\1<ul class="brief">\2</ul>', rest, count=1, flags=re.S)
+
         anchor = f"c{n}"
         flagged = "⚠" in inner
         label = re.sub(r"<[^>]+>", "", inner).replace("⚠️", "").replace("⚠", "").strip()
