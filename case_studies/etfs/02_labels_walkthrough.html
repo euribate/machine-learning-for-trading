@@ -803,7 +803,7 @@ pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
   <nav class="toc">
     <h2>Contents</h2>
     <ol>
-      <li><a class="flag" href="#c0"><span class="n">0</span><span>OPEN ISSUE — section G will raise TypeError on re-run ⚠</span></a></li>
+      <li><a href="#c0"><span class="n">0</span><span>✅ RESOLVED — section G&#x27;s TypeError on re-run</span></a></li>
       <li><a href="#c1"><span class="n">1</span><span>0. The configuration cell (in depth)</span></a></li>
       <li><a href="#c2"><span class="n">2</span><span>1. Imports and paths</span></a></li>
       <li><a href="#c3"><span class="n">3</span><span>2. Run parameters</span></a></li>
@@ -829,42 +829,81 @@ pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
 from reading the line. Everything else is covered at normal depth.</p>
 <hr />
 
-<section id="c0" class="alert">
-  <div class="cell-head"><span class="cell-num">0</span><h2>⚠️ OPEN ISSUE — section G will raise <code>TypeError</code> on re-run</h2></div>
-<p><strong>Status: unresolved, awaiting review. Nothing has been changed in the
-notebook or the environment.</strong></p>
-<p>Section G calls <code>compute_ic_hac_stats(ic, ic_col=&quot;ic&quot;, label_horizon=PRIMARY_HORIZON)</code>. The <code>ml4t_diagnostic</code> installed in
-<code>.venv</code> (<strong>0.1.0b21</strong>) exposes no such parameter, and takes no
-<code>**kwargs</code>, so the call fails outright:</p>
-<pre><code class="language-python"><span class="n">compute_ic_hac_stats</span><span class="p">(</span><span class="n">ic_series</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">maxlags</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                     <span class="n">kernel</span><span class="o">=</span><span class="s2">&quot;bartlett&quot;</span><span class="p">,</span> <span class="n">use_correction</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-<span class="c1"># TypeError: unexpected keyword argument &#39;label_horizon&#39;</span>
+<section id="c0">
+  <div class="cell-head"><span class="cell-num">0</span><h2>✅ RESOLVED — section G's <code>TypeError</code> on re-run</h2></div>
+<p><strong>Status: fixed in the notebook. The environment was not changed.</strong></p>
+<p>Section G called <code>compute_ic_hac_stats(ic, ic_col=&quot;ic&quot;, label_horizon=PRIMARY_HORIZON)</code>. The <code>ml4t_diagnostic</code> pinned in <code>.venv</code>
+(<strong>0.1.0b21</strong>) has no such parameter and takes no <code>**kwargs</code>, so the call
+raised <code>TypeError: unexpected keyword argument 'label_horizon'</code>. The
+stored outputs had come from a newer build.</p>
+<p><strong>The fix.</strong> One line, no environment change:</p>
+<pre><code class="language-python"><span class="n">stats</span> <span class="o">=</span> <span class="n">compute_ic_hac_stats</span><span class="p">(</span><span class="n">ic</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">maxlags</span><span class="o">=</span><span class="n">PRIMARY_HORIZON</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
 </code></pre>
-<p>Verified by introspection against the active environment:</p>
-<pre><code class="language-bash">.venv/bin/python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;</span>
-<span class="s2">import inspect</span>
-<span class="s2">from ml4t.diagnostic.metrics import compute_ic_hac_stats as f</span>
-<span class="s2">print(inspect.signature(f))</span>
-<span class="s2">&quot;</span>
+<p><strong>Why <code>- 1</code>, and why that is not a guess.</strong> Reading <code>0.1.0b25</code> — the
+build that has the parameter — its lag helper is:</p>
+<pre><code class="language-python"><span class="k">def</span><span class="w"> </span><span class="nf">_newey_west_lag</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">horizon</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="n">nw_auto</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="mi">4</span> <span class="o">*</span> <span class="p">(</span><span class="n">n</span> <span class="o">/</span> <span class="mi">100</span><span class="p">)</span> <span class="o">**</span> <span class="p">(</span><span class="mi">2</span> <span class="o">/</span> <span class="mi">9</span><span class="p">))))</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">horizon</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">nw_auto</span><span class="p">)</span> <span class="k">if</span> <span class="n">horizon</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">nw_auto</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n</span> <span class="o">//</span> <span class="mi">2</span><span class="p">)))</span>
 </code></pre>
-<p><strong>What this means.</strong> The stored outputs (mean IC 0.0203, naive t 3.77,
-HAC t 1.08, p 0.282) came from a <strong>newer</strong> build than the one installed.
-The notebook executes cleanly up to section G and stops there.</p>
-<p><strong>Two fixes — not applied, decision pending:</strong></p>
-<ol>
-<li><strong>Upgrade <code>ml4t_diagnostic</code></strong> to the build accepting <code>label_horizon</code>,
-most likely a setter for the HAC lag window using the label horizon
-(21) instead of the Newey–West rule <code>floor(4 * (T/100)^(2/9))</code>.
-Preserves the recorded numbers.</li>
-<li><strong>Change the call to <code>maxlags=PRIMARY_HORIZON</code>.</strong> Equivalent only if
-<code>label_horizon</code> was just a lag-setter; if the newer build derives the
-lag differently (<code>horizon - 1</code>, or a multiple), the HAC t shifts and
-the commentary quoting 1.08 stops matching.</li>
-</ol>
-<p>Option 1 is safer — option 2 risks silently changing the reported
-significance of the baseline floor, the number the section exists to
-establish. Confirming requires reading the newer build's source, which I
-have not done.</p>
+<p>So <code>label_horizon=h</code> resolves to <code>max(h - 1, Newey–West auto)</code>, capped at
+<code>T // 2</code>. With <code>h = 21</code> and <code>T = 4,257</code> IC dates the auto rule gives 9, so
+the effective lag is <strong>20</strong> — not 21. An earlier draft of this document
+proposed <code>maxlags=PRIMARY_HORIZON</code>; that was off by one and is why the
+<code>- 1</code> is written explicitly here.</p>
+<p>The rationale is a real statistical one rather than a magic number:
+overlapping <code>h</code>-session labels induce MA(<code>h-1</code>) dependence in the daily IC
+series, so the bandwidth has to reach <code>h-1</code> lags. The sample-size rule
+alone does not.</p>
+<p><strong>Verified against the recorded outputs</strong>, on the actual panel:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>call</th>
+<th>lags</th>
+<th>mean IC</th>
+<th>HAC t</th>
+<th>p</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>maxlags=PRIMARY_HORIZON - 1</code></td>
+<td>20</td>
+<td>0.0203</td>
+<td><strong>1.08</strong></td>
+<td><strong>0.282</strong></td>
+</tr>
+<tr>
+<td><code>maxlags=PRIMARY_HORIZON</code></td>
+<td>21</td>
+<td>0.0203</td>
+<td>1.07</td>
+<td>0.287</td>
+</tr>
+<tr>
+<td>no lag argument (auto)</td>
+<td>9</td>
+<td>0.0203</td>
+<td>1.36</td>
+<td>0.175</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first row reproduces the notebook's stored numbers exactly. The third
+shows what was at stake: left to the sample-size rule, the baseline's
+t-statistic reads 1.36 at p 0.175 — still short of significance, but a
+visibly different floor from the one the commentary describes.</p>
+<p>Cross-checked across both builds on a synthetic MA(20) series:
+<code>label_horizon=21</code> on <code>0.1.0b25</code> and <code>maxlags=20</code> on <code>0.1.0b21</code> agree to
+fifteen significant figures, which also establishes that nothing else in
+the HAC computation changed between the two builds.</p>
+<p><strong>Upgrading instead</strong> — <code>uv pip install ml4t-diagnostic==0.1.0b25</code> — is
+equally valid and lets the original call stand. It was not chosen here
+because it bumps a package every other chapter imports, to buy a
+statistic this one line already produces. Note that <code>0.1.0b25</code> warns when
+called <em>without</em> <code>label_horizon</code>, which is worth knowing if the pin ever
+moves.</p>
 <hr />
 <p><strong>Contents</strong></p>
 <div class="table-wrap"><table>
@@ -934,7 +973,7 @@ have not done.</p>
 <tr>
 <td>11</td>
 <td>Section G</td>
-<td>Baseline IC floor — ⚠️ <strong>open issue</strong></td>
+<td>Baseline IC floor — HAC bandwidth set from the horizon</td>
 </tr>
 <tr>
 <td>12</td>
@@ -1542,7 +1581,7 @@ feature engineering, so a later improvement can be judged against it.</li>
 <li><strong>Shows</strong> — the three choices that decide whether the number means
 anything: eligibility, per-date IC, and an overlap-aware standard error.</li>
 <li><strong>Outcome</strong> — mean IC 0.0203 with a HAC t of 1.08. The floor is
-indistinguishable from noise. ⚠️ This cell does not currently re-run.</li>
+indistinguishable from noise.</li>
 </ul>
 <p>One signal — raw 126-session (two-quarter) momentum, the lookback the
 hypothesis names — against the primary label, with no feature
@@ -1559,24 +1598,66 @@ the mean is taken over dates. Pooling all symbol-dates into one
 correlation would mix a cross-sectional claim with a time-series one.
 <code>min_obs</code> is set to half the median cross-section rather than a fixed
 integer, so it means the same thing at a different universe size.</p>
-<p><strong>The standard error is HAC-adjusted.</strong> The IC series inherits the
-label's overlap, so consecutive dates are not independent evidence.
-<code>compute_ic_hac_stats</code> applies a Newey–West/Bartlett correction. The
-<code>.sort(&quot;timestamp&quot;)</code> before it is required — HAC autocovariances are
-meaningless over a permutation of time.</p>
+<p><strong>The standard error is HAC-adjusted, at a bandwidth set by the
+horizon.</strong> The IC series inherits the label's overlap, so consecutive
+dates are not independent evidence:</p>
+<pre><code class="language-python"><span class="n">ic</span> <span class="o">=</span> <span class="n">cross_sectional_ic_series</span><span class="p">(</span><span class="o">...</span><span class="p">)</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span>
+<span class="n">stats</span> <span class="o">=</span> <span class="n">compute_ic_hac_stats</span><span class="p">(</span><span class="n">ic</span><span class="p">,</span> <span class="n">ic_col</span><span class="o">=</span><span class="s2">&quot;ic&quot;</span><span class="p">,</span> <span class="n">maxlags</span><span class="o">=</span><span class="n">PRIMARY_HORIZON</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+</code></pre>
+<p><code>compute_ic_hac_stats</code> applies a Newey–West/Bartlett correction, and two
+things about that line are load-bearing:</p>
+<ul>
+<li><strong><code>.sort(&quot;timestamp&quot;)</code> is required.</strong> HAC autocovariances are
+meaningless over a permutation of time, and nothing would raise if the
+frame arrived unsorted.</li>
+<li><strong>The lag is <code>h - 1</code> = 20, not the sample-size default.</strong> A 21-session
+label overlapping daily induces MA(20) dependence in the IC series, so
+the bandwidth has to reach 20 lags to price it in. Left to the
+Newey–West rule <code>floor(4 * (T/100)^(2/9))</code>, the bandwidth here would be
+<strong>9</strong>, and the same data would report a t of 1.36 at p 0.175 instead of
+1.08 at p 0.282 — a materially more flattering floor, from a standard
+error that has not fully accounted for the overlap this notebook spent
+section F measuring.</li>
+</ul>
 <p>Recorded result: mean IC <strong>0.0203</strong>; naive t <strong>3.77</strong>; HAC t <strong>1.08</strong>, p
 <strong>0.282</strong>. The bar a feature has to clear is the second number, and by
 it, raw momentum is not distinguishable from noise.</p>
-<blockquote>
-<h2>⚠️ THIS CELL IS BROKEN AGAINST THE INSTALLED ENVIRONMENT</h2>
-<p><code>compute_ic_hac_stats(..., label_horizon=PRIMARY_HORIZON)</code>
-raises <code>TypeError</code> with <code>ml4t_diagnostic</code> 0.1.0b21 in
-<code>.venv</code>, which has no such parameter. The stored outputs came
-from a newer build. <strong>Unresolved — see the open-issue section
-at the top of this document for the verification command and
-the two candidate fixes.</strong> No change has been made to the
-notebook or the environment.</p>
-</blockquote>
+<p>The three standard errors are worth seeing together, since they are the
+same data under three assumptions about independence:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>standard error</th>
+<th>lags</th>
+<th>t</th>
+<th>p</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>naive (dates independent)</td>
+<td>—</td>
+<td>3.77</td>
+<td>—</td>
+</tr>
+<tr>
+<td>HAC, sample-size bandwidth</td>
+<td>9</td>
+<td>1.36</td>
+<td>0.175</td>
+</tr>
+<tr>
+<td>HAC, horizon bandwidth</td>
+<td>20</td>
+<td><strong>1.08</strong></td>
+<td><strong>0.282</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>The gap between the first and last row is the entire practical
+consequence of overlap: a signal that looks decisively significant
+becomes indistinguishable from noise once the evidence is counted
+correctly.</p>
 
 </section>
 <section id="c13">

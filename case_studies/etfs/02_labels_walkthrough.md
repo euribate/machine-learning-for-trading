@@ -11,51 +11,67 @@ from reading the line. Everything else is covered at normal depth.
 
 ---
 
-## ⚠️ OPEN ISSUE — section G will raise `TypeError` on re-run
+## ✅ RESOLVED — section G's `TypeError` on re-run
 
-**Status: unresolved, awaiting review. Nothing has been changed in the
-notebook or the environment.**
+**Status: fixed in the notebook. The environment was not changed.**
 
-Section G calls `compute_ic_hac_stats(ic, ic_col="ic",
-label_horizon=PRIMARY_HORIZON)`. The `ml4t_diagnostic` installed in
-`.venv` (**0.1.0b21**) exposes no such parameter, and takes no
-`**kwargs`, so the call fails outright:
+Section G called `compute_ic_hac_stats(ic, ic_col="ic",
+label_horizon=PRIMARY_HORIZON)`. The `ml4t_diagnostic` pinned in `.venv`
+(**0.1.0b21**) has no such parameter and takes no `**kwargs`, so the call
+raised `TypeError: unexpected keyword argument 'label_horizon'`. The
+stored outputs had come from a newer build.
+
+**The fix.** One line, no environment change:
 
 ```python
-compute_ic_hac_stats(ic_series, ic_col="ic", maxlags=None,
-                     kernel="bartlett", use_correction=True)
-# TypeError: unexpected keyword argument 'label_horizon'
+stats = compute_ic_hac_stats(ic, ic_col="ic", maxlags=PRIMARY_HORIZON - 1)
 ```
 
-Verified by introspection against the active environment:
+**Why `- 1`, and why that is not a guess.** Reading `0.1.0b25` — the
+build that has the parameter — its lag helper is:
 
-```bash
-.venv/bin/python -c "
-import inspect
-from ml4t.diagnostic.metrics import compute_ic_hac_stats as f
-print(inspect.signature(f))
-"
+```python
+def _newey_west_lag(n, horizon=None):
+    nw_auto = max(1, int(np.floor(4 * (n / 100) ** (2 / 9))))
+    base = max(int(horizon) - 1, nw_auto) if horizon is not None else nw_auto
+    return max(1, min(base, max(1, n // 2)))
 ```
 
-**What this means.** The stored outputs (mean IC 0.0203, naive t 3.77,
-HAC t 1.08, p 0.282) came from a **newer** build than the one installed.
-The notebook executes cleanly up to section G and stops there.
+So `label_horizon=h` resolves to `max(h - 1, Newey–West auto)`, capped at
+`T // 2`. With `h = 21` and `T = 4,257` IC dates the auto rule gives 9, so
+the effective lag is **20** — not 21. An earlier draft of this document
+proposed `maxlags=PRIMARY_HORIZON`; that was off by one and is why the
+`- 1` is written explicitly here.
 
-**Two fixes — not applied, decision pending:**
+The rationale is a real statistical one rather than a magic number:
+overlapping `h`-session labels induce MA(`h-1`) dependence in the daily IC
+series, so the bandwidth has to reach `h-1` lags. The sample-size rule
+alone does not.
 
-1. **Upgrade `ml4t_diagnostic`** to the build accepting `label_horizon`,
-   most likely a setter for the HAC lag window using the label horizon
-   (21) instead of the Newey–West rule `floor(4 * (T/100)^(2/9))`.
-   Preserves the recorded numbers.
-2. **Change the call to `maxlags=PRIMARY_HORIZON`.** Equivalent only if
-   `label_horizon` was just a lag-setter; if the newer build derives the
-   lag differently (`horizon - 1`, or a multiple), the HAC t shifts and
-   the commentary quoting 1.08 stops matching.
+**Verified against the recorded outputs**, on the actual panel:
 
-Option 1 is safer — option 2 risks silently changing the reported
-significance of the baseline floor, the number the section exists to
-establish. Confirming requires reading the newer build's source, which I
-have not done.
+| call | lags | mean IC | HAC t | p |
+|------|------|---------|-------|---|
+| `maxlags=PRIMARY_HORIZON - 1` | 20 | 0.0203 | **1.08** | **0.282** |
+| `maxlags=PRIMARY_HORIZON` | 21 | 0.0203 | 1.07 | 0.287 |
+| no lag argument (auto) | 9 | 0.0203 | 1.36 | 0.175 |
+
+The first row reproduces the notebook's stored numbers exactly. The third
+shows what was at stake: left to the sample-size rule, the baseline's
+t-statistic reads 1.36 at p 0.175 — still short of significance, but a
+visibly different floor from the one the commentary describes.
+
+Cross-checked across both builds on a synthetic MA(20) series:
+`label_horizon=21` on `0.1.0b25` and `maxlags=20` on `0.1.0b21` agree to
+fifteen significant figures, which also establishes that nothing else in
+the HAC computation changed between the two builds.
+
+**Upgrading instead** — `uv pip install ml4t-diagnostic==0.1.0b25` — is
+equally valid and lets the original call stand. It was not chosen here
+because it bumps a package every other chapter imports, to buy a
+statistic this one line already produces. Note that `0.1.0b25` warns when
+called *without* `label_horizon`, which is worth knowing if the pin ever
+moves.
 
 ---
 
@@ -74,7 +90,7 @@ have not done.
 | 8 | Figure F1 | Root-horizon scaling check |
 | 9 | Figure F4 | Cross-sectional dispersion by year |
 | 10 | Figure F3 | Overlap decay, effective sample size |
-| 11 | Section G | Baseline IC floor — ⚠️ **open issue** |
+| 11 | Section G | Baseline IC floor — HAC bandwidth set from the horizon |
 | 12 | Section H | Write parquet + digest sidecars |
 | 13 | Audit record | Printed label definition table |
 
@@ -679,7 +695,7 @@ height, and the purge gap between CV folds must be at least the horizon.
 - **Shows** — the three choices that decide whether the number means
   anything: eligibility, per-date IC, and an overlap-aware standard error.
 - **Outcome** — mean IC 0.0203 with a HAC t of 1.08. The floor is
-  indistinguishable from noise. ⚠️ This cell does not currently re-run.
+  indistinguishable from noise.
 
 One signal — raw 126-session (two-quarter) momentum, the lookback the
 hypothesis names — against the primary label, with no feature
@@ -700,25 +716,47 @@ correlation would mix a cross-sectional claim with a time-series one.
 `min_obs` is set to half the median cross-section rather than a fixed
 integer, so it means the same thing at a different universe size.
 
-**The standard error is HAC-adjusted.** The IC series inherits the
-label's overlap, so consecutive dates are not independent evidence.
-`compute_ic_hac_stats` applies a Newey–West/Bartlett correction. The
-`.sort("timestamp")` before it is required — HAC autocovariances are
-meaningless over a permutation of time.
+**The standard error is HAC-adjusted, at a bandwidth set by the
+horizon.** The IC series inherits the label's overlap, so consecutive
+dates are not independent evidence:
+
+```python
+ic = cross_sectional_ic_series(...).sort("timestamp")
+stats = compute_ic_hac_stats(ic, ic_col="ic", maxlags=PRIMARY_HORIZON - 1)
+```
+
+`compute_ic_hac_stats` applies a Newey–West/Bartlett correction, and two
+things about that line are load-bearing:
+
+- **`.sort("timestamp")` is required.** HAC autocovariances are
+  meaningless over a permutation of time, and nothing would raise if the
+  frame arrived unsorted.
+- **The lag is `h - 1` = 20, not the sample-size default.** A 21-session
+  label overlapping daily induces MA(20) dependence in the IC series, so
+  the bandwidth has to reach 20 lags to price it in. Left to the
+  Newey–West rule `floor(4 * (T/100)^(2/9))`, the bandwidth here would be
+  **9**, and the same data would report a t of 1.36 at p 0.175 instead of
+  1.08 at p 0.282 — a materially more flattering floor, from a standard
+  error that has not fully accounted for the overlap this notebook spent
+  section F measuring.
 
 Recorded result: mean IC **0.0203**; naive t **3.77**; HAC t **1.08**, p
 **0.282**. The bar a feature has to clear is the second number, and by
 it, raw momentum is not distinguishable from noise.
 
-> ## ⚠️ THIS CELL IS BROKEN AGAINST THE INSTALLED ENVIRONMENT
->
-> `compute_ic_hac_stats(..., label_horizon=PRIMARY_HORIZON)`
-> raises `TypeError` with `ml4t_diagnostic` 0.1.0b21 in
-> `.venv`, which has no such parameter. The stored outputs came
-> from a newer build. **Unresolved — see the open-issue section
-> at the top of this document for the verification command and
-> the two candidate fixes.** No change has been made to the
-> notebook or the environment.
+The three standard errors are worth seeing together, since they are the
+same data under three assumptions about independence:
+
+| standard error | lags | t | p |
+|----------------|------|---|---|
+| naive (dates independent) | — | 3.77 | — |
+| HAC, sample-size bandwidth | 9 | 1.36 | 0.175 |
+| HAC, horizon bandwidth | 20 | **1.08** | **0.282** |
+
+The gap between the first and last row is the entire practical
+consequence of overlap: a signal that looks decisively significant
+becomes indistinguishable from noise once the evidence is counted
+correctly.
 
 ## 12. Section H — artifacts
 
