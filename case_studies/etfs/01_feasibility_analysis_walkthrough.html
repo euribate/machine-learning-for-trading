@@ -1,0 +1,1393 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>01_feasibility_analysis.ipynb — cell-by-cell walkthrough</title>
+<style>
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+
+    --serif: "Iowan Old Style", Charter, "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101820;
+      --surface: #16212b;
+      --ink: #dce5ec;
+      --ink-soft: #9dadba;
+      --ink-faint: #6f818e;
+      --rule: #27343f;
+      --rule-soft: #1e2a34;
+      --accent: #6ec2e6;
+      --accent-soft: #163140;
+      --alert: #e5a071;
+      --alert-soft: #2c1f16;
+      --alert-rule: #5c3d26;
+      --code-bg: #1a2530;
+      --code-ink: #c6d5e0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101820;
+    --surface: #16212b;
+    --ink: #dce5ec;
+    --ink-soft: #9dadba;
+    --ink-faint: #6f818e;
+    --rule: #27343f;
+    --rule-soft: #1e2a34;
+    --accent: #6ec2e6;
+    --accent-soft: #163140;
+    --alert: #e5a071;
+    --alert-soft: #2c1f16;
+    --alert-rule: #5c3d26;
+    --code-bg: #1a2530;
+    --code-ink: #c6d5e0;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  @media (min-width: 1020px) {
+    .shell {
+      grid-template-columns: 210px minmax(0, 1fr);
+      gap: 3.5rem;
+      padding-top: 4.5rem;
+    }
+    .toc { position: sticky; top: 2rem; align-self: start; }
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { grid-column: 1 / -1; border-bottom: 2px solid var(--ink); padding-bottom: 1.5rem; }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.9rem;
+  }
+
+  .masthead h1 {
+    font-family: var(--sans);
+    font-size: clamp(1.9rem, 4.5vw, 2.7rem);
+    line-height: 1.1;
+    letter-spacing: -0.028em;
+    font-weight: 700;
+    text-wrap: balance;
+    margin-bottom: 0.6rem;
+  }
+
+  .masthead h1 code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .standfirst {
+    color: var(--ink-soft);
+    max-width: 62ch;
+    font-size: 1.05rem;
+  }
+
+  .masthead-meta {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    margin-top: 1.1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.4rem;
+  }
+
+  /* ---------- table of contents ---------- */
+
+  .toc h2 {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.7rem;
+  }
+
+  .toc ol { list-style: none; display: flex; flex-direction: column; gap: 0.05rem; }
+
+  .toc a {
+    display: grid;
+    grid-template-columns: 1.6rem 1fr;
+    gap: 0.3rem;
+    font-family: var(--sans);
+    font-size: 0.79rem;
+    line-height: 1.35;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 0.3rem 0.3rem 0.3rem 0;
+    border-radius: 3px;
+  }
+
+  .toc a:hover { color: var(--accent); background: var(--accent-soft); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .toc .n { font-variant-numeric: tabular-nums; color: var(--ink-faint); }
+  .toc a.flag .n, .toc a.flag { color: var(--alert); }
+  .toc a.flag:hover { background: var(--alert-soft); }
+
+  /* ---------- article ---------- */
+
+  article { min-width: 0; display: flex; flex-direction: column; gap: 2.75rem; }
+
+  section { scroll-margin-top: 1.5rem; }
+
+  .cell-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.55rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .cell-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 0.16rem 0.45rem;
+    border-radius: 3px;
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cell-head h2 {
+    font-family: var(--sans);
+    font-size: 1.42rem;
+    letter-spacing: -0.02em;
+    font-weight: 650;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 1.9rem 0 0.7rem;
+    text-wrap: balance;
+  }
+
+  h4 {
+    font-family: var(--sans);
+    font-size: 0.73rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    margin: 1.6rem 0 0.6rem;
+  }
+
+  p { max-width: 66ch; margin-bottom: 0.95rem; }
+  p:last-child { margin-bottom: 0; }
+
+  ul, ol.prose-list { max-width: 64ch; padding-left: 1.15rem; margin-bottom: 0.95rem; }
+  li { margin-bottom: 0.45rem; }
+  li::marker { color: var(--ink-faint); }
+
+  strong { font-weight: 700; }
+  em { font-style: italic; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.855em;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule-soft);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    margin-bottom: 1.1rem;
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  pre code { background: none; padding: 0; font-size: 1em; color: var(--code-ink); }
+
+  blockquote {
+    border-left: 2px solid var(--rule);
+    padding-left: 1.1rem;
+    color: var(--ink-soft);
+    font-style: italic;
+    max-width: 62ch;
+    margin-bottom: 1rem;
+  }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap { overflow-x: auto; margin-bottom: 1.1rem; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 30rem;
+    font-family: var(--sans);
+    font-size: 0.83rem;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.69rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--ink-soft);
+    padding: 0.45rem 0.8rem 0.45rem 0;
+  }
+
+  td {
+    padding: 0.5rem 0.8rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+
+  td:first-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.flagged td { color: var(--alert); }
+
+  /* ---------- callouts ---------- */
+
+  .alert {
+    background: var(--alert-soft);
+    border: 1px solid var(--alert-rule);
+    border-left: 3px solid var(--alert);
+    border-radius: 4px;
+    padding: 1.4rem 1.5rem;
+  }
+
+  .alert-label {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--alert);
+    margin-bottom: 0.5rem;
+  }
+
+  .alert h2 {
+    font-family: var(--sans);
+    font-size: 1.18rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+    margin-bottom: 0.9rem;
+    text-wrap: balance;
+  }
+
+  .alert .status {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--alert);
+    margin-bottom: 1rem;
+    max-width: 66ch;
+  }
+
+  .alert pre { background: var(--surface); border-left-color: var(--alert); }
+  .alert code { background: var(--surface); }
+
+  .alert-inline {
+    background: var(--alert-soft);
+    border-left: 3px solid var(--alert);
+    border-radius: 0 4px 4px 0;
+    padding: 1rem 1.2rem;
+    margin: 1.3rem 0;
+  }
+
+  .alert-inline p { max-width: 62ch; margin-bottom: 0; font-size: 0.94rem; }
+  .alert-inline code { background: var(--surface); }
+
+  /* ---------- misc ---------- */
+
+  .result {
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    max-width: 64ch;
+    margin-bottom: 1.1rem;
+    color: var(--ink);
+  }
+
+  .result .k {
+    font-family: var(--sans);
+    font-size: 0.67rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 0.5rem 0;
+  }
+
+  .closing {
+    border-top: 2px solid var(--ink);
+    padding-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* Aim / Shows / Outcome brief opening each section */
+  ul.brief {
+    list-style: none;
+    margin: 0 0 1.6rem;
+    padding: 0.9rem 0 0.9rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  ul.brief li {
+    font-family: var(--sans);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    padding-right: 1.1rem;
+  }
+
+  ul.brief li strong {
+    font-size: 0.68rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--accent);
+    display: inline-block;
+    min-width: 5.5rem;
+  }
+
+  section.alert ul.brief {
+    border-left-color: var(--alert);
+    background: var(--alert-soft);
+  }
+
+  section.alert ul.brief li strong { color: var(--alert); }
+
+/* syntax highlighting */
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+@media (prefers-color-scheme: dark) {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="dark"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="light"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+}
+
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow">case_studies · etfs</div>
+    <h1><code>01_feasibility_analysis.ipynb</code> — cell-by-cell walkthrough</h1>
+    <p class="standfirst">Companion notes for the ETF case study's feasibility stage. The notebook itself explains <em>why</em> each section exists; this document explains <em>what each cell does mechanically</em>, which functions it calls, and where the values come from.</p>
+    <div class="masthead-meta">
+      <span>case_studies/etfs/01_feasibility_analysis_walkthrough.md</span>
+      <span>generated by tools/build_docs.py &mdash; do not edit</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#c0"><span class="n">0</span><span>0. Imports and helpers</span></a></li>
+      <li><a href="#c1"><span class="n">1</span><span>1. Run parameters</span></a></li>
+      <li><a href="#c2"><span class="n">2</span><span>2. Configuration — reading setup.yaml</span></a></li>
+      <li><a href="#c3"><span class="n">3</span><span>3. Section A — orientation</span></a></li>
+      <li><a href="#c4"><span class="n">4</span><span>4. Section B.1 — load and verify the universe</span></a></li>
+      <li><a href="#c5"><span class="n">5</span><span>5. Section B.2 — breadth at every decision date</span></a></li>
+      <li><a href="#c6"><span class="n">6</span><span>6. Section B.3 — the round trip, and what a move is worth</span></a></li>
+      <li><a href="#c7"><span class="n">7</span><span>7. Section B.4 — serial correlation of the carrier</span></a></li>
+      <li><a href="#c8"><span class="n">8</span><span>8. Section B.5 — move scale against cost</span></a></li>
+      <li><a href="#c9"><span class="n">9</span><span>9. Section C — design decisions</span></a></li>
+      <li><a href="#c10"><span class="n">10</span><span>10. Section D.1 — effective sample size</span></a></li>
+      <li><a href="#c11"><span class="n">11</span><span>11. Section D.2 — fold demonstration</span></a></li>
+      <li><a href="#c12"><span class="n">12</span><span>12. Section E — the eligibility artifact</span></a></li>
+      <li><a href="#c13"><span class="n">13</span><span>13. Section F — findings vs setup.yaml</span></a></li>
+      <li><a href="#c14"><span class="n">14</span><span>14. Key takeaways and limitations</span></a></li>
+    </ol>
+  </nav>
+
+  <article>
+<p>This stage fits nothing. It asks whether <code>config/setup.yaml</code> describes a
+strategy the data can actually support, and writes one artifact —
+<code>eligibility.csv</code> — that every later stage joins against.</p>
+<hr />
+<p><strong>Contents</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Cell</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Imports</td>
+<td>Modules and the three feasibility helpers</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Parameters</td>
+<td>Date range and the dollar-volume floor</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Configuration</td>
+<td>Reads every knob out of <code>setup.yaml</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Section A</td>
+<td>States the three questions being asked</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Section B.1</td>
+<td>Load prices, assert two properties</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Section B.2</td>
+<td>Point-in-time eligibility, breadth at each decision</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Section B.3</td>
+<td>Round-trip cost per fund, exceedance curve</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Section B.4</td>
+<td>Within-fund autocorrelation of the carrier</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Section B.5</td>
+<td>Move scale against cost, as numbers</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Section C</td>
+<td>Design decisions and kill conditions</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Section D.1</td>
+<td>Decision count vs row count</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Section D.2</td>
+<td>Fold generation and the purge gap</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Section E</td>
+<td>Writes <code>eligibility.csv</code></td>
+</tr>
+<tr>
+<td>13</td>
+<td>Section F</td>
+<td>Findings tabulated against <code>setup.yaml</code></td>
+</tr>
+<tr>
+<td>14</td>
+<td>Takeaways</td>
+<td>Three rules, three limitations</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+
+<section id="c0">
+  <div class="cell-head"><span class="cell-num">0</span><h2>0. Imports and helpers</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — pull in the three panel diagnostics whose correct version is
+longer than a notebook cell should be.</li>
+<li><strong>Shows</strong> — which work is delegated: the statistics live in
+<code>case_studies/utils/feasibility.py</code>, the loading and interpretation stay
+in the notebook.</li>
+<li><strong>Outcome</strong> — <code>exceedance_curve</code>, <code>fold_timeline</code> and <code>panel_acf</code>, plus
+the loader, the splitter and the shared plot style.</li>
+</ul>
+<pre><code class="language-python"><span class="kn">from</span><span class="w"> </span><span class="nn">case_studies.utils.feasibility</span><span class="w"> </span><span class="kn">import</span> <span class="n">exceedance_curve</span><span class="p">,</span> <span class="n">fold_timeline</span><span class="p">,</span> <span class="n">panel_acf</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">data</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_etfs</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.cv_splits</span><span class="w"> </span><span class="kn">import</span> <span class="n">generate_cv_splits</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.paths</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_case_study_dir</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">utils.style</span><span class="w"> </span><span class="kn">import</span> <span class="n">COLORS</span><span class="p">,</span> <span class="n">FIGSIZE</span><span class="p">,</span> <span class="n">add_message_title</span>
+</code></pre>
+<p>Each of the three helpers exists because the naive version of its
+statistic is wrong on a panel — the module docstring says so directly.
+Sections 5, 7 and 11 give the specific failure each one avoids.</p>
+
+</section>
+<section id="c1">
+  <div class="cell-head"><span class="cell-num">1</span><h2>1. Run parameters</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — hold the two numbers that are not in <code>setup.yaml</code>.</li>
+<li><strong>Shows</strong> — that the eligibility <em>rule</em> is declared in config while its
+<em>threshold</em> is not, which is a gap in the config rather than a choice.</li>
+<li><strong>Outcome</strong> — the date range and <code>ADV_THRESHOLD = 10e6</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">CASE_STUDY_ID</span> <span class="o">=</span> <span class="s2">&quot;etfs&quot;</span>
+<span class="n">START_DATE</span> <span class="o">=</span> <span class="s2">&quot;2006-01-01&quot;</span>
+<span class="n">END_DATE</span> <span class="o">=</span> <span class="s2">&quot;2025-12-31&quot;</span>
+<span class="n">ADV_THRESHOLD</span> <span class="o">=</span> <span class="mf">10e6</span>
+</code></pre>
+<p>The notebook's own configuration markdown flags the reason:
+<code>universe.eligibility_rule</code> &quot;declares the rule without its number, so the
+dollar-volume floor is declared in the parameters cell.&quot; Everything else
+is resolved from config in section 2. This one constant is the exception,
+and it decides who is in the universe.</p>
+
+</section>
+<section id="c2">
+  <div class="cell-head"><span class="cell-num">2</span><h2>2. Configuration — reading <code>setup.yaml</code></h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — bind every knob the notebook tests to the file that declares
+it, so the analysis cannot drift from the strategy it is validating.</li>
+<li><strong>Shows</strong> — that the numbers under test are read, never retyped; the
+notebook is checking a specification it does not get to restate.</li>
+<li><strong>Outcome</strong> — the development/holdout boundary, 100 declared assets, a
+breadth floor of 20, cost parameters, and horizons <code>[5, 21]</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">BREADTH_FLOOR</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">SETUP</span><span class="p">[</span><span class="s2">&quot;backtest&quot;</span><span class="p">][</span><span class="s2">&quot;sweep&quot;</span><span class="p">][</span><span class="s2">&quot;top_k_grid&quot;</span><span class="p">][</span><span class="n">PRIMARY_LABEL</span><span class="p">])</span>
+<span class="n">HORIZONS</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">int</span><span class="p">(</span><span class="n">re</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;(\d+)d$&quot;</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span> <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">LABELS</span><span class="p">)</span>
+</code></pre>
+<p>Two derivations worth reading closely:</p>
+<p><strong><code>BREADTH_FLOOR</code> is the largest position count the sweep asks for</strong>, not
+a round number. The backtest sweeps a grid of <code>top_k</code> values; the
+universe must be able to fill the widest book in that grid on every
+decision date, so the floor is <code>max(top_k_grid)</code> — here <strong>20</strong>. Widen the
+grid in <code>setup.yaml</code> and the bar this notebook holds breadth to rises
+with it, automatically.</p>
+<p><strong>Horizons are parsed out of the label names</strong> with <code>(\d+)d$</code>, rather
+than read from a horizon field. That works because the names encode the
+number (<code>fwd_ret_21d</code> → 21), and it is a different resolution path from
+the one <code>02_labels</code> uses, which goes through <code>resolve_label_horizon</code> and
+falls back to the CV buffer fields. Two stages, two ways of learning the
+same number. A label named without a trailing <code>&lt;digits&gt;d</code> would raise
+<code>AttributeError</code> on the <code>re.search(...).group(1)</code> here.</p>
+<p>Printed output:</p>
+<pre><code class="language-text">Development 2006-01-01 to 2024-01-01 | sealed holdout to 2025-12-31
+100 declared, floor 20 | horizons [5, 21] sessions
+</code></pre>
+
+</section>
+<section id="c3">
+  <div class="cell-head"><span class="cell-num">3</span><h2>3. Section A — orientation</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — state what a cross-sectional ETF rotation needs from its data,
+before any of it is measured.</li>
+<li><strong>Shows</strong> — that the strategy trades <em>differences between funds' recent
+paths</em>, so it needs many funds quoting at once more than a few quoting
+well. That distinction sets what the rest of section B measures.</li>
+<li><strong>Outcome</strong> — three questions, which map onto B.2, B.3/B.5 and D.</li>
+</ul>
+<p>Markdown only. The three questions are: does the universe exist on every
+decision date, is a typical move large next to what it costs to capture,
+and are there enough decision dates for a clean walk-forward. Sections 5
+through 11 answer them in that order.</p>
+
+</section>
+<section id="c4">
+  <div class="cell-head"><span class="cell-num">4</span><h2>4. Section B.1 — load and verify the universe</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — load the price panel and establish two properties before
+anything is computed from it.</li>
+<li><strong>Shows</strong> — that the loaded symbols are a subset of <code>universe.assets</code>
+and that no close is at or below zero.</li>
+<li><strong>Outcome</strong> — <code>prices</code> (full range) and <code>research</code> (development window
+only): 100 funds, 420,462 rows, last session 2023-12-29.</li>
+</ul>
+<pre><code class="language-python"><span class="n">research</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">lit</span><span class="p">(</span><span class="n">HOLDOUT_START</span><span class="p">)</span><span class="o">.</span><span class="n">str</span><span class="o">.</span><span class="n">to_date</span><span class="p">())</span>
+
+<span class="n">undeclared</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">research</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()</span><span class="o">.</span><span class="n">to_list</span><span class="p">())</span> <span class="o">-</span> <span class="n">DECLARED_ASSETS</span><span class="p">)</span>
+<span class="k">assert</span> <span class="ow">not</span> <span class="n">undeclared</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;loaded but absent from setup.yaml::universe.assets: </span><span class="si">{</span><span class="n">undeclared</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="k">assert</span> <span class="n">research</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;a non-positive close is not a denominator&quot;</span>
+</code></pre>
+<p><strong>Two frames, and the difference matters throughout.</strong> <code>prices</code> spans the
+full range including the holdout; <code>research</code> is cut at <code>HOLDOUT_START</code>.
+Every figure and statistic below reads <code>research</code>. The one deliberate
+exception is the eligibility table in section 5 — see the note there.</p>
+<p>The <code>close &gt; 0</code> assertion is not defensive boilerplate: <code>close</code> becomes a
+denominator twice below, in the cost-in-bps conversion and in
+<code>pct_change</code>. The assertion message says exactly that.</p>
+<p>The set difference is one-directional. It catches a symbol that was
+loaded but never declared; it does <em>not</em> catch a declared symbol that
+failed to load, which would silently shrink the universe. The count in
+the printed line (<code>100 funds</code>) is what a reader has to check that
+against.</p>
+
+</section>
+<section id="c5">
+  <div class="cell-head"><span class="cell-num">5</span><h2>5. Section B.2 — breadth at every decision date</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — decide universe membership on information the strategy would
+actually have had, then count it on the dates the strategy acts.</li>
+<li><strong>Shows</strong> — that a whole-sample liquidity filter would keep precisely
+the funds that <em>stayed</em> liquid, and that one universe count hides
+whether enough funds are eligible on any particular decision date.</li>
+<li><strong>Outcome</strong> — the <code>eligibility</code> table, and a breadth series that clears
+the floor of 20 from the second year onward.</li>
+</ul>
+<pre><code class="language-python"><span class="n">eligibility</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">prices</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+        <span class="n">dollar_volume</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;volume&quot;</span><span class="p">),</span> <span class="n">year</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;year&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;dollar_volume&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;adv&quot;</span><span class="p">),</span> <span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;n_days&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">((</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;n_days&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">200</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adv&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">ADV_THRESHOLD</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;eligible_year&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">unique</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;eligible_year&quot;</span><span class="p">])</span>
+<span class="p">)</span>
+</code></pre>
+<p><strong><code>year + 1</code> is the whole point-in-time mechanism.</strong> Volume is aggregated
+for calendar year <code>Y</code>, and the row that survives grants eligibility for
+year <code>Y + 1</code>. A fund is therefore admitted on what was already known when
+the year opened. Drop that <code>+ 1</code> and the rule would admit funds on the
+strength of volume they had not yet traded.</p>
+<p><strong><code>n_days &gt;= 200</code></strong> excludes a fund that quoted for only part of a year,
+which has no annual average to be admitted on. A fund listing in October
+would otherwise be judged on a two-month mean.</p>
+<p><strong>This cell reads <code>prices</code>, not <code>research</code></strong> — the only computation in
+section B that does. That is deliberate and stated in section 12: the
+artifact must cover the sealed years too, because downstream stages join
+against it there. It is not leakage, because eligibility for year <code>Y</code>
+reads only year <code>Y - 1</code> volume, so the sealed years' rows are derived
+from sealed years' own history. It is worth noticing anyway, since the
+configuration markdown's blanket claim that &quot;Section B computes on the
+development window alone&quot; is true of every figure but not of this table.</p>
+<p>Breadth is then counted at month-ends:</p>
+<pre><code class="language-python"><span class="n">month_end</span> <span class="o">=</span> <span class="n">research</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">truncate</span><span class="p">(</span><span class="s2">&quot;1mo&quot;</span><span class="p">))</span>
+<span class="p">)</span>
+<span class="n">breadth</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">month_end</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">year</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">year</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">eligible</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;year&quot;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;eligible&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">fill_null</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;n_eligible&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+</code></pre>
+<p><strong>The left join is load-bearing</strong>, and the notebook comments it inline: a
+left join keeps the dates on which <em>nothing</em> is eligible, which an inner
+join would drop from the frame entirely. Those dates are exactly the
+failure the chart exists to show — an inner join would produce a picture
+with the bad dates silently missing and a floor that appears always
+cleared.</p>
+<p><code>month_end</code> picks the last session of each calendar month by comparing
+each timestamp to the max within its own truncated month, so it selects
+real sessions rather than calendar month-ends that may not have traded.</p>
+
+</section>
+<section id="c6">
+  <div class="cell-head"><span class="cell-num">6</span><h2>6. Section B.3 — the round trip, and what a move is worth</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — price the round trip per fund, then read the size of a
+typical move against the cost of capturing it.</li>
+<li><strong>Shows</strong> — that a per-share cost is a <em>different</em> cost on every fund,
+so one cost line drawn on raw returns answers the question for no fund
+in particular.</li>
+<li><strong>Outcome</strong> — <code>COST_BPS</code> (universe median 9.45 bps) and an exceedance
+curve on which break-even sits at exactly 1.</li>
+</ul>
+<pre><code class="language-python"><span class="n">half_spread</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">replace_strict</span><span class="p">(</span>
+    <span class="n">HALF_SPREADS</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">DEFAULT_HALF_SPREAD</span><span class="p">,</span> <span class="n">return_dtype</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">Float64</span>
+<span class="p">)</span>
+<span class="n">cost</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">research</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">median</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">((</span><span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">half_spread</span> <span class="o">+</span> <span class="n">PER_SHARE</span><span class="p">)</span> <span class="o">/</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1e4</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;cost_bps&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;cost_bps&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+</code></pre>
+<p>The <code>2 *</code> is the round trip — two half-spreads and two commissions, in
+and out. Dividing by price converts dollars per share into a fraction of
+the position, and <code>* 1e4</code> puts it in basis points. Because both inputs are
+dollars per share, <strong>the same cost is a smaller fraction on a
+higher-priced fund</strong>, which is why the resulting bar chart spans an order
+of magnitude across one universe.</p>
+<p><code>replace_strict</code> with an explicit <code>default</code> assigns the tier spread where
+<code>setup.yaml</code> names one and the default elsewhere. The notebook is candid
+that this is an assumption, not a measurement: daily bars carry no bid and
+ask, so the spread is asserted, and <code>18_cost_sensitivity</code> stresses it.</p>
+<p>The exceedance curve then scales every move by its own fund's cost:</p>
+<pre><code class="language-python"><span class="n">returns</span> <span class="o">=</span> <span class="n">research</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+    <span class="n">cost_bps</span><span class="o">=</span><span class="mi">2</span> <span class="o">*</span> <span class="p">(</span><span class="n">half_spread</span> <span class="o">+</span> <span class="n">PER_SHARE</span><span class="p">)</span> <span class="o">/</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1e4</span>
+<span class="p">)</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+    <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">pct_change</span><span class="p">(</span><span class="n">h</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e4</span> <span class="o">/</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;cost_bps&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shift</span><span class="p">(</span><span class="n">h</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;h</span><span class="si">{</span><span class="n">h</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">h</span> <span class="ow">in</span> <span class="n">HORIZONS</span>
+<span class="p">)</span>
+</code></pre>
+<p>Three details decide whether that ratio means anything:</p>
+<ul>
+<li><strong><code>cost_bps</code> is recomputed per row here</strong>, on each session's close,
+rather than reusing the per-fund median from the bar chart. The chart
+summarises; this measures each move against the cost prevailing at the
+time.</li>
+<li><strong><code>.shift(h)</code></strong> takes the cost at the price the position <em>opened</em> at,
+<code>h</code> sessions before the move being measured. Using the closing price's
+cost would price the trade at an outcome that had not happened yet.</li>
+<li><strong><code>.abs()</code></strong> makes this a magnitude, not a return. The curve says
+nothing about direction and therefore nothing about profit — a point
+section 8 repeats deliberately.</li>
+</ul>
+<p>Dividing by cost puts break-even at <strong>1</strong> on a scale every fund shares,
+which is what makes a single vertical line at <code>x = 1</code> legible for a
+hundred funds at once. <code>exceedance_curve</code> returns the survival function
+of the magnitudes, thinned to 400 quantiles so a multi-million-row panel
+draws as a curve rather than a raster.</p>
+<p>The curve runs over every session in the development window, not only the
+decision dates — the notebook is explicit that this is the scale of a
+move against cost, not an opportunity set.</p>
+
+</section>
+<section id="c7">
+  <div class="cell-head"><span class="cell-num">7</span><h2>7. Section B.4 — serial correlation of the carrier</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — measure how much of one month's return the next month
+repeats, in the series the ranking is actually built from.</li>
+<li><strong>Shows</strong> — the difference between a within-entity autocorrelation and
+one computed over a stacked panel, which would measure the joins
+between funds rather than persistence within them.</li>
+<li><strong>Outcome</strong> — a mean within-fund ACF over 12 lags with a
+10th–90th-percentile band: a single month's return says almost nothing
+about the next month's.</li>
+</ul>
+<pre><code class="language-python"><span class="n">monthly</span> <span class="o">=</span> <span class="n">month_end</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">monthly_return</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">pct_change</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">))</span>
+<span class="n">acf</span> <span class="o">=</span> <span class="n">panel_acf</span><span class="p">(</span><span class="n">monthly</span><span class="p">,</span> <span class="n">entity_col</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">value_col</span><span class="o">=</span><span class="s2">&quot;monthly_return&quot;</span><span class="p">,</span> <span class="n">max_lags</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;lag&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+<span class="p">)</span>
+</code></pre>
+<p><strong>The carrier is the month-to-month return</strong>, computed on <code>month_end</code> —
+the same dates the strategy acts on — not on daily closes. Persistence at
+the daily frequency would not be the property a monthly rotation depends
+on.</p>
+<p><code>panel_acf</code> computes an ACF per fund and returns the cross-entity mean,
+the 10th and 90th percentiles of the per-fund curves, and a white-noise
+band of <code>1.96 / sqrt(mean series length)</code>. Funds with fewer than
+<code>max(min_obs, max_lags + 1)</code> observations are skipped, so short-lived
+funds do not contribute a noisy curve.</p>
+<p><code>lag &gt; 0</code> drops lag zero, which is a series against itself and equals 1 by
+construction; the notebook's inline comment notes its bar would flatten
+every other one.</p>
+<p>This is a property of each fund's own series, not of the cross-sectional
+ranking — the notebook points at <code>05_evaluation</code> for the latter. A weak
+result here does not sink the strategy: a rotation ranks funds against
+each other, and that is a different question from whether any one fund
+repeats itself.</p>
+
+</section>
+<section id="c8">
+  <div class="cell-head"><span class="cell-num">8</span><h2>8. Section B.5 — move scale against cost</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — reduce the exceedance curve to two numbers that can be
+checked against a threshold.</li>
+<li><strong>Shows</strong> — the median move as a multiple of the median round trip, and
+the share of moves clearing their own fund's cost.</li>
+<li><strong>Outcome</strong> — cost 0.90–38.91 bps (median 9.45); median 21-session move
+287.2 bps, a ratio of <strong>30x</strong>; <strong>0.967</strong> of moves clear.</li>
+</ul>
+<pre><code class="language-python"><span class="n">moves</span> <span class="o">=</span> <span class="n">returns</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
+    <span class="n">move_bps</span><span class="o">=</span><span class="mf">1e4</span> <span class="o">*</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">pct_change</span><span class="p">(</span><span class="n">PRIMARY_HORIZON</span><span class="p">)</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span>
+    <span class="n">clears</span><span class="o">=</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;h</span><span class="si">{</span><span class="n">PRIMARY_HORIZON</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre>
+<p>The two numbers are computed differently on purpose. The <strong>ratio</strong> uses
+two medians — the median move over the median cost, a universe-level
+summary. The <strong>clearance share</strong> compares each move to <em>its own fund's</em>
+cost, so a fund whose cost is ten times the median is judged against its
+own bar rather than the universe's.</p>
+<p><strong>Both are unsigned magnitudes.</strong> The notebook says so twice, and the
+point survives repeating: a ratio of 30x does not mean a strategy earns
+30x its costs. It means cost is not the thing that would stop one. Whether
+a signal can predict the <em>direction</em> of those moves is Chapter 8's
+question, and section 9's first kill condition.</p>
+
+</section>
+<section id="c9">
+  <div class="cell-head"><span class="cell-num">9</span><h2>9. Section C — design decisions</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — record the three choices <code>setup.yaml</code> makes and tie each to
+the evidence that motivates it.</li>
+<li><strong>Shows</strong> — that each kill condition is tested where its evidence lives,
+not asserted here.</li>
+<li><strong>Outcome</strong> — cadence, kill conditions and mapping class, each with a
+named chapter that tests it.</li>
+</ul>
+<p>Markdown only. The three:</p>
+<ul>
+<li><strong>Cadence</strong> — monthly, ranking at the month-end close and executing at
+the next open. B.3 supports rebalancing at least that often, so cost is
+not what sets the cadence. Monthly also buys a purge gap the width of
+the primary label; the weekly horizon stays in <code>labels.variants</code> so the
+shorter holding period is measured rather than assumed away.</li>
+<li><strong>Kill conditions</strong> — an IC indistinguishable from zero at every
+lookback (Chapter 8); a move-to-cost ratio under one once realistic
+costs are charged, or an equal-weight book beating the strategy on
+Sharpe at a smaller drawdown (both Chapter 16).</li>
+<li><strong>Mapping class</strong> — long only, because many of these funds are
+expensive or impossible to borrow, so a short leg would price that
+constraint rather than the signal. Equal weight, because an optimised
+weighting folds in a covariance estimate and leaves the ranking's own
+contribution unidentifiable. Chapter 17 sweeps the alternatives.</li>
+</ul>
+<p>Note that the kill conditions are written to be falsifiable <em>before</em> the
+evidence exists — which is what makes them kill conditions rather than
+post-hoc commentary.</p>
+
+</section>
+<section id="c10">
+  <div class="cell-head"><span class="cell-num">10</span><h2>10. Section D.1 — effective sample size</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — establish what a cross-sectional evaluation actually has to
+spend.</li>
+<li><strong>Shows</strong> — that the row count and the decision count differ by more
+than an order of magnitude, because folds are cut on the session
+timeline while the strategy acts only at month-ends.</li>
+<li><strong>Outcome</strong> — 4,529 sessions, <strong>216 decision dates</strong>, 77 eligible funds
+per decision.</li>
+</ul>
+<pre><code class="language-text">Sessions 4,529 | decision dates 216 | eligible funds per decision 77
+</code></pre>
+<p>216 is the number that matters: eighteen years of month-ends. Folds are
+cut on the session timeline — the same one <code>04_model_based_features</code>
+hands the splitter — but a monthly strategy only gets 216 chances to act,
+and a walk-forward has to divide <em>those</em> among its folds.</p>
+
+</section>
+<section id="c11">
+  <div class="cell-head"><span class="cell-num">11</span><h2>11. Section D.2 — fold demonstration</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — generate the declared folds and confirm they fit the
+development window.</li>
+<li><strong>Shows</strong> — that a purge gap the width of the label horizon sits between
+each training and validation block, and that no fold reaches into the
+holdout.</li>
+<li><strong>Outcome</strong> — 8 folds, last validation ending 2023-11-29, both asserted
+rather than eyeballed.</li>
+</ul>
+<pre><code class="language-python"><span class="n">splits</span> <span class="o">=</span> <span class="n">generate_cv_splits</span><span class="p">(</span>
+    <span class="n">research</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;timestamp&quot;</span><span class="p">),</span>
+    <span class="n">case_study_id</span><span class="o">=</span><span class="n">CASE_STUDY_ID</span><span class="p">,</span>
+    <span class="n">label_buffer</span><span class="o">=</span><span class="n">LABEL_BUFFER</span><span class="p">,</span>
+    <span class="n">date_col</span><span class="o">=</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">last_val</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">s</span><span class="p">[</span><span class="s2">&quot;val_end&quot;</span><span class="p">]</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">splits</span><span class="p">)</span>
+<span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">splits</span><span class="p">)</span> <span class="o">==</span> <span class="n">SETUP</span><span class="p">[</span><span class="s2">&quot;evaluation&quot;</span><span class="p">][</span><span class="s2">&quot;n_splits&quot;</span><span class="p">],</span> <span class="s2">&quot;fold count differs from setup.yaml&quot;</span>
+<span class="k">assert</span> <span class="n">last_val</span> <span class="o">&lt;</span> <span class="n">np</span><span class="o">.</span><span class="n">datetime64</span><span class="p">(</span><span class="n">HOLDOUT_START</span><span class="p">),</span> <span class="s2">&quot;a fold reaches into the holdout&quot;</span>
+</code></pre>
+<p>The two assertions check different failures: the first that the splitter
+produced the fold count <code>setup.yaml</code> declares, the second that the seal
+actually held. Neither is a print statement, so neither can be skimmed
+past.</p>
+<p><strong>The figure draws the splitter's own output.</strong> <code>fold_timeline</code> takes the
+boundary dictionaries <code>generate_cv_splits</code> returned and draws those,
+rather than re-deriving folds from a timeline. Its docstring records why
+this matters concretely: <code>plot_cv_folds</code> re-splits whatever timeline it is
+handed, and on a timeline truncated at the last validation date it
+disagreed with the reported folds <strong>by eleven days</strong>. Drawing the
+boundaries themselves means the figure and the folds cannot come apart.</p>
+<p>The purge gap is drawn as the span between <code>train_end</code> and <code>val_start</code>,
+so it is visible as a real interval rather than implied.</p>
+
+</section>
+<section id="c12">
+  <div class="cell-head"><span class="cell-num">12</span><h2>12. Section E — the eligibility artifact</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — write the one thing this notebook hands downstream.</li>
+<li><strong>Shows</strong> — that the artifact is a fund-year membership table, not a
+filtered price panel.</li>
+<li><strong>Outcome</strong> — <code>eligibility.csv</code>, <strong>1,670 fund-year pairs</strong>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">eligibility</span><span class="o">.</span><span class="n">write_csv</span><span class="p">(</span><span class="n">CASE_DIR</span> <span class="o">/</span> <span class="s2">&quot;eligibility.csv&quot;</span><span class="p">)</span>
+</code></pre>
+<p><code>02_labels</code> and <code>03_financial_features</code> semi-join on this table, so a
+fund contributes rows only in years it cleared the floor. It covers the
+sealed years too — as section 5 explains, prior-year volume is all the
+rule ever reads, so extending it across the holdout introduces no
+information from inside the holdout.</p>
+<p>Two columns only: <code>symbol</code> and <code>eligible_year</code>. The table is a claim about
+membership, and it deliberately carries no prices, so a downstream stage
+cannot accidentally read market data through it.</p>
+
+</section>
+<section id="c13">
+  <div class="cell-head"><span class="cell-num">13</span><h2>13. Section F — findings vs <code>setup.yaml</code></h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — put each knob next to the evidence that supports it and the
+condition that would revise it.</li>
+<li><strong>Shows</strong> — the failure that would force each parameter to change,
+written down before it happens.</li>
+<li><strong>Outcome</strong> — a four-row table, plus a printed reconciliation.</li>
+</ul>
+<pre><code class="language-text">universe.n_assets 100, eligible per decision date 0 to 96, under the floor on 12 of 216 dates
+decision.cadence monthly_month_end | labels.primary fwd_ret_21d
+evaluation.n_splits 8, generated 8, last validation ends 2023-11-29, holdout untouched
+</code></pre>
+<p><strong>The <code>0</code> is not a defect.</strong> Breadth starts at zero in the first year,
+because no fund yet has a prior year to be admitted on — the <code>year + 1</code>
+rule from section 5 showing its edge. All 12 of the 216 dates below the
+floor of 20 fall in that first year.</p>
+<p><code>n_splits 8, generated 8</code> is the reconciliation that matters: the number
+declared and the number produced, printed side by side rather than
+assumed equal.</p>
+
+</section>
+<section id="c14">
+  <div class="cell-head"><span class="cell-num">14</span><h2>14. Key takeaways and limitations</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — state the three transferable rules, and the three places this
+analysis is weaker than it looks.</li>
+<li><strong>Shows</strong> — each rule as a failure avoided, not a technique applied.</li>
+<li><strong>Outcome</strong> — the handoff to <code>02_labels</code>.</li>
+</ul>
+<p>The three rules: decide membership on prior-year information and count it
+on the decision date; convert a per-share cost into bps before comparing
+it to a return, and scale each move by its own fund's round trip; compute
+a panel autocorrelation inside each entity, never across the stacked
+panel.</p>
+<p>The limitations are stated by the notebook and worth carrying forward:</p>
+<ul>
+<li><strong>The universe list itself is survivorship-biased.</strong> The funds in
+<code>universe.assets</code> were chosen knowing which of them still trade, so the
+point-in-time filter removes a bias <em>inside</em> the list and not the bias
+<em>in</em> the list. This is the sharpest of the three — the machinery in
+section 5 is careful, and it cannot fix the selection that preceded it.</li>
+<li><strong>Adjusted closes distort both inputs.</strong> <code>close</code> is adjusted for splits
+and distributions, so early prices sit below what a fund traded at:
+dollar volume is understated there, and the round trip — dollars per
+share over a price — is overstated. The half-spread is by tier, and the
+floor is not inflation-adjusted.</li>
+<li><strong>Eligibility is annual while decisions are monthly.</strong> A fund turning
+illiquid in March keeps its place until January.</li>
+</ul>
+<p><strong>Next</strong>: <code>02_labels</code> builds labels at the declared horizons on this
+development window, and semi-joins the eligibility table written here.</p>
+
+</section>
+  </article>
+</div>
+
+</body>
+</html>
