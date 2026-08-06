@@ -1,0 +1,1510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04_model_based_features.ipynb — cell-by-cell walkthrough</title>
+<style>
+
+  :root {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+
+    --serif: "Iowan Old Style", Charter, "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101820;
+      --surface: #16212b;
+      --ink: #dce5ec;
+      --ink-soft: #9dadba;
+      --ink-faint: #6f818e;
+      --rule: #27343f;
+      --rule-soft: #1e2a34;
+      --accent: #6ec2e6;
+      --accent-soft: #163140;
+      --alert: #e5a071;
+      --alert-soft: #2c1f16;
+      --alert-rule: #5c3d26;
+      --code-bg: #1a2530;
+      --code-ink: #c6d5e0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101820;
+    --surface: #16212b;
+    --ink: #dce5ec;
+    --ink-soft: #9dadba;
+    --ink-faint: #6f818e;
+    --rule: #27343f;
+    --rule-soft: #1e2a34;
+    --accent: #6ec2e6;
+    --accent-soft: #163140;
+    --alert: #e5a071;
+    --alert-soft: #2c1f16;
+    --alert-rule: #5c3d26;
+    --code-bg: #1a2530;
+    --code-ink: #c6d5e0;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #16202a;
+    --ink-soft: #4a5966;
+    --ink-faint: #7b8892;
+    --rule: #dde3e8;
+    --rule-soft: #eaeef1;
+    --accent: #16607f;
+    --accent-soft: #e7f0f4;
+    --alert: #9c3d12;
+    --alert-soft: #fbeee5;
+    --alert-rule: #e6c3a8;
+    --code-bg: #f1f4f6;
+    --code-ink: #1d3040;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 6rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  @media (min-width: 1020px) {
+    .shell {
+      grid-template-columns: 210px minmax(0, 1fr);
+      gap: 3.5rem;
+      padding-top: 4.5rem;
+    }
+    .toc { position: sticky; top: 2rem; align-self: start; }
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { grid-column: 1 / -1; border-bottom: 2px solid var(--ink); padding-bottom: 1.5rem; }
+
+  .eyebrow {
+    font-family: var(--sans);
+    font-size: 0.7rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 0.9rem;
+  }
+
+  .masthead h1 {
+    font-family: var(--sans);
+    font-size: clamp(1.9rem, 4.5vw, 2.7rem);
+    line-height: 1.1;
+    letter-spacing: -0.028em;
+    font-weight: 700;
+    text-wrap: balance;
+    margin-bottom: 0.6rem;
+  }
+
+  .masthead h1 code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: none;
+    padding: 0;
+    color: inherit;
+  }
+
+  .standfirst {
+    color: var(--ink-soft);
+    max-width: 62ch;
+    font-size: 1.05rem;
+  }
+
+  .masthead-meta {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--ink-faint);
+    margin-top: 1.1rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.4rem;
+  }
+
+  /* ---------- table of contents ---------- */
+
+  .toc h2 {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 0.7rem;
+  }
+
+  .toc ol { list-style: none; display: flex; flex-direction: column; gap: 0.05rem; }
+
+  .toc a {
+    display: grid;
+    grid-template-columns: 1.6rem 1fr;
+    gap: 0.3rem;
+    font-family: var(--sans);
+    font-size: 0.79rem;
+    line-height: 1.35;
+    color: var(--ink-soft);
+    text-decoration: none;
+    padding: 0.3rem 0.3rem 0.3rem 0;
+    border-radius: 3px;
+  }
+
+  .toc a:hover { color: var(--accent); background: var(--accent-soft); }
+  .toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .toc .n { font-variant-numeric: tabular-nums; color: var(--ink-faint); }
+  .toc a.flag .n, .toc a.flag { color: var(--alert); }
+  .toc a.flag:hover { background: var(--alert-soft); }
+
+  /* ---------- article ---------- */
+
+  article { min-width: 0; display: flex; flex-direction: column; gap: 2.75rem; }
+
+  section { scroll-margin-top: 1.5rem; }
+
+  .cell-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 0.55rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .cell-num {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 0.16rem 0.45rem;
+    border-radius: 3px;
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cell-head h2 {
+    font-family: var(--sans);
+    font-size: 1.42rem;
+    letter-spacing: -0.02em;
+    font-weight: 650;
+    line-height: 1.25;
+    text-wrap: balance;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-size: 1.02rem;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    margin: 1.9rem 0 0.7rem;
+    text-wrap: balance;
+  }
+
+  h4 {
+    font-family: var(--sans);
+    font-size: 0.73rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 600;
+    margin: 1.6rem 0 0.6rem;
+  }
+
+  p { max-width: 66ch; margin-bottom: 0.95rem; }
+  p:last-child { margin-bottom: 0; }
+
+  ul, ol.prose-list { max-width: 64ch; padding-left: 1.15rem; margin-bottom: 0.95rem; }
+  li { margin-bottom: 0.45rem; }
+  li::marker { color: var(--ink-faint); }
+
+  strong { font-weight: 700; }
+  em { font-style: italic; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.855em;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    padding: 0.1em 0.32em;
+    border-radius: 3px;
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--rule-soft);
+    border-left: 2px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.9rem 1.1rem;
+    overflow-x: auto;
+    margin-bottom: 1.1rem;
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
+
+  pre code { background: none; padding: 0; font-size: 1em; color: var(--code-ink); }
+
+  blockquote {
+    border-left: 2px solid var(--rule);
+    padding-left: 1.1rem;
+    color: var(--ink-soft);
+    font-style: italic;
+    max-width: 62ch;
+    margin-bottom: 1rem;
+  }
+
+  /* ---------- tables ---------- */
+
+  .table-wrap { overflow-x: auto; margin-bottom: 1.1rem; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 30rem;
+    font-family: var(--sans);
+    font-size: 0.83rem;
+  }
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 0.69rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--ink-soft);
+    padding: 0.45rem 0.8rem 0.45rem 0;
+  }
+
+  td {
+    padding: 0.5rem 0.8rem 0.5rem 0;
+    border-bottom: 1px solid var(--rule-soft);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+
+  td:first-child { color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.flagged td { color: var(--alert); }
+
+  /* ---------- callouts ---------- */
+
+  .alert {
+    background: var(--alert-soft);
+    border: 1px solid var(--alert-rule);
+    border-left: 3px solid var(--alert);
+    border-radius: 4px;
+    padding: 1.4rem 1.5rem;
+  }
+
+  .alert-label {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--alert);
+    margin-bottom: 0.5rem;
+  }
+
+  .alert h2 {
+    font-family: var(--sans);
+    font-size: 1.18rem;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
+    margin-bottom: 0.9rem;
+    text-wrap: balance;
+  }
+
+  .alert .status {
+    font-family: var(--sans);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--alert);
+    margin-bottom: 1rem;
+    max-width: 66ch;
+  }
+
+  .alert pre { background: var(--surface); border-left-color: var(--alert); }
+  .alert code { background: var(--surface); }
+
+  .alert-inline {
+    background: var(--alert-soft);
+    border-left: 3px solid var(--alert);
+    border-radius: 0 4px 4px 0;
+    padding: 1rem 1.2rem;
+    margin: 1.3rem 0;
+  }
+
+  .alert-inline p { max-width: 62ch; margin-bottom: 0; font-size: 0.94rem; }
+  .alert-inline code { background: var(--surface); }
+
+  /* ---------- misc ---------- */
+
+  .result {
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    padding: 0.75rem 1rem;
+    max-width: 64ch;
+    margin-bottom: 1.1rem;
+    color: var(--ink);
+  }
+
+  .result .k {
+    font-family: var(--sans);
+    font-size: 0.67rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 600;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 0.5rem 0;
+  }
+
+  .closing {
+    border-top: 2px solid var(--ink);
+    padding-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* Aim / Shows / Outcome brief opening each section */
+  ul.brief {
+    list-style: none;
+    margin: 0 0 1.6rem;
+    padding: 0.9rem 0 0.9rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    border-radius: 0 4px 4px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  ul.brief li {
+    font-family: var(--sans);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0;
+    padding-right: 1.1rem;
+  }
+
+  ul.brief li strong {
+    font-size: 0.68rem;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    font-weight: 650;
+    color: var(--accent);
+    display: inline-block;
+    min-width: 5.5rem;
+  }
+
+  section.alert ul.brief {
+    border-left-color: var(--alert);
+    background: var(--alert-soft);
+  }
+
+  section.alert ul.brief li strong { color: var(--alert); }
+
+/* syntax highlighting */
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+@media (prefers-color-scheme: dark) {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="dark"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #49483e }
+pre code { background: #272822; color: #F8F8F2 }
+pre code .c { color: #959077 } /* Comment */
+pre code .err { color: #ED007E; background-color: #1E0010 } /* Error */
+pre code .esc { color: #F8F8F2 } /* Escape */
+pre code .g { color: #F8F8F2 } /* Generic */
+pre code .k { color: #66D9EF } /* Keyword */
+pre code .l { color: #AE81FF } /* Literal */
+pre code .n { color: #F8F8F2 } /* Name */
+pre code .o { color: #FF4689 } /* Operator */
+pre code .x { color: #F8F8F2 } /* Other */
+pre code .p { color: #F8F8F2 } /* Punctuation */
+pre code .ch { color: #959077 } /* Comment.Hashbang */
+pre code .cm { color: #959077 } /* Comment.Multiline */
+pre code .cp { color: #959077 } /* Comment.Preproc */
+pre code .cpf { color: #959077 } /* Comment.PreprocFile */
+pre code .c1 { color: #959077 } /* Comment.Single */
+pre code .cs { color: #959077 } /* Comment.Special */
+pre code .gd { color: #FF4689 } /* Generic.Deleted */
+pre code .ge { color: #F8F8F2; font-style: italic } /* Generic.Emph */
+pre code .ges { color: #F8F8F2; font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F8F8F2 } /* Generic.Error */
+pre code .gh { color: #F8F8F2 } /* Generic.Heading */
+pre code .gi { color: #A6E22E } /* Generic.Inserted */
+pre code .go { color: #66D9EF } /* Generic.Output */
+pre code .gp { color: #FF4689; font-weight: bold } /* Generic.Prompt */
+pre code .gs { color: #F8F8F2; font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #959077 } /* Generic.Subheading */
+pre code .gt { color: #F8F8F2 } /* Generic.Traceback */
+pre code .kc { color: #66D9EF } /* Keyword.Constant */
+pre code .kd { color: #66D9EF } /* Keyword.Declaration */
+pre code .kn { color: #FF4689 } /* Keyword.Namespace */
+pre code .kp { color: #66D9EF } /* Keyword.Pseudo */
+pre code .kr { color: #66D9EF } /* Keyword.Reserved */
+pre code .kt { color: #66D9EF } /* Keyword.Type */
+pre code .ld { color: #E6DB74 } /* Literal.Date */
+pre code .m { color: #AE81FF } /* Literal.Number */
+pre code .s { color: #E6DB74 } /* Literal.String */
+pre code .na { color: #A6E22E } /* Name.Attribute */
+pre code .nb { color: #F8F8F2 } /* Name.Builtin */
+pre code .nc { color: #A6E22E } /* Name.Class */
+pre code .no { color: #66D9EF } /* Name.Constant */
+pre code .nd { color: #A6E22E } /* Name.Decorator */
+pre code .ni { color: #F8F8F2 } /* Name.Entity */
+pre code .ne { color: #A6E22E } /* Name.Exception */
+pre code .nf { color: #A6E22E } /* Name.Function */
+pre code .nl { color: #F8F8F2 } /* Name.Label */
+pre code .nn { color: #F8F8F2 } /* Name.Namespace */
+pre code .nx { color: #A6E22E } /* Name.Other */
+pre code .py { color: #F8F8F2 } /* Name.Property */
+pre code .nt { color: #FF4689 } /* Name.Tag */
+pre code .nv { color: #F8F8F2 } /* Name.Variable */
+pre code .ow { color: #FF4689 } /* Operator.Word */
+pre code .pm { color: #F8F8F2 } /* Punctuation.Marker */
+pre code .w { color: #F8F8F2 } /* Text.Whitespace */
+pre code .mb { color: #AE81FF } /* Literal.Number.Bin */
+pre code .mf { color: #AE81FF } /* Literal.Number.Float */
+pre code .mh { color: #AE81FF } /* Literal.Number.Hex */
+pre code .mi { color: #AE81FF } /* Literal.Number.Integer */
+pre code .mo { color: #AE81FF } /* Literal.Number.Oct */
+pre code .sa { color: #E6DB74 } /* Literal.String.Affix */
+pre code .sb { color: #E6DB74 } /* Literal.String.Backtick */
+pre code .sc { color: #E6DB74 } /* Literal.String.Char */
+pre code .dl { color: #E6DB74 } /* Literal.String.Delimiter */
+pre code .sd { color: #E6DB74 } /* Literal.String.Doc */
+pre code .s2 { color: #E6DB74 } /* Literal.String.Double */
+pre code .se { color: #AE81FF } /* Literal.String.Escape */
+pre code .sh { color: #E6DB74 } /* Literal.String.Heredoc */
+pre code .si { color: #E6DB74 } /* Literal.String.Interpol */
+pre code .sx { color: #E6DB74 } /* Literal.String.Other */
+pre code .sr { color: #E6DB74 } /* Literal.String.Regex */
+pre code .s1 { color: #E6DB74 } /* Literal.String.Single */
+pre code .ss { color: #E6DB74 } /* Literal.String.Symbol */
+pre code .bp { color: #F8F8F2 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #A6E22E } /* Name.Function.Magic */
+pre code .vc { color: #F8F8F2 } /* Name.Variable.Class */
+pre code .vg { color: #F8F8F2 } /* Name.Variable.Global */
+pre code .vi { color: #F8F8F2 } /* Name.Variable.Instance */
+pre code .vm { color: #F8F8F2 } /* Name.Variable.Magic */
+pre code .il { color: #AE81FF } /* Literal.Number.Integer.Long */
+}
+:root[data-theme="light"] {
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+pre code .hll { background-color: #ffffcc }
+pre code { background: #f0f0f0; }
+pre code .c { color: #60A0B0; font-style: italic } /* Comment */
+pre code .err { border: 1px solid #F00 } /* Error */
+pre code .k { color: #007020; font-weight: bold } /* Keyword */
+pre code .o { color: #666 } /* Operator */
+pre code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+pre code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+pre code .cp { color: #007020 } /* Comment.Preproc */
+pre code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+pre code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+pre code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+pre code .gd { color: #A00000 } /* Generic.Deleted */
+pre code .ge { font-style: italic } /* Generic.Emph */
+pre code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+pre code .gr { color: #F00 } /* Generic.Error */
+pre code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+pre code .gi { color: #00A000 } /* Generic.Inserted */
+pre code .go { color: #888 } /* Generic.Output */
+pre code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+pre code .gs { font-weight: bold } /* Generic.Strong */
+pre code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+pre code .gt { color: #04D } /* Generic.Traceback */
+pre code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+pre code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+pre code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+pre code .kp { color: #007020 } /* Keyword.Pseudo */
+pre code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+pre code .kt { color: #902000 } /* Keyword.Type */
+pre code .m { color: #40A070 } /* Literal.Number */
+pre code .s { color: #4070A0 } /* Literal.String */
+pre code .na { color: #4070A0 } /* Name.Attribute */
+pre code .nb { color: #007020 } /* Name.Builtin */
+pre code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+pre code .no { color: #60ADD5 } /* Name.Constant */
+pre code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+pre code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+pre code .ne { color: #007020 } /* Name.Exception */
+pre code .nf { color: #06287E } /* Name.Function */
+pre code .nl { color: #002070; font-weight: bold } /* Name.Label */
+pre code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+pre code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+pre code .nv { color: #BB60D5 } /* Name.Variable */
+pre code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+pre code .w { color: #BBB } /* Text.Whitespace */
+pre code .mb { color: #40A070 } /* Literal.Number.Bin */
+pre code .mf { color: #40A070 } /* Literal.Number.Float */
+pre code .mh { color: #40A070 } /* Literal.Number.Hex */
+pre code .mi { color: #40A070 } /* Literal.Number.Integer */
+pre code .mo { color: #40A070 } /* Literal.Number.Oct */
+pre code .sa { color: #4070A0 } /* Literal.String.Affix */
+pre code .sb { color: #4070A0 } /* Literal.String.Backtick */
+pre code .sc { color: #4070A0 } /* Literal.String.Char */
+pre code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+pre code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+pre code .s2 { color: #4070A0 } /* Literal.String.Double */
+pre code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+pre code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+pre code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+pre code .sx { color: #C65D09 } /* Literal.String.Other */
+pre code .sr { color: #235388 } /* Literal.String.Regex */
+pre code .s1 { color: #4070A0 } /* Literal.String.Single */
+pre code .ss { color: #517918 } /* Literal.String.Symbol */
+pre code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+pre code .fm { color: #06287E } /* Name.Function.Magic */
+pre code .vc { color: #BB60D5 } /* Name.Variable.Class */
+pre code .vg { color: #BB60D5 } /* Name.Variable.Global */
+pre code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+pre code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+pre code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+}
+
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="masthead">
+    <div class="eyebrow">case_studies · etfs</div>
+    <h1><code>04_model_based_features.ipynb</code> — cell-by-cell walkthrough</h1>
+    <p class="standfirst">Companion notes for the ETF case study's model-based feature stage. The notebook itself explains <em>why</em> each section exists; this document explains <em>what each cell does mechanically</em>, which functions it calls, and where the values come from.</p>
+    <div class="masthead-meta">
+      <span>case_studies/etfs/04_model_based_features_walkthrough.md</span>
+      <span>generated by tools/build_docs.py &mdash; do not edit</span>
+    </div>
+  </header>
+
+  <nav class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a class="flag" href="#c0"><span class="n">0</span><span>OPEN ISSUES — three, none blocking ⚠</span></a></li>
+      <li><a href="#c1"><span class="n">1</span><span>0. Imports and helpers</span></a></li>
+      <li><a href="#c2"><span class="n">2</span><span>1. Run parameters</span></a></li>
+      <li><a href="#c3"><span class="n">3</span><span>2. Prices</span></a></li>
+      <li><a href="#c4"><span class="n">4</span><span>3. Fold setup and the synthetic holdout fold</span></a></li>
+      <li><a href="#c5"><span class="n">5</span><span>4. Part 1 — why one HMM on SPY</span></a></li>
+      <li><a href="#c6"><span class="n">6</span><span>5. HMM fitting — seeding, restarts and state ordering</span></a></li>
+      <li><a href="#c7"><span class="n">7</span><span>6. Filtered probabilities — the forward algorithm, written out</span></a></li>
+      <li><a href="#c8"><span class="n">8</span><span>7. Deriving the three regime features</span></a></li>
+      <li><a href="#c9"><span class="n">9</span><span>8. The illustrative full-sample fit</span></a></li>
+      <li><a href="#c10"><span class="n">10</span><span>9. The per-fold HMM loop</span></a></li>
+      <li><a href="#c11"><span class="n">11</span><span>10. Part 2 — fractional differencing at fixed d</span></a></li>
+      <li><a href="#c12"><span class="n">12</span><span>11. The per-fold FFD loop</span></a></li>
+      <li><a href="#c13"><span class="n">13</span><span>12. Part 3 — GARCH fit-then-filter</span></a></li>
+      <li><a href="#c14"><span class="n">14</span><span>13. The per-fold GARCH loop</span></a></li>
+      <li><a href="#c15"><span class="n">15</span><span>14. Part 4 — combine and broadcast</span></a></li>
+      <li><a href="#c16"><span class="n">16</span><span>15. Quality check and per-fold stability</span></a></li>
+      <li><a href="#c17"><span class="n">17</span><span>16. Save artifacts</span></a></li>
+      <li><a href="#c18"><span class="n">18</span><span>17. Incremental evaluation</span></a></li>
+      <li><a href="#c19"><span class="n">19</span><span>18. Key takeaways, and what is not checked</span></a></li>
+    </ol>
+  </nav>
+
+  <article>
+<p>This stage differs from <code>03</code> in one structural way that governs
+everything else: its features come from <strong>fitted models</strong>, so avoiding
+look-ahead is no longer a property of the arithmetic but of <em>where the
+parameters came from</em>. Every model is refit per CV fold on that fold's
+training window, and the output carries a <code>fold</code> column.</p>
+<hr />
+
+<section id="c0" class="alert">
+  <div class="cell-head"><span class="cell-num">0</span><h2>⚠️ OPEN ISSUES — three, none blocking</h2></div>
+<p><strong>Status: reported only. Nothing has been changed in the notebook.</strong></p>
+<p>Documented here rather than fixed, because each is a judgement call about
+how strict this stage should be.</p>
+<h3>1. The per-asset IC t-statistic ignores label overlap</h3>
+<p>Date-level features go through <code>robust_ic</code>, which uses a <strong>stationary
+bootstrap</strong> and so accounts for temporal dependence. The per-asset
+(GARCH) path does not — it computes the t-statistic by hand:</p>
+<pre><code class="language-python"><span class="s2">&quot;t_stat&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nanmean</span><span class="p">(</span><span class="n">ics</span><span class="p">)</span> <span class="o">/</span> <span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">nanstd</span><span class="p">(</span><span class="n">ics</span><span class="p">)</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ics</span><span class="p">)))),</span>
+<span class="s2">&quot;p_value&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+</code></pre>
+<p>That treats every daily cross-sectional IC as independent evidence. The
+label is <code>fwd_ret_21d</code>, so consecutive dates share 20 of their 21 forward
+sessions. <strong><code>02_labels</code> measured exactly this effect on this data</strong>: the
+same IC series read a naive t of 3.77 and a HAC-corrected t of 1.08, and
+that walkthrough's section G exists to establish the second number as the
+bar.</p>
+<p><code>garch_cond_vol</code> reports <strong>t = 8.42</strong> with a null p-value. That is the
+naive statistic. Its true magnitude under an overlap-aware standard error
+is materially smaller — I have not computed it here, because doing so
+means refitting GARCH on 100 ETFs across 9 folds, but the direction is not
+in question and the precedent is one notebook upstream.</p>
+<p>The two IC paths in the same table therefore carry different uncertainty
+semantics. The plotting cell is aware of this and says so, declining to
+draw error bars for that reason. The t-column has no such guard.</p>
+<h3>2. There are no assertions</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>notebook</th>
+<th><code>assert</code> statements</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>01_feasibility_analysis</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>02_labels</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>03_financial_features</code></td>
+<td>1, plus <code>warmup_audit</code> and <code>assert_values_agree</code></td>
+</tr>
+<tr>
+<td><strong><code>04_model_based_features</code></strong></td>
+<td><strong>0</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>The &quot;Quality Check&quot; section prints coverage, means and standard
+deviations; nothing fails. This matters more here than it would elsewhere,
+because this stage's central claims are precisely the kind that fail
+silently and still produce plausible columns:</p>
+<ul>
+<li>that probabilities are filtered rather than smoothed,</li>
+<li>that GARCH parameters came from training only,</li>
+<li>that no fold's features were influenced by its own validation window.</li>
+</ul>
+<p><code>03</code> has a directly applicable pattern in <code>assert_values_agree</code> — rebuild
+on a truncated panel and compare. An analogue here would be: for a given
+fold, extending the data past <code>val_end</code> must not change any feature value
+inside the window.</p>
+<h3>3. <code>outer_coalesce</code> is deprecated</h3>
+<p>Used twice, for the FFD symbol joins and the date-level combine:</p>
+<pre><code class="language-python"><span class="n">ffd_fold</span> <span class="o">=</span> <span class="n">ffd_fold</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;outer_coalesce&quot;</span><span class="p">)</span>
+</code></pre>
+<p>Polars deprecated this in <strong>0.20.29</strong> in favour of
+<code>how=&quot;full&quot;, coalesce=True</code>. It still works in the pinned 1.42.1, but
+emits a <code>DeprecationWarning</code> that <code>warnings.filterwarnings(&quot;ignore&quot;)</code> at
+the top of the notebook suppresses. It will break on a future upgrade,
+silently until it does.</p>
+<hr />
+<p><strong>Contents</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Cell</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>Imports</td>
+<td><code>hmmlearn</code>, <code>arch</code>, <code>ffdiff</code>, <code>robust_ic</code></td>
+</tr>
+<tr>
+<td>1</td>
+<td>Parameters</td>
+<td>Restarts, GARCH minimum, symbol cap</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Prices</td>
+<td>470,662 rows, 100 assets</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Fold setup</td>
+<td>8 CV folds plus a synthetic holdout fold</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Part 1</td>
+<td>Why one HMM on SPY rather than 100</td>
+</tr>
+<tr>
+<td>5</td>
+<td>HMM fitting</td>
+<td>K-means seeding, restarts, state ordering</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Filtered probs</td>
+<td>The forward algorithm, written out</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Regime features</td>
+<td>Stress probability, transition, duration</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Illustrative fit</td>
+<td>Full-sample HMM, for the figure only</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Per-fold HMM</td>
+<td>The loop that produces saved features</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Part 2</td>
+<td>Fractional differencing at fixed <code>d</code></td>
+</tr>
+<tr>
+<td>11</td>
+<td>Per-fold FFD</td>
+<td>Ten reference ETFs per fold window</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Part 3</td>
+<td>GARCH fit-then-filter</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Per-fold GARCH</td>
+<td>100 ETFs × 9 folds</td>
+</tr>
+<tr>
+<td>14</td>
+<td>Part 4</td>
+<td>Broadcast and join into a per-fold panel</td>
+</tr>
+<tr>
+<td>15</td>
+<td>Quality check</td>
+<td>Coverage and per-fold stability</td>
+</tr>
+<tr>
+<td>16</td>
+<td>Save</td>
+<td><code>features/model_based.parquet</code></td>
+</tr>
+<tr>
+<td>17</td>
+<td>Evaluation</td>
+<td>Validation periods only; two IC paths</td>
+</tr>
+<tr>
+<td>18</td>
+<td>Takeaways</td>
+<td>Eight points, and what is not checked</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+
+</section>
+<section id="c1">
+  <div class="cell-head"><span class="cell-num">1</span><h2>0. Imports and helpers</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — pull in the three model families and the evaluation helper.</li>
+<li><strong>Shows</strong> — that each family comes from an established library rather
+than being reimplemented: <code>hmmlearn</code> for the HMM, <code>arch</code> for GARCH,
+<code>ml4t.engineer</code> for fractional differencing.</li>
+<li><strong>Outcome</strong> — the modelling imports, plus <code>generate_cv_splits</code> and
+<code>robust_ic</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="kn">from</span><span class="w"> </span><span class="nn">arch</span><span class="w"> </span><span class="kn">import</span> <span class="n">arch_model</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">hmmlearn.hmm</span><span class="w"> </span><span class="kn">import</span> <span class="n">GaussianHMM</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ml4t.diagnostic.evaluation.stats</span><span class="w"> </span><span class="kn">import</span> <span class="n">robust_ic</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ml4t.engineer.features.fdiff</span><span class="w"> </span><span class="kn">import</span> <span class="n">ffdiff</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sklearn.cluster</span><span class="w"> </span><span class="kn">import</span> <span class="n">KMeans</span>
+</code></pre>
+<p><code>warnings.filterwarnings(&quot;ignore&quot;)</code> is set here, which is worth noting
+because it is what hides the deprecation in open issue 3 and the
+convergence warnings from 900 GARCH fits.</p>
+
+</section>
+<section id="c2">
+  <div class="cell-head"><span class="cell-num">2</span><h2>1. Run parameters</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — hold the knobs papermill overrides for CI.</li>
+<li><strong>Shows</strong> — the cost controls: restart count and a minimum training
+length below which GARCH is not attempted.</li>
+<li><strong>Outcome</strong> — <code>N_RESTARTS = 10</code>, <code>GARCH_MIN_OBS = 504</code>,
+<code>MAX_SYMBOLS = 0</code> meaning all.</li>
+</ul>
+<pre><code class="language-python"><span class="n">N_RESTARTS</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">GARCH_MIN_OBS</span> <span class="o">=</span> <span class="mi">504</span>   <span class="c1"># ~2 years</span>
+<span class="n">MAX_SYMBOLS</span> <span class="o">=</span> <span class="mi">0</span>       <span class="c1"># 0 = all symbols</span>
+</code></pre>
+<p><code>GARCH_MIN_OBS = 504</code> is the reason some folds fit fewer than 100 ETFs —
+see section 13. <code>MAX_SYMBOLS = 0</code> uses a sentinel rather than <code>None</code>,
+guarded by <code>if MAX_SYMBOLS &gt; 0</code>, which differs from <code>03</code>'s convention of
+<code>None</code> for &quot;unset&quot;.</p>
+
+</section>
+<section id="c3">
+  <div class="cell-head"><span class="cell-num">3</span><h2>2. Prices</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — load the full price panel.</li>
+<li><strong>Shows</strong> — that this stage reads raw prices, not <code>03</code>'s feature matrix.</li>
+<li><strong>Outcome</strong> — 470,662 rows, 100 assets.</li>
+</ul>
+<p>Note the stage reads <code>load_etfs()</code> directly and does <strong>not</strong> join
+<code>financial.parquet</code>. The two feature sets stay separate artifacts and are
+combined downstream, which is why this notebook's output has its own
+<code>fold</code> column rather than extending <code>03</code>'s matrix.</p>
+
+</section>
+<section id="c4">
+  <div class="cell-head"><span class="cell-num">4</span><h2>3. Fold setup and the synthetic holdout fold</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — obtain the walk-forward folds, then add one more covering the
+sealed period.</li>
+<li><strong>Shows</strong> — that the holdout needs features too, and they must come from
+a model that never saw it.</li>
+<li><strong>Outcome</strong> — 8 CV folds plus fold 8, the holdout: train
+2013-01-03..2024-01-01, validate 2024-01-01..2025-12-31.</li>
+</ul>
+<pre><code class="language-python"><span class="n">holdout_fold</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;fold&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">cv_splits</span><span class="p">),</span>
+    <span class="s2">&quot;train_start&quot;</span><span class="p">:</span> <span class="n">cv_splits</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;train_start&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;train_end&quot;</span><span class="p">:</span> <span class="n">holdout_start</span><span class="p">,</span>
+    <span class="s2">&quot;val_start&quot;</span><span class="p">:</span> <span class="n">holdout_start</span><span class="p">,</span>
+    <span class="s2">&quot;val_end&quot;</span><span class="p">:</span> <span class="nb">str</span><span class="p">(</span><span class="n">holdout_end</span><span class="p">),</span>
+<span class="p">}</span>
+<span class="n">all_folds</span> <span class="o">=</span> <span class="n">cv_splits</span> <span class="o">+</span> <span class="p">[</span><span class="n">holdout_fold</span><span class="p">]</span>
+</code></pre>
+<p><strong>The folds roll rather than expand.</strong> Fold 0 trains 2013–2022, fold 7
+trains 2006–2015 — each about a ten-year window, most recent first. The
+holdout fold borrows <code>cv_splits[0][&quot;train_start&quot;]</code>, so it inherits the
+same window length rather than training on everything available.</p>
+<p><strong>This fold is constructed by hand, not by the splitter.</strong> That is a
+deliberate extension — <code>generate_cv_splits</code> derives folds inside the
+development window and by design will not produce one that validates on
+the holdout. The seal still holds because <code>train_end</code> is exactly
+<code>holdout_start</code>.</p>
+
+</section>
+<section id="c5">
+  <div class="cell-head"><span class="cell-num">5</span><h2>4. Part 1 — why one HMM on SPY</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — justify a single market-level regime model rather than one per
+ETF.</li>
+<li><strong>Shows</strong> — three reasons: avoiding 100 independently overfitted HMMs,
+regime being a market-level phenomenon, and cross-sectional consistency.</li>
+<li><strong>Outcome</strong> — SPY log returns and 21-day annualized volatility, 5,010
+observations from 2006-02-02.</li>
+</ul>
+<p>The consequence worth carrying forward: <strong>every ETF inherits the same
+regime state on a given date</strong>, so these are date-level features. That
+makes them useless for cross-sectional ranking — a point the evaluation in
+section 17 has to work around, and the reason regime features are called
+<em>conditioning</em> rather than signal.</p>
+
+</section>
+<section id="c6">
+  <div class="cell-head"><span class="cell-num">6</span><h2>5. HMM fitting — seeding, restarts and state ordering</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — fit a 2-state Gaussian HMM reproducibly.</li>
+<li><strong>Shows</strong> — two defences against the standard failure modes of EM: local
+optima, and label switching.</li>
+<li><strong>Outcome</strong> — <code>fit_hmm_kmeans_init</code> and <code>sort_states_by_variance</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">model</span> <span class="o">=</span> <span class="n">GaussianHMM</span><span class="p">(</span><span class="n">n_components</span><span class="o">=</span><span class="n">n_states</span><span class="p">,</span> <span class="n">covariance_type</span><span class="o">=</span><span class="s2">&quot;full&quot;</span><span class="p">,</span>
+                    <span class="n">n_iter</span><span class="o">=</span><span class="mi">200</span><span class="p">,</span> <span class="n">random_state</span><span class="o">=</span><span class="n">random_state</span><span class="p">,</span>
+                    <span class="n">init_params</span><span class="o">=</span><span class="s2">&quot;st&quot;</span><span class="p">)</span>   <span class="c1"># only startprob and transmat</span>
+<span class="n">model</span><span class="o">.</span><span class="n">means_</span> <span class="o">=</span> <span class="n">kmeans</span><span class="o">.</span><span class="n">cluster_centers_</span>
+<span class="n">model</span><span class="o">.</span><span class="n">covars_</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">np</span><span class="o">.</span><span class="n">cov</span><span class="p">(</span><span class="n">X</span><span class="p">[</span><span class="n">kmeans</span><span class="o">.</span><span class="n">labels_</span> <span class="o">==</span> <span class="n">k</span><span class="p">]</span><span class="o">.</span><span class="n">T</span><span class="p">)</span>
+                          <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="n">X</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="o">*</span> <span class="mf">1e-6</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_states</span><span class="p">)])</span>
+</code></pre>
+<p><strong><code>init_params=&quot;st&quot;</code> is the load-bearing argument.</strong> It tells <code>hmmlearn</code>
+to initialise only the start probabilities and transition matrix, leaving
+means and covariances for the caller — which are then set from k-means
+centroids. Without it EM would overwrite the seeding.</p>
+<p>The <code>+ np.eye(...) * 1e-6</code> ridge keeps each covariance positive-definite
+when a cluster is nearly degenerate.</p>
+<p><strong>Label switching is prevented by sorting on variance</strong>, ascending, so
+state 0 is always calm and state 1 always stressed. This matters because
+the model is refit nine times: without a canonical ordering, EM could
+return &quot;stress&quot; as state 0 in one fold and state 1 in the next, and
+<code>regime_prob_stress</code> would flip sign across the fold boundary while
+looking entirely well-formed.</p>
+
+</section>
+<section id="c7">
+  <div class="cell-head"><span class="cell-num">7</span><h2>6. Filtered probabilities — the forward algorithm, written out</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — obtain <code>P(z_t | x_1:t)</code> rather than <code>P(z_t | x_1:T)</code>.</li>
+<li><strong>Shows</strong> — why <code>hmmlearn</code>'s own <code>predict_proba</code> cannot be used.</li>
+<li><strong>Outcome</strong> — <code>compute_filtered_probs</code>, a log-domain forward pass.</li>
+</ul>
+<p>This is the single most important cell in the notebook. <code>predict_proba</code>
+returns <strong>smoothed</strong> probabilities, conditioned on the <em>entire</em> sequence
+including future observations. Using them as features would leak the
+future into every row — not through the parameters, but through the
+inference.</p>
+<pre><code class="language-python"><span class="n">fwdlattice</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">log_startprob</span> <span class="o">+</span> <span class="n">framelogprob</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n_samples</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">j</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_components</span><span class="p">):</span>
+        <span class="n">fwdlattice</span><span class="p">[</span><span class="n">t</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="n">framelogprob</span><span class="p">[</span><span class="n">t</span><span class="p">,</span> <span class="n">j</span><span class="p">]</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">logaddexp</span><span class="o">.</span><span class="n">reduce</span><span class="p">(</span>
+            <span class="n">fwdlattice</span><span class="p">[</span><span class="n">t</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">log_transmat</span><span class="p">[:,</span> <span class="n">j</span><span class="p">])</span>
+</code></pre>
+<p>The forward recursion runs entirely in the log domain and normalises at
+the end, which is what keeps it stable over 3,000-step sequences where the
+raw likelihood underflows. <code>np.log(... + 1e-300)</code> guards a zero transition
+probability.</p>
+
+</section>
+<section id="c8">
+  <div class="cell-head"><span class="cell-num">8</span><h2>7. Deriving the three regime features</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — turn a filtered posterior into features a model can use.</li>
+<li><strong>Shows</strong> — a subtle causality trap in the duration feature, and how it
+is avoided.</li>
+<li><strong>Outcome</strong> — <code>regime_prob_stress</code>, <code>regime_transition</code>,
+<code>regime_log_duration</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">regime_prob_stress</span> <span class="o">=</span> <span class="n">filtered_sorted</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">]</span>
+<span class="n">states_sorted</span> <span class="o">=</span> <span class="p">(</span><span class="n">regime_prob_stress</span> <span class="o">&gt;=</span> <span class="mf">0.5</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">int</span><span class="p">)</span>   <span class="c1"># NOT model.predict</span>
+</code></pre>
+<p><strong>The state used for duration is the argmax of the filtered posterior, not
+the Viterbi path.</strong> The docstring is explicit about why, and it is the
+sharpest observation in the notebook: <code>model.predict</code> returns the <em>global
+MAP sequence</em> over the whole window, so a validation-period state would
+depend on observations after it. <code>regime_log_duration</code> would then encode
+the future in a column that looks like a simple run length.</p>
+<p>Note this makes the notebook internally inconsistent by design: the
+illustrative figure in section 8 <em>does</em> use <code>model.predict</code>, because there
+the point is the retrospective picture rather than a feature.</p>
+<p><code>regime_transition</code> is the absolute one-day change in stress probability,
+with <code>prepend</code> so the first element is zero rather than dropped.
+<code>regime_log_duration</code> is <code>log1p</code> of the run length, compressing a
+heavy-tailed count.</p>
+
+</section>
+<section id="c9">
+  <div class="cell-head"><span class="cell-num">9</span><h2>8. The illustrative full-sample fit</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — draw one regime overlay so a reader can see whether the model
+finds known episodes.</li>
+<li><strong>Shows</strong> — the 2-state split: calm 69.0% of the time at 10.9%
+volatility, stressed 31.0% at 27.3%.</li>
+<li><strong>Outcome</strong> — a figure only. <strong>These features are not saved.</strong></li>
+</ul>
+<pre><code class="language-text">Illustrative full-sample HMM: best log-likelihood = -22419.8
+State 0 (Low-Vol): 69.0% of time, mean ret=0.072%, vol=10.9%
+State 1 (High-Vol): 31.0% of time, mean ret=-0.030%, vol=27.3%
+</code></pre>
+<p><strong>This model is fit on the entire sample, holdout included</strong>, and uses
+Viterbi states for the shading. The notebook disclaims it in bold and the
+disclaimer is accurate — nothing from this fit reaches <code>hmm_features</code>. It
+is worth being aware of anyway: the figure a reader forms their intuition
+from is the one object here that saw the sealed period.</p>
+<p>The state separation is the useful readout: a mean return of +0.072% in
+calm against −0.030% in stress, at two and a half times the volatility, is
+what makes &quot;stress&quot; a meaningful label rather than an arbitrary partition.</p>
+
+</section>
+<section id="c10">
+  <div class="cell-head"><span class="cell-num">10</span><h2>9. The per-fold HMM loop</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — produce the regime features that are actually saved.</li>
+<li><strong>Shows</strong> — fit on training, filter over the whole fold window.</li>
+<li><strong>Outcome</strong> — 25,382 rows across 9 folds.</li>
+</ul>
+<pre><code class="language-python"><span class="n">spy_train</span> <span class="o">=</span> <span class="n">spy_full</span><span class="o">.</span><span class="n">filter</span><span class="p">((</span><span class="n">timestamp</span> <span class="o">&gt;=</span> <span class="n">train_start</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">timestamp</span> <span class="o">&lt;</span> <span class="n">train_end</span><span class="p">))</span>
+<span class="c1"># ... N_RESTARTS fits, keep best log-likelihood ...</span>
+<span class="n">spy_fold</span>  <span class="o">=</span> <span class="n">spy_full</span><span class="o">.</span><span class="n">filter</span><span class="p">((</span><span class="n">timestamp</span> <span class="o">&gt;=</span> <span class="n">train_start</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">timestamp</span> <span class="o">&lt;=</span> <span class="n">val_end</span><span class="p">))</span>
+<span class="n">filtered</span>  <span class="o">=</span> <span class="n">compute_filtered_probs</span><span class="p">(</span><span class="n">best_fold_model</span><span class="p">,</span> <span class="n">X_fold</span><span class="p">)</span>
+</code></pre>
+<p><strong>Note the asymmetric bounds</strong>: training is <code>&lt; train_end</code> while the fold
+window is <code>&lt;= val_end</code>. Parameters come from strictly-before the boundary;
+inference runs through it.</p>
+<p>Per-fold mean stress ranges from 0.233 (fold 6) to 0.391 (fold 3), which
+is the expected variation from ten-year windows covering different
+regimes — fold 3 trains 2009–2019, fold 6 trains 2006–2016.</p>
+<p>The loop <code>continue</code>s on insufficient data or a failed fit, so a fold could
+silently be absent from the output. The printed line is the only signal,
+and nothing downstream asserts that all nine folds are present.</p>
+
+</section>
+<section id="c11">
+  <div class="cell-head"><span class="cell-num">11</span><h2>10. Part 2 — fractional differencing at fixed <code>d</code></h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — obtain stationary series that retain long-range memory.</li>
+<li><strong>Shows</strong> — why <code>d</code> is fixed by asset class rather than estimated.</li>
+<li><strong>Outcome</strong> — ten reference ETFs, <code>d = 0.4</code> for equities and gold,
+<code>0.5</code> for fixed income.</li>
+</ul>
+<p><strong>Fixing <code>d</code> is a look-ahead argument, not a convenience.</strong> Estimating <code>d</code>
+— by minimising an ADF statistic, say — would be a data-dependent
+optimisation, and doing it on the full sample would leak. Pre-specifying
+by asset class makes the transform purely mechanical, so the only reason
+to compute it per fold is warmup, not fitting.</p>
+<p>The ten ETFs span US large/tech/small cap, developed and emerging
+international, long treasuries, gold, real estate, high yield and
+investment grade — a deliberate cross-asset spread rather than the whole
+universe.</p>
+
+</section>
+<section id="c12">
+  <div class="cell-head"><span class="cell-num">12</span><h2>11. The per-fold FFD loop</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — apply the transform inside each fold window.</li>
+<li><strong>Shows</strong> — that warmup is handled per fold so no fold inherits another's
+leading values.</li>
+<li><strong>Outcome</strong> — 10 series, 25,403 rows across folds.</li>
+</ul>
+<pre><code class="language-python"><span class="n">log_close</span> <span class="o">=</span> <span class="n">etf</span><span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">log</span><span class="p">()</span>
+<span class="n">ffd_series</span> <span class="o">=</span> <span class="n">ffdiff</span><span class="p">(</span><span class="n">log_close</span><span class="p">,</span> <span class="n">d</span><span class="o">=</span><span class="n">d</span><span class="p">)</span>
+<span class="n">ffd_df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="o">...</span><span class="p">})</span><span class="o">.</span><span class="n">drop_nulls</span><span class="p">()</span>
+</code></pre>
+<p>The FFD filter is a fixed-width weighted sum of past values, so it needs a
+warmup stretch and nothing else. Restarting it at each <code>train_start</code> costs
+a little data and guarantees the series inside a fold depends only on that
+fold's window.</p>
+<p><code>ffd_hyg</code> is the one column with materially fewer values — 2,397,251
+against 2,423,866 — because HYG lists later than the earliest fold's
+<code>train_start</code>.</p>
+<p>This is where <code>outer_coalesce</code> appears (open issue 3): the ten per-symbol
+frames are joined on timestamp, so a symbol with a longer warmup
+contributes nulls rather than truncating the others.</p>
+
+</section>
+<section id="c13">
+  <div class="cell-head"><span class="cell-num">13</span><h2>12. Part 3 — GARCH fit-then-filter</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — get a conditional volatility path per ETF without refitting
+inside the validation window.</li>
+<li><strong>Shows</strong> — the <code>fix()</code> idiom: estimate on training, then run the
+variance recursion forward with frozen parameters.</li>
+<li><strong>Outcome</strong> — <code>fit_garch_fold</code>.</li>
+</ul>
+<pre><code class="language-python"><span class="n">train_result</span> <span class="o">=</span> <span class="n">train_model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">disp</span><span class="o">=</span><span class="s2">&quot;off&quot;</span><span class="p">,</span> <span class="n">show_warning</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">full_model</span> <span class="o">=</span> <span class="n">arch_model</span><span class="p">(</span><span class="n">full_returns_pct</span><span class="p">,</span> <span class="n">mean</span><span class="o">=</span><span class="s2">&quot;Constant&quot;</span><span class="p">,</span> <span class="n">vol</span><span class="o">=</span><span class="s2">&quot;GARCH&quot;</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">q</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">dist</span><span class="o">=</span><span class="s2">&quot;Normal&quot;</span><span class="p">)</span>
+<span class="n">filtered</span> <span class="o">=</span> <span class="n">full_model</span><span class="o">.</span><span class="n">fix</span><span class="p">(</span><span class="n">train_result</span><span class="o">.</span><span class="n">params</span><span class="p">)</span>
+<span class="n">cond_vol_ann</span> <span class="o">=</span> <span class="n">filtered</span><span class="o">.</span><span class="n">conditional_volatility</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">252</span><span class="p">)</span> <span class="o">/</span> <span class="mi">100</span>
+</code></pre>
+<p><strong><code>fix()</code> is what makes this causal.</strong> It applies given parameters to a
+series without estimating anything, so <code>σ_t</code> depends only on returns up to
+<code>t</code> given those parameters. Refitting on the full window would put
+validation-period returns into the parameters; not extending the
+recursion at all would leave the validation window without features.</p>
+<p>Returns are scaled by 100 before fitting — <code>arch</code> is numerically happier
+on percent returns — and the resulting volatility is divided back out and
+annualised by <code>sqrt(252)</code>.</p>
+
+</section>
+<section id="c14">
+  <div class="cell-head"><span class="cell-num">14</span><h2>13. The per-fold GARCH loop</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — run that fit across every ETF and fold.</li>
+<li><strong>Shows</strong> — where the minimum-observation floor bites.</li>
+<li><strong>Outcome</strong> — 2,420,952 rows, 100 assets, 9 folds; conditional
+volatility mean 0.177, std 0.123.</li>
+</ul>
+<p>Fitted counts per fold: 100, 100, 100, 99, 99, 99, 98, 98, 100. <strong>The
+misses are all in the older folds</strong>, where an ETF had not yet accumulated
+<code>GARCH_MIN_OBS = 504</code> training sessions. A symbol that fails is simply
+absent, so its <code>garch_cond_vol</code> is null after the join in section 14 —
+skipped, never imputed, which is the right choice but is not asserted
+anywhere.</p>
+<p>This is the expensive cell: 900 model fits.</p>
+
+</section>
+<section id="c15">
+  <div class="cell-head"><span class="cell-num">15</span><h2>14. Part 4 — combine and broadcast</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — assemble one <code>(fold, timestamp, symbol)</code> panel.</li>
+<li><strong>Shows</strong> — date-level features broadcast to every symbol; per-asset
+features joined on both keys.</li>
+<li><strong>Outcome</strong> — 14 columns, 2,423,866 rows, 100 assets, 9 folds.</li>
+</ul>
+<pre><code class="language-python"><span class="n">panel</span> <span class="o">=</span> <span class="n">fold_skeleton</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">date_level</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+<span class="n">panel</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">fold_garch</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">],</span> <span class="n">how</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
+</code></pre>
+<p><strong>The row count deserves attention.</strong> The underlying price panel has
+470,662 rows; this output has 2,423,866 — roughly five times as many.
+Nothing is duplicated in error: each <code>(timestamp, symbol)</code> pair appears
+<strong>once per fold whose window covers it</strong>, carrying that fold's model
+output, and the fold windows overlap heavily by construction.</p>
+<p>The practical consequence: <strong>any downstream consumer must filter on
+<code>fold</code></strong>. Joining this to labels without doing so would multiply every row
+several times over and silently inflate every count and every regression.
+The notebook's own evaluation in section 17 does filter correctly.</p>
+<p>Both joins are <code>how=&quot;left&quot;</code> from the skeleton, so a missing model output
+becomes null rather than dropping the row.</p>
+
+</section>
+<section id="c16">
+  <div class="cell-head"><span class="cell-num">16</span><h2>15. Quality check and per-fold stability</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — confirm coverage and that features do not drift wildly across
+folds.</li>
+<li><strong>Shows</strong> — valid counts, means and standard deviations per column, then
+means per fold.</li>
+<li><strong>Outcome</strong> — all 14 columns above 98.9% coverage; fold means varying
+smoothly.</li>
+</ul>
+<pre><code class="language-text">regime_prob_stress : 2,422,627/2,423,866 valid, mean=0.3194, std=0.4522
+ffd_hyg            : 2,397,251/2,423,866 valid, mean=0.0958, std=0.0947
+garch_cond_vol     : 2,420,952/2,423,866 valid, mean=0.1772, std=0.1234
+</code></pre>
+<p><code>regime_prob_stress</code> has a standard deviation (0.452) larger than its mean
+(0.319), which for a quantity bounded in [0,1] means it is strongly
+bimodal — the filtered posterior spends most of its time near 0 or near 1
+rather than hedging. That is characteristic of a well-separated two-state
+fit and consistent with the volatility split in section 8.</p>
+<p><strong>This section prints; it does not assert</strong> — see open issue 2. A column
+that came back entirely null, or a fold that failed to fit, would show up
+here as a number a reader has to notice.</p>
+
+</section>
+<section id="c17">
+  <div class="cell-head"><span class="cell-num">17</span><h2>16. Save artifacts</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — write the per-fold panel.</li>
+<li><strong>Shows</strong> — a plain parquet write.</li>
+<li><strong>Outcome</strong> — <code>features/model_based.parquet</code>, 2,423,866 rows, 14
+features plus the fold column.</li>
+</ul>
+<pre><code class="language-python"><span class="n">temporal</span><span class="o">.</span><span class="n">write_parquet</span><span class="p">(</span><span class="n">FEATURES_DIR</span> <span class="o">/</span> <span class="s2">&quot;model_based.parquet&quot;</span><span class="p">)</span>
+</code></pre>
+<p><strong>No digest sidecar.</strong> <code>02_labels</code> and <code>03_financial_features</code> both write
+through <code>write_artifact</code>, which records a content digest and the digests
+of the inputs. This stage calls <code>write_parquet</code> directly, so its output
+carries no provenance and two vintages of it are indistinguishable
+downstream. Given that this artifact depends on nine fitted models with
+stochastic restarts, it is arguably the one that most needs a digest.</p>
+
+</section>
+<section id="c18">
+  <div class="cell-head"><span class="cell-num">18</span><h2>17. Incremental evaluation</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — read whether any of these features carry signal, without
+touching the seal.</li>
+<li><strong>Shows</strong> — the holdout fold excluded, and two different IC methods for
+two different feature shapes.</li>
+<li><strong>Outcome</strong> — an evaluation panel of 200,977 rows; a 14-row IC table.</li>
+</ul>
+<p><strong>The scoping is careful and correct.</strong> Only the validation periods of the
+eight CV folds are used, and the holdout fold is deliberately excluded —
+its features are saved for final evaluation, but letting it inform
+feature-quality expectations here would break the seal.</p>
+<p><strong>Two IC paths, because the features have two shapes:</strong></p>
+<ul>
+<li><strong>Per-asset (<code>garch_cond_vol</code>)</strong> — cross-sectional Spearman IC within
+each date, averaged over dates.</li>
+<li><strong>Date-level (HMM, FFD)</strong> — these are identical across symbols on a
+date, so their cross-sectional IC is zero by construction. They are
+instead correlated against the <em>cross-sectional average</em> forward return,
+through <code>robust_ic</code>.</li>
+</ul>
+<p>Selected results:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>feature</th>
+<th>IC</th>
+<th>t</th>
+<th>p</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>regime_prob_stress</code></td>
+<td>0.200</td>
+<td>2.40</td>
+<td>0.011</td>
+</tr>
+<tr>
+<td><code>ffd_tlt</code></td>
+<td>0.185</td>
+<td>2.45</td>
+<td>0.001</td>
+</tr>
+<tr>
+<td><code>garch_cond_vol</code></td>
+<td>0.067</td>
+<td><strong>8.42</strong></td>
+<td><em>null</em></td>
+</tr>
+<tr>
+<td><code>ffd_iwm</code></td>
+<td>−0.187</td>
+<td>−2.67</td>
+<td>0.004</td>
+</tr>
+<tr>
+<td><code>ffd_spy</code></td>
+<td>−0.201</td>
+<td>−3.06</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<p>Two things to read carefully here.</p>
+<p><strong>The equity FFD features are all negative and the bond ones positive</strong>,
+at similar magnitudes. They are not seven independent findings — the
+transform is applied to the log price level, so these largely re-express
+one market-direction variable, split by asset class. <code>03</code>'s redundancy
+clustering would be the natural check and is not run on this set.</p>
+<p><strong><code>garch_cond_vol</code>'s t of 8.42 is not comparable to the others</strong> — see
+open issue 1. It is the naive statistic on an overlapping label; every
+other row in the table has a bootstrap standard error behind it. The
+plotting cell explicitly refuses to draw error bars because the two
+uncertainty scales differ, which is the right instinct, but the t-column
+in the printed table carries no equivalent warning.</p>
+
+</section>
+<section id="c19">
+  <div class="cell-head"><span class="cell-num">19</span><h2>18. Key takeaways, and what is not checked</h2></div>
+<ul class="brief">
+<li><strong>Aim</strong> — state the eight points the notebook draws out.</li>
+<li><strong>Shows</strong> — each as a look-ahead avoided rather than a technique
+applied.</li>
+<li><strong>Outcome</strong> — the handoff to the Chapter 11 models.</li>
+</ul>
+<p>The eight are: per-fold fitting removes parameter look-ahead; one HMM on
+the aggregate market; filtered rather than smoothed probabilities; state
+sorting to prevent label switching; GARCH fit-then-filter via
+<code>model.fix()</code>; fixed <code>d</code> for fractional differencing; per-ETF GARCH giving
+cross-sectional differentiation; and a dedicated holdout fold.</p>
+<p>Reading them against the rest of the pipeline, three things this stage
+does <em>not</em> do stand out — none fatal, all noted above:</p>
+<ul>
+<li><strong>It asserts nothing.</strong> Its causal claims are exactly the ones that fail
+quietly, and <code>03</code> already has the pattern that would test them.</li>
+<li><strong>It writes no digest.</strong> The one artifact here built from stochastic
+fits is also the one with no provenance record.</li>
+<li><strong>It runs no redundancy check</strong>, though ten of its fourteen columns are
+transforms of price levels that plainly move together.</li>
+</ul>
+<p><strong>Next</strong>: the Chapter 11 models join <code>financial.parquet</code> with
+<code>model_based.parquet</code> and use the <code>fold</code> column so each CV fold sees only
+features fitted on its own training window.</p>
+
+</section>
+  </article>
+</div>
+
+</body>
+</html>
