@@ -1169,16 +1169,128 @@ convention. <code>.over(&quot;symbol&quot;)</code> confines the shift inside eac
 window crosses an entity boundary — asserted in section D, property 3.
 Rows without a full forward window get <code>null</code> from the shift, which is
 the correct representation of &quot;unknown&quot;, not zero.</p>
+<h3>The two bookkeeping columns</h3>
 <p>Two bookkeeping columns are numbered here, on the <strong>complete</strong> price
 series, because both mean something only before any row is dropped:</p>
+<pre><code class="language-python"><span class="n">labels_df</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+    <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">pl</span><span class="o">.</span><span class="n">int_range</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">())</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;from_end&quot;</span><span class="p">),</span>
+    <span class="n">pl</span><span class="o">.</span><span class="n">int_range</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">len</span><span class="p">())</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;session&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+</code></pre>
+<p><strong><code>.over(&quot;symbol&quot;)</code></strong> is a window partition — SQL's
+<code>OVER (PARTITION BY symbol)</code>. Polars evaluates the expression once per
+symbol and scatters the results back to the rows they came from, so the
+frame keeps its shape and its order. Nothing is grouped away.</p>
+<p>Read the two pieces separately:</p>
 <ul>
-<li><code>from_end</code> — sessions counted back from each symbol's last bar; drives
-figure F2's boundary profile.</li>
-<li><code>session</code> — each symbol's bars numbered forward; lets section F's
-overlap statistics keep counting trading sessions after the null tail
-and the holdout are filtered out.</li>
+<li><strong><code>pl.int_range(pl.len())</code></strong> — inside <code>.over()</code>, <code>pl.len()</code> is <em>that
+symbol's</em> row count, so the range yields <code>0, 1, 2, … n-1</code> down the
+group. That is <code>session</code>: each symbol's bars numbered forward from its
+own first bar, independently of every other symbol.</li>
+<li><strong><code>pl.len().over(&quot;symbol&quot;)</code></strong> — the same group count, but broadcast
+unchanged onto every row of the group. Subtracting the session number
+from <code>n - 1</code> flips the count around: <code>from_end</code> is <code>0</code> on the symbol's
+last bar, <code>1</code> on the one before it, and so on backwards.</li>
 </ul>
-<p>Neither reaches the parquet — section H selects three columns.</p>
+<p>With <code>horizon = 2</code> and two symbols of 5 and 3 bars:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>symbol</th>
+<th>close</th>
+<th>session</th>
+<th>from_end</th>
+<th>forward return</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AAA</td>
+<td>10</td>
+<td>0</td>
+<td>4</td>
+<td>0.200</td>
+</tr>
+<tr>
+<td>AAA</td>
+<td>11</td>
+<td>1</td>
+<td>3</td>
+<td>0.182</td>
+</tr>
+<tr>
+<td>AAA</td>
+<td>12</td>
+<td>2</td>
+<td>2</td>
+<td>0.167</td>
+</tr>
+<tr>
+<td>AAA</td>
+<td>13</td>
+<td>3</td>
+<td>1</td>
+<td><code>null</code></td>
+</tr>
+<tr>
+<td>AAA</td>
+<td>14</td>
+<td>4</td>
+<td>0</td>
+<td><code>null</code></td>
+</tr>
+<tr>
+<td>BB</td>
+<td>20</td>
+<td>0</td>
+<td>2</td>
+<td>0.100</td>
+</tr>
+<tr>
+<td>BB</td>
+<td>21</td>
+<td>1</td>
+<td>1</td>
+<td><code>null</code></td>
+</tr>
+<tr>
+<td>BB</td>
+<td>22</td>
+<td>2</td>
+<td>0</td>
+<td><code>null</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Two properties fall out of the table, and both are relied on downstream:</p>
+<ul>
+<li><code>session + from_end</code> is constant within a symbol (<code>n - 1</code>). The two
+columns are the same position counted from opposite ends.</li>
+<li><strong>A row's label is null exactly when <code>from_end &lt; horizon</code>.</strong> The null
+tail is not approximately the last <code>h</code> bars, it is precisely them. This
+is what figure F2 checks: the share of non-null labels must fall to
+zero over exactly <code>h</code> positions, and a fabricated or padded tail would
+sit flat instead of stepping down.</li>
+</ul>
+<p>Because <code>from_end</code> is measured per symbol, it stays correct for ETFs that
+were delisted or that simply start late — each one's tail is cut relative
+to its own last bar, not to the panel's last date.</p>
+<p><strong>The row order is load-bearing.</strong> <code>int_range</code> numbers <em>positions</em>, not
+dates: it has no idea what is in the <code>date</code> column. It only means
+&quot;trading sessions&quot; because section B already sorted by symbol then date.
+Feed it unsorted rows and the numbering silently follows whatever order
+the frame happens to be in — no error, no null, just a quietly wrong
+<code>session</code>. The same positional assumption is what <code>shift(-horizon)</code>
+depends on, which is why the sort happens once, up front, for both.</p>
+<p><strong>The order of operations is load-bearing too.</strong> Both columns are
+computed before any row is dropped. Filter first — the null tail, the
+eligibility screen, the holdout window — and the surviving rows are
+renumbered from zero within whatever is left, so <code>from_end</code> would no
+longer point at the real end of the series and F2's boundary profile
+would measure the filter instead of the label.</p>
+<p>Neither column reaches the parquet — section H selects three columns.
+They exist to let the diagnostics in sections E and F keep counting in
+trading sessions after the frame has been filtered down.</p>
 <p>The notebook computes the arithmetic locally rather than calling
 <code>fixed_time_horizon_labels</code>. That helper computes the identical quantity
 but agrees only to a rounding step — enough to change the digest and

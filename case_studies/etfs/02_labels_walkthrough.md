@@ -399,16 +399,79 @@ window crosses an entity boundary — asserted in section D, property 3.
 Rows without a full forward window get `null` from the shift, which is
 the correct representation of "unknown", not zero.
 
+### The two bookkeeping columns
+
 Two bookkeeping columns are numbered here, on the **complete** price
 series, because both mean something only before any row is dropped:
 
-- `from_end` — sessions counted back from each symbol's last bar; drives
-  figure F2's boundary profile.
-- `session` — each symbol's bars numbered forward; lets section F's
-  overlap statistics keep counting trading sessions after the null tail
-  and the holdout are filtered out.
+```python
+labels_df = prices.with_columns(
+    (pl.len().over("symbol") - 1 - pl.int_range(pl.len()).over("symbol")).alias("from_end"),
+    pl.int_range(pl.len()).over("symbol").alias("session"),
+)
+```
 
-Neither reaches the parquet — section H selects three columns.
+**`.over("symbol")`** is a window partition — SQL's
+`OVER (PARTITION BY symbol)`. Polars evaluates the expression once per
+symbol and scatters the results back to the rows they came from, so the
+frame keeps its shape and its order. Nothing is grouped away.
+
+Read the two pieces separately:
+
+- **`pl.int_range(pl.len())`** — inside `.over()`, `pl.len()` is *that
+  symbol's* row count, so the range yields `0, 1, 2, … n-1` down the
+  group. That is `session`: each symbol's bars numbered forward from its
+  own first bar, independently of every other symbol.
+- **`pl.len().over("symbol")`** — the same group count, but broadcast
+  unchanged onto every row of the group. Subtracting the session number
+  from `n - 1` flips the count around: `from_end` is `0` on the symbol's
+  last bar, `1` on the one before it, and so on backwards.
+
+With `horizon = 2` and two symbols of 5 and 3 bars:
+
+| symbol | close | session | from_end | forward return |
+|--------|-------|---------|----------|----------------|
+| AAA | 10 | 0 | 4 | 0.200 |
+| AAA | 11 | 1 | 3 | 0.182 |
+| AAA | 12 | 2 | 2 | 0.167 |
+| AAA | 13 | 3 | 1 | `null` |
+| AAA | 14 | 4 | 0 | `null` |
+| BB | 20 | 0 | 2 | 0.100 |
+| BB | 21 | 1 | 1 | `null` |
+| BB | 22 | 2 | 0 | `null` |
+
+Two properties fall out of the table, and both are relied on downstream:
+
+- `session + from_end` is constant within a symbol (`n - 1`). The two
+  columns are the same position counted from opposite ends.
+- **A row's label is null exactly when `from_end < horizon`.** The null
+  tail is not approximately the last `h` bars, it is precisely them. This
+  is what figure F2 checks: the share of non-null labels must fall to
+  zero over exactly `h` positions, and a fabricated or padded tail would
+  sit flat instead of stepping down.
+
+Because `from_end` is measured per symbol, it stays correct for ETFs that
+were delisted or that simply start late — each one's tail is cut relative
+to its own last bar, not to the panel's last date.
+
+**The row order is load-bearing.** `int_range` numbers *positions*, not
+dates: it has no idea what is in the `date` column. It only means
+"trading sessions" because section B already sorted by symbol then date.
+Feed it unsorted rows and the numbering silently follows whatever order
+the frame happens to be in — no error, no null, just a quietly wrong
+`session`. The same positional assumption is what `shift(-horizon)`
+depends on, which is why the sort happens once, up front, for both.
+
+**The order of operations is load-bearing too.** Both columns are
+computed before any row is dropped. Filter first — the null tail, the
+eligibility screen, the holdout window — and the surviving rows are
+renumbered from zero within whatever is left, so `from_end` would no
+longer point at the real end of the series and F2's boundary profile
+would measure the filter instead of the label.
+
+Neither column reaches the parquet — section H selects three columns.
+They exist to let the diagnostics in sections E and F keep counting in
+trading sessions after the frame has been filtered down.
 
 The notebook computes the arithmetic locally rather than calling
 `fixed_time_horizon_labels`. That helper computes the identical quantity
