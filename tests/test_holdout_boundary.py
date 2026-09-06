@@ -41,6 +41,8 @@ HOLDOUT_SCOPED_NOTEBOOKS = [
     ),
     ("case_studies/sp500_options/02_labels.py", "cross_sectional_ic_series("),
     ("case_studies/nasdaq100_microstructure/02_labels.py", "cross_sectional_ic_series("),
+    ("case_studies/us_equities_panel/02_labels.py", "cross_sectional_ic_series("),
+    ("case_studies/us_equities_panel/03_financial_features.py", "ic_results[feat] = "),
 ]
 
 
@@ -143,6 +145,7 @@ def test_holdout_filter_precedes_first_ic_computation(rel_path: str, first_ic_ma
 # short-term-reversal characteristic, against the label at three candidate lags and only the
 # previous row's return carries it.
 LABEL_ENDPOINT_PURGED_NOTEBOOKS = [
+    "case_studies/us_equities_panel/02_labels.py",
     "case_studies/etfs/02_labels.py",
     "case_studies/etfs/05_evaluation.py",
     "case_studies/crypto_perps_funding/02_labels.py",
@@ -184,10 +187,11 @@ LABEL_ENDPOINT_PURGED_NOTEBOOKS = [
 # one this test checks.
 # ``etfs/03_financial_features`` is deliberately absent. It was listed here while it
 # purged on a shifted label endpoint; public #447 replaced that mechanism with a seal
-# that rebuilds the whole panel with the holdout withheld and compares all 57 columns,
-# which is checked by executing the notebook rather than by reading its source. A
-# source pattern cannot see the stronger check, so listing it here only produces a
-# false red. See agent-workspace #141.
+# that rebuilds the whole panel with the holdout withheld and compares all 57 columns.
+# A source pattern for a shifted endpoint cannot see that, so listing it here only
+# produces a false red. The rebuild is checked instead by
+# ``RECONSTRUCTION_SEALED_NOTEBOOKS`` below, which is the list every stage-03 notebook
+# joins -- eight of the nine are on it now.
 # ``sp500_options/02_labels`` is deliberately absent, and for the opposite reason to
 # ``etfs/05``: its endpoint is not an approximation that needs the per-symbol form. The
 # hold-to-expiry label settles on the expiration written into the contract and the
@@ -196,12 +200,61 @@ LABEL_ENDPOINT_PURGED_NOTEBOOKS = [
 # calendar shift of the signal date. The notebook checks the recorded exit dates against a
 # shift of the panel calendar by the declared horizon, which is what
 # ``test_holdout_purge_is_on_the_label_endpoint`` above matches on.
+# ``us_equities_panel/02_labels`` is deliberately absent from this third list while being in
+# the two above. Its endpoint is not shifted within ``symbol`` at all: the row is looked up at
+# the session numbered one higher in that stock's own series, so the entity boundary is part of
+# the join key rather than of a window function, and a stock that missed the closing session
+# gets no endpoint instead of a later one. That is what this list's per-symbol requirement is
+# for, reached by a construction the regex below cannot express.
 PER_SYMBOL_ENDPOINT_NOTEBOOKS = [
     ("case_studies/etfs/02_labels.py", "symbol"),
     ("case_studies/crypto_perps_funding/02_labels.py", "symbol"),
     ("case_studies/cme_futures/02_labels.py", "product"),
     ("case_studies/fx_pairs/02_labels.py", "symbol"),
 ]
+
+
+def test_us_equities_panel_03_restricts_the_evaluation_on_the_label_endpoint() -> None:
+    """``us_equities_panel/03_financial_features`` needs its own check, not a list entry.
+
+    It belongs in ``HOLDOUT_SCOPED_NOTEBOOKS`` and cannot join
+    ``LABEL_ENDPOINT_PURGED_NOTEBOOKS``: the winsorization figure draws a
+    counterfactual bound from development rows with
+    ``filter(pl.col("timestamp") < HOLDOUT_START)``, which is a per-date quantile
+    that crosses no boundary but which that list's leaky-filter regex would reject.
+
+    Membership of the scoped list alone is a vacuous gate here, and this test exists
+    because the review of the commit that added it said so: the winsorization
+    comparison against ``HOLDOUT_START`` precedes the first IC computation on its own,
+    so deleting the endpoint restriction entirely would leave that check green. What
+    has to hold is the mechanism -- the endpoint comes from the label's own horizon,
+    the evaluation frame is restricted on it, and that happens before any IC is
+    computed.
+    """
+    rel_path = "case_studies/us_equities_panel/03_financial_features.py"
+    source = (REPO_ROOT / rel_path).read_text()
+
+    assert re.search(r"pl\.col\(\"session\"\)\s*-\s*horizon", source), (
+        f"{rel_path}: the label endpoint must be looked up at the session numbered "
+        "PRIMARY_HORIZON higher, as 02_labels writes it, not read off the next row"
+    )
+    assert "rows_sessions_ahead(raw_df, PRIMARY_HORIZON)" in source, (
+        f"{rel_path}: the endpoint must be derived for the declared primary horizon, "
+        "not for a bare integer that can drift from setup.yaml"
+    )
+
+    restriction = source.find('.filter(pl.col("_label_end") < HOLDOUT_START)')
+    assert restriction != -1, (
+        f"{rel_path}: the evaluation frame must be restricted to rows whose label "
+        "window closes strictly before the holdout. A filter on the observation date "
+        "reads holdout prices while appearing not to."
+    )
+    first_ic = source.find("ic_results[feat] = ")
+    assert first_ic != -1, f"{rel_path}: first-IC marker not found -- update this test"
+    assert restriction < first_ic, (
+        f"{rel_path}: the endpoint restriction must be applied before the first IC "
+        f"computation (restriction at char {restriction}, first IC at {first_ic})"
+    )
 
 
 @pytest.mark.parametrize("rel_path", LABEL_ENDPOINT_PURGED_NOTEBOOKS, ids=lambda p: p)
@@ -223,9 +276,21 @@ def test_holdout_purge_is_on_the_label_endpoint(rel_path: str) -> None:
         "forward-label window (shift the dense calendar by the label horizon), "
         "not on the signal date -- see case_studies/etfs/05_evaluation.py"
     )
-    assert re.search(r"\.shift\(-\s*[A-Za-z_]*horizon", source, re.IGNORECASE), (
-        f"{rel_path}: the label endpoint must be shifted by the declared label "
-        "horizon, not by a bare integer that can drift from the label config"
+    # Two mechanisms move a row to its label's endpoint by the declared horizon, and the
+    # second is the stronger one. Shifting rows is correct only where the entity trades every
+    # session inside the window; looking the row up at the session numbered `horizon` higher
+    # is correct whether it does or not, and returns nothing rather than a later date where
+    # the entity missed that session. ``us_equities_panel/02_labels`` uses the second after
+    # agent-workspace #218, so the pattern accepts either -- what it still refuses is a bare
+    # integer, which can drift from the horizon declared in setup.yaml.
+    assert re.search(
+        r"\.shift\(-\s*[A-Za-z_]*horizon|pl\.col\(\"session\"\)\s*-\s*[A-Za-z_]*horizon",
+        source,
+        re.IGNORECASE,
+    ), (
+        f"{rel_path}: the label endpoint must be moved by the declared label horizon - by a "
+        "shift of the entity's rows or by a lookup on the session counter - and not by a bare "
+        "integer that can drift from the label config"
     )
 
     # The endpoint must actually gate a frame, not merely be computed.
@@ -281,80 +346,162 @@ def test_selected_features_artifact_stops_before_holdout() -> None:
     )
 
 
-def test_crypto_dml_seals_the_label_endpoint_and_hashes_current_inputs() -> None:
-    """The DML sample and cache identity must bind the corrected 8-hour lineage."""
-    source = (REPO_ROOT / "case_studies" / "crypto_perps_funding" / "11_causal_dml.py").read_text()
+def _declared_parameters(notebook: str) -> dict:
+    """Return the literal parameter assignments from a notebook's `parameters` cell.
 
-    assert 'ESTIMATOR_CONTRACT = "panel_time_v3"' in source
-    assert "modeling_input_fingerprint(" in source
-    assert '"input_fingerprint": INPUT_FINGERPRINT' in source
-    assert "holdout_cutoff - label_horizon" in source
-    assert "max() + LABEL_HORIZON >= HOLDOUT_CUTOFF" in source
-
-
-def test_crypto_gbm_requires_cuda_and_hashes_current_inputs() -> None:
-    """The corrected GBM grid must be GPU-only and content-addressed."""
-    source = (REPO_ROOT / "case_studies" / "crypto_perps_funding" / "07_gbm.py").read_text()
-
-    assert 'TRAIN_DEVICE = "cuda"' in source
-    assert "modeling_input_fingerprint(" in source
-    assert '"device": TRAIN_DEVICE' in source
-    assert '"input_fingerprint": INPUT_FINGERPRINT' in source
-    assert source.count("extra_params=IDENTITY_PARAMS") == 2
-    assert "CPU fallback" not in source
+    Parsed rather than matched as text. These notebooks moved onto the shared research boundary,
+    where the device policy is one entry in an ``OVERRIDES`` mapping instead of a ``TRAIN_DEVICE``
+    module constant, and a substring assertion on the old spelling passes or fails on how the line
+    is written rather than on what it declares.
+    """
+    path = REPO_ROOT / "case_studies" / "crypto_perps_funding" / f"{notebook}.py"
+    declared: dict = {}
+    for node in ast.parse(path.read_text()).body:
+        if not isinstance(node, ast.Assign) or not isinstance(node.targets[0], ast.Name):
+            continue
+        try:
+            declared[node.targets[0].id] = ast.literal_eval(node.value)
+        except ValueError:
+            continue
+    return declared
 
 
-@pytest.mark.parametrize("notebook", ["06_linear.py", "07_gbm.py"])
-def test_crypto_model_guard_uses_active_24h_label_buffer(notebook: str) -> None:
-    """Crypto model guards must purge the endpoint for the selected label horizon."""
-    source = (REPO_ROOT / "case_studies" / "crypto_perps_funding" / notebook).read_text()
-    setup = yaml.safe_load(
-        (REPO_ROOT / "case_studies/crypto_perps_funding/config/setup.yaml").read_text()
+def _plans_through_shared_boundary(notebook: str) -> bool:
+    """True when the notebook builds its run through the shared boundary rather than by hand."""
+    path = REPO_ROOT / "case_studies" / "crypto_perps_funding" / f"{notebook}.py"
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and "research_workflow" in node.module:
+            if {"plan_model_catalog", "run_model_plan"} & {a.name for a in node.names}:
+                return True
+        # the causal notebook takes the other entry point on the same boundary
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "causal"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "study"
+        ):
+            return True
+    return False
+
+
+def _guards_executed_identity(notebook: str) -> bool:
+    """True when the notebook refuses a result whose spec differs from the one it resolved."""
+    path = REPO_ROOT / "case_studies" / "crypto_perps_funding" / f"{notebook}.py"
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Compare) or not isinstance(node.ops[0], ast.NotEq):
+            continue
+        rendered = ast.unparse(node)
+        if "spec" in rendered and rendered.count(".spec") == 2:
+            return True
+    return False
+
+
+def test_crypto_dml_plans_through_the_boundary_that_seals_the_holdout() -> None:
+    """The DML run must take its sample and its identity from the shared boundary.
+
+    It used to assert five identifiers in this notebook's source - `ESTIMATOR_CONTRACT`,
+    `modeling_input_fingerprint`, `INPUT_FINGERPRINT`, and two inline holdout comparisons. None of
+    them exists here any more: the notebook plans through `plan_model_catalog` / `run_model_plan`,
+    and the fold geometry and holdout seal those five lines hand-rolled are now the boundary's,
+    exercised by the fold tests above against the resolved splits rather than against the text.
+
+    What still has to be true of this notebook is that it does not do any of it itself.
+    """
+    assert _plans_through_shared_boundary("11_causal_dml")
+
+    declared = _declared_parameters("11_causal_dml")
+    assert declared["EXECUTION_TIER"] == "canonical"
+    assert declared["PREVIEW_REDUCTIONS"] == {}, (
+        "a committed notebook must declare no reductions; a preview supplies them"
+    )
+    assert _guards_executed_identity("11_causal_dml"), (
+        "the notebook must refuse a result whose spec differs from the one it resolved - the "
+        "identity binding the removed input-fingerprint assertions stood for"
     )
 
-    assert setup["labels"]["variant_buffers"]["fwd_ret_24h"] == "24H"
-    assert "pd.Timedelta(mds.label_buffer)" in source
-    assert 'split["val_end"] + label_horizon < holdout_start' in source
-    assert 'split["val_end"] + timedelta(hours=8)' not in source
+
+def test_crypto_folds_purge_the_24h_buffer_the_variant_label_configures() -> None:
+    """``fwd_ret_24h`` folds leave 24 hours between training and validation.
+
+    The guard this replaces read the purge out of the notebook's own source. Both
+    model notebooks now take their folds from the shared boundary, so the property
+    is checked where it is decided: the configured buffer must reach
+    ``generate_cv_splits``, and no fold may see a label whose outcome window
+    reaches into the sealed holdout.
+    """
+    import pandas as pd
+    import polars as pl
+
+    from utils.cv_splits import generate_cv_splits
+    from utils.modeling import resolve_label_buffer
+
+    case_study = "crypto_perps_funding"
+    root = REPO_ROOT / "case_studies" / case_study
+    setup = yaml.safe_load((root / "config" / "setup.yaml").read_text())
+    buffer = resolve_label_buffer(case_study, "fwd_ret_24h", setup)
+    assert buffer == "24H"
+
+    holdout_start = pd.Timestamp(setup["evaluation"]["holdout_start"])
+    horizon = pd.Timedelta(buffer.lower())  # pandas deprecated the capital unit
+    timeline = pl.DataFrame(
+        {"timestamp": pd.date_range("2019-01-01", holdout_start, freq="8h", inclusive="left")}
+    )
+    splits = generate_cv_splits(
+        timeline,
+        case_study_id=case_study,
+        label_buffer=buffer,
+        outcome_horizon=buffer,
+    )
+    assert splits
+
+    for split in splits:
+        train_end = pd.Timestamp(split["train_end"])
+        val_start = pd.Timestamp(split["val_start"])
+        val_end = pd.Timestamp(split["val_end"])
+        assert val_start - train_end >= horizon, (
+            f"fold {split['fold']} leaves {val_start - train_end} between training and "
+            f"validation, less than the {buffer} the label needs"
+        )
+        assert val_end + horizon <= holdout_start, (
+            f"fold {split['fold']} validates to {val_end}, whose 24-hour outcome window "
+            f"reaches past the sealed holdout start {holdout_start.date()}"
+        )
 
 
-def test_crypto_tabm_requires_cuda_and_hashes_current_inputs() -> None:
-    """The corrected TabM grid must be GPU-only and content-addressed."""
-    source = (REPO_ROOT / "case_studies" / "crypto_perps_funding" / "08_tabular_dl.py").read_text()
+def test_crypto_tabm_requires_cuda_and_plans_through_the_boundary() -> None:
+    """The TABM grid must be GPU-only, and must say so where the runner reads it.
 
-    assert 'TRAIN_DEVICE = "cuda"' in source
-    assert "modeling_input_fingerprint(" in source
-    assert '"device": TRAIN_DEVICE' in source
-    assert '"input_fingerprint": INPUT_FINGERPRINT' in source
-    assert source.count("extra_params=IDENTITY_PARAMS") == 2
-    assert "identity_params=IDENTITY_PARAMS" in source
-    assert "current CPU" not in source
-
-
-def test_crypto_lstm_requires_cuda_and_hashes_current_inputs() -> None:
-    """The corrected LSTM run must be GPU-only and content-addressed."""
-    source = (REPO_ROOT / "case_studies" / "crypto_perps_funding" / "09_dl_lstm.py").read_text()
-
-    assert 'TRAIN_DEVICE = "cuda"' in source
-    assert "modeling_input_fingerprint(" in source
-    assert '"device": TRAIN_DEVICE' in source
-    assert '"input_fingerprint": INPUT_FINGERPRINT' in source
-    assert "extra_params=IDENTITY_PARAMS" in source
-    assert "identity_params=IDENTITY_PARAMS" in source
-    assert "current CPU" not in source
+    The device policy moved from a `TRAIN_DEVICE` module constant into the `OVERRIDES` mapping the
+    shared boundary resolves, so this reads the declaration rather than the spelling of the line.
+    """
+    declared = _declared_parameters("08_tabular_dl")
+    assert declared["OVERRIDES"]["device"] == "cuda"
+    assert declared["OVERRIDES"]["class_weight"] == "balanced"
+    assert _plans_through_shared_boundary("08_tabular_dl")
 
 
-def test_crypto_tcn_requires_cuda_and_hashes_current_inputs() -> None:
-    """The corrected TCN run must be GPU-only and content-addressed."""
-    source = (REPO_ROOT / "case_studies" / "crypto_perps_funding" / "10_dl_tcn.py").read_text()
+def test_crypto_lstm_requires_cuda_and_plans_through_the_boundary() -> None:
+    """The LSTM grid must be GPU-only, and must say so where the runner reads it.
 
-    assert 'TRAIN_DEVICE = "cuda"' in source
-    assert "modeling_input_fingerprint(" in source
-    assert '"device": TRAIN_DEVICE' in source
-    assert '"input_fingerprint": INPUT_FINGERPRINT' in source
-    assert source.count("extra_params=IDENTITY_PARAMS") == 2
-    assert "identity_params=IDENTITY_PARAMS" in source
-    assert "current CPU" not in source
+    The device policy moved from a `TRAIN_DEVICE` module constant into the `OVERRIDES` mapping the
+    shared boundary resolves, so this reads the declaration rather than the spelling of the line.
+    """
+    declared = _declared_parameters("09_dl_lstm")
+    assert declared["OVERRIDES"]["device"] == "cuda"
+    assert _plans_through_shared_boundary("09_dl_lstm")
+
+
+def test_crypto_tcn_requires_cuda_and_plans_through_the_boundary() -> None:
+    """The TCN grid must be GPU-only, and must say so where the runner reads it.
+
+    The device policy moved from a `TRAIN_DEVICE` module constant into the `OVERRIDES` mapping the
+    shared boundary resolves, so this reads the declaration rather than the spelling of the line.
+    """
+    declared = _declared_parameters("10_dl_tcn")
+    assert declared["OVERRIDES"]["device"] == "cuda"
+    assert _plans_through_shared_boundary("10_dl_tcn")
 
 
 @pytest.mark.parametrize(
@@ -464,38 +611,72 @@ def test_a_gapped_calendar_separates_the_two_purges() -> None:
 def evaluation_notebook_label() -> tuple[str, int]:
     """The label file and horizon ``05_evaluation`` actually uses.
 
-    05 hardcodes both, so the equivalence check has to run on its values rather
-    than the configured ones -- otherwise a config change would leave the check
-    validating a purge the notebook does not perform. Requiring them to equal the
-    configured label is what makes the hardcoding safe, and is the assertion that
-    fails if `labels.primary` moves and 05 is not moved with it.
+    05 used to hardcode both, and this helper read the two literals so the
+    equivalence check below ran on the notebook's values rather than the
+    configured ones. It no longer hardcodes them: it takes the label from
+    ``setup.yaml`` and the horizon from ``resolve_label_buffer``, so there is one
+    source of truth and a config change moves the notebook with it.
+
+    What has to be checked therefore moves too. The risk was 05 purging on a
+    label the case study no longer selects; that is now prevented by
+    construction, but only while 05 really does bind both to the config. So this
+    asserts the binding structurally and resolves the values the same way the
+    notebook does, and the caller keeps its teeth by comparing the
+    buffer-derived horizon against the one implied by the label's own name --
+    two independent config entries that a typo can still separate.
     """
     tree = ast.parse((REPO_ROOT / "case_studies" / "etfs" / "05_evaluation.py").read_text())
 
-    # Parsed rather than pattern-matched: a text match on an assignment reports
-    # the value it can see, so `HAC_MAXLAGS = 21 * 2` reads as 21 while the
-    # notebook purges on 42, and a match anywhere in the file is satisfied by a
-    # call the label frame is not built from.
-    literals: dict[str, object] = {}
-    horizon_alias: ast.expr | None = None
+    # Parsed rather than pattern-matched: a text match anywhere in the file is
+    # satisfied by a call the label frame is not built from.
+    bindings: dict[str, ast.expr] = {}
     for node in tree.body:
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
             continue
         target = node.targets[0]
-        if not isinstance(target, ast.Name):
-            continue
-        if target.id in ("PRIMARY_LABEL_FILE", "HAC_MAXLAGS") and isinstance(
-            node.value, ast.Constant
-        ):
-            literals[target.id] = node.value.value
-        elif target.id == "LABEL_HORIZON":
-            horizon_alias = node.value
+        if isinstance(target, ast.Name):
+            bindings[target.id] = node.value
 
-    assert set(literals) == {"PRIMARY_LABEL_FILE", "HAC_MAXLAGS"}, (
-        "05_evaluation no longer assigns PRIMARY_LABEL_FILE and HAC_MAXLAGS a "
-        "plain literal each; read its label and horizon from wherever it now "
-        f"takes them (found {sorted(literals)})"
+    def _calls_named(node: ast.AST, func: str) -> bool:
+        return any(
+            isinstance(sub, ast.Call)
+            and (
+                (isinstance(sub.func, ast.Name) and sub.func.id == func)
+                or (isinstance(sub.func, ast.Attribute) and sub.func.attr == func)
+            )
+            for sub in ast.walk(node)
+        )
+
+    missing = {"PRIMARY_LABEL", "HAC_MAXLAGS", "LABEL_HORIZON"} - set(bindings)
+    assert not missing, (
+        "05_evaluation no longer binds "
+        f"{sorted(missing)}; read its label and horizon from wherever it now "
+        "takes them"
     )
+
+    # The label must come from setup.yaml, not from a literal reintroduced here.
+    primary_src = ast.dump(bindings["PRIMARY_LABEL"])
+    assert "'labels'" in primary_src and "'primary'" in primary_src, (
+        "05_evaluation's PRIMARY_LABEL is no longer read from "
+        "SETUP['labels']['primary'], so it can now name a label setup.yaml does "
+        "not select"
+    )
+    assert not isinstance(bindings["PRIMARY_LABEL"], ast.Constant), (
+        "05_evaluation hardcodes PRIMARY_LABEL again; it must be read from setup.yaml"
+    )
+
+    # ...and the HAC bandwidth from the label's configured buffer.
+    assert _calls_named(bindings["HAC_MAXLAGS"], "match") and "LABEL_BUFFER" in {
+        sub.id for sub in ast.walk(bindings["HAC_MAXLAGS"]) if isinstance(sub, ast.Name)
+    }, (
+        "05_evaluation's HAC_MAXLAGS is no longer derived from LABEL_BUFFER, so "
+        "the HAC correction and the label can drift apart"
+    )
+    assert _calls_named(bindings.get("LABEL_BUFFER", ast.Constant(None)), "resolve_label_buffer"), (
+        "05_evaluation no longer resolves LABEL_BUFFER through resolve_label_buffer"
+    )
+
+    horizon_alias = bindings["LABEL_HORIZON"]
     assert isinstance(horizon_alias, ast.Name) and horizon_alias.id == "HAC_MAXLAGS", (
         "05_evaluation's purge horizon is no longer HAC_MAXLAGS itself, so this "
         "helper would report a horizon the notebook does not use"
@@ -522,8 +703,8 @@ def evaluation_notebook_label() -> tuple[str, int]:
         and any(isinstance(t, ast.Name) and t.id == "label_df" for t in node.targets)
         for read in calls_to(node.value, "read_parquet")
     ]
-    assert label_reads and all("PRIMARY_LABEL_FILE" in names_in(read) for read in label_reads), (
-        "05_evaluation must load label_df through PRIMARY_LABEL_FILE; a hardcoded "
+    assert label_reads and all("PRIMARY_LABEL" in names_in(read) for read in label_reads), (
+        "05_evaluation must load label_df through PRIMARY_LABEL; a hardcoded "
         "path there would leave the constant, and this check, describing a file "
         "the notebook does not read"
     )
@@ -545,7 +726,23 @@ def evaluation_notebook_label() -> tuple[str, int]:
             "_label_end; another horizon there purges a window this check is not "
             "measuring"
         )
-    return str(literals["PRIMARY_LABEL_FILE"]), int(literals["HAC_MAXLAGS"])  # type: ignore[arg-type]
+    # Resolved through the same function 05 calls, so a label spec that overrides
+    # setup.yaml moves this check with the notebook rather than silently past it.
+    #
+    # The setup mapping is read from SETUP_YAML rather than through
+    # `load_setup_config`, which resolves the case-study directory from the
+    # environment: under CI's ML4T_OUTPUT_DIR it returns a different file and the
+    # helper died on `KeyError: 'labels'`. This test is a static check on the
+    # committed source, so it must read the committed config.
+    from utils.artifact_specs import resolve_label_buffer
+
+    setup = yaml.safe_load(SETUP_YAML.read_text())
+    primary = str(setup["labels"]["primary"])
+    buffer = resolve_label_buffer("etfs", primary, setup)
+    assert buffer, f"no label buffer configured for {primary}"
+    match = re.match(r"^(\d+)", str(buffer))
+    assert match, f"label buffer {buffer!r} does not start with an integer"
+    return f"{primary}.parquet", int(match.group(1))
 
 
 def test_the_two_purges_agree_on_the_shipped_label_panel() -> None:
@@ -636,4 +833,300 @@ def test_the_narrative_states_the_configured_horizon() -> None:
         f"03_financial_features describes {sorted(stated - {horizon})}-day labels "
         f"while setup.yaml configures a {horizon}-day horizon "
         f"({setup['labels']['primary']})"
+    )
+
+
+def _point_case_study_dir_at(monkeypatch, case_dir) -> None:
+    """Route every setup.yaml read for a synthetic case study at ``case_dir``.
+
+    ``append_holdout_fold_if_needed`` derives its boundaries through
+    ``build_holdout_cv``, which reads the holdout window and the label buffers itself
+    rather than taking them from the caller - that is what makes it the one derivation.
+    Both readers resolve through ``get_case_study_dir`` and both memoize, so a test that
+    patches one of them or forgets the caches silently measures a different case study.
+    """
+    import case_studies.utils.cv_window as cv_window
+    import utils.artifact_specs as artifact_specs
+    import utils.modeling as modeling
+
+    for module in (modeling, artifact_specs, cv_window):
+        monkeypatch.setattr(module, "get_case_study_dir", lambda *_a, **_k: case_dir)
+    artifact_specs._load_setup_config_cached.cache_clear()
+    cv_window._load_setup_yaml.cache_clear()
+    cv_window._holdout_window.cache_clear()
+    monkeypatch.setattr(artifact_specs, "load_label_spec", lambda *_a, **_k: None, raising=False)
+
+
+def test_the_holdout_fold_trains_on_everything_before_the_seal(tmp_path, monkeypatch) -> None:
+    """The holdout retrain is the one fit the sealed holdout ever sees, so the window it
+    trains on has to be everything available before the seal.
+
+    ``generate_cv_splits`` steps backward from the holdout boundary: fold 0 is the most
+    recent fold and carries the *latest* training start, and the list runs newest to
+    oldest. ``append_holdout_fold_if_needed`` took ``splits[0]["train_start"]``, which is
+    the shortest window of the set, not the longest. On etfs that is 2008-01-02 against an
+    earliest fold start of 2005-01-03 - three years dropped from the retrain, silently,
+    and only on the holdout path where nothing else would show it.
+    """
+    import pandas as pd
+    import polars as pl
+
+    from utils.modeling import ModelingDataset, append_holdout_fold_if_needed
+
+    case_dir = tmp_path / "cs"
+    (case_dir / "config").mkdir(parents=True)
+    (case_dir / "config" / "setup.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "evaluation": {"holdout_start": "2018-01-02", "holdout_end": "2018-12-31"},
+                "labels": {"primary": "fwd_ret_5d", "buffer": "5D"},
+            }
+        )
+    )
+    _point_case_study_dir_at(monkeypatch, case_dir)
+
+    sessions = pd.bdate_range("2005-01-03", "2018-12-31")
+    # Newest fold first, as generate_cv_splits emits them.
+    splits = [
+        {
+            "fold": i,
+            "train_start": pd.Timestamp(f"{2008 - i}-01-02"),
+            "train_end": pd.Timestamp(f"{2017 - i}-11-29"),
+            "val_start": pd.Timestamp(f"{2017 - i}-12-29"),
+            "val_end": pd.Timestamp(f"{2018 - i}-11-29"),
+        }
+        for i in range(3)
+    ]
+    mds = ModelingDataset.__new__(ModelingDataset)
+    mds.splits = splits
+    mds.date_col = "timestamp"
+    mds.dataset = pl.DataFrame({"timestamp": list(sessions)})
+    mds._input_lineage = object()
+
+    append_holdout_fold_if_needed(mds, "holdout", "whatever")
+
+    holdout = mds.splits[-1]
+    assert holdout["fold"] == 3
+    assert holdout["train_start"] == pd.Timestamp("2006-01-02"), (
+        "the holdout fold must start at the earliest train_start across folds, "
+        f"not splits[0]'s {splits[0]['train_start']}"
+    )
+    # Not `holdout_start`. Training stops one declared buffer short of the boundary, counted
+    # in sessions along the panel's own grid, which is what `build_holdout_cv` derives and
+    # what this function used to get wrong in both directions at once: the last training
+    # label's outcome window reached into the holdout, and because the training mask is
+    # inclusive at both ends, the boundary session was trained on and scored on in one fold.
+    excluded = [d for d in sessions if holdout["train_end"] < d < holdout["val_start"]]
+    assert len(excluded) == 5, "a 5D buffer seals five sessions, not zero"
+    assert holdout["train_end"] < holdout["val_start"] == pd.Timestamp("2018-01-02")
+    assert mds._input_lineage is None, "the memoized lineage describes the pre-append fold set"
+
+
+def test_the_holdout_fold_covers_every_bar_of_the_final_configured_session(
+    tmp_path, monkeypatch
+) -> None:
+    """An intraday panel loses its whole last session to a midnight upper bound.
+
+    ``holdout_end`` is configured as a date. Parsed it is that date at midnight,
+    and every fold filter here is ``timestamp <= val_end``, so on minute bars the
+    entire final session sorts after the bound and is written but never scored.
+    Measured on nasdaq100_microstructure: the producer side was fixed in
+    ``04_model_based_features`` and the holdout fold went 19,800,687 to 19,839,297
+    rows, none of which the consumer could read.
+    """
+    import pandas as pd
+    import polars as pl
+
+    from utils.modeling import ModelingDataset, append_holdout_fold_if_needed
+
+    case_dir = tmp_path / "cs"
+    (case_dir / "config").mkdir(parents=True)
+    (case_dir / "config" / "setup.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "evaluation": {"holdout_start": "2021-01-04", "holdout_end": "2021-12-31"},
+                "labels": {"primary": "fwd_ret_60m", "buffer": "60min"},
+            }
+        )
+    )
+    _point_case_study_dir_at(monkeypatch, case_dir)
+
+    mds = ModelingDataset.__new__(ModelingDataset)
+    mds.splits = [
+        {
+            "fold": 0,
+            "train_start": pd.Timestamp("2020-01-02 09:30"),
+            "train_end": pd.Timestamp("2020-12-30 15:58"),
+            "val_start": pd.Timestamp("2020-12-31 09:32"),
+            "val_end": pd.Timestamp("2020-12-31 15:58"),
+        }
+    ]
+    mds.date_col = "timestamp"
+    mds.dataset = pl.DataFrame(
+        {"timestamp": list(pd.date_range("2020-01-02 09:32", "2021-12-31 15:58", freq="30min"))}
+    )
+    mds._input_lineage = object()
+
+    append_holdout_fold_if_needed(mds, "holdout", "whatever")
+    holdout = mds.splits[-1]
+
+    # The decision minutes of the final configured session, as an intraday panel
+    # carries them. Not one of these is at midnight.
+    final_session = pd.date_range("2021-12-31 09:32", "2021-12-31 15:58", freq="2min")
+    in_window = (final_session >= holdout["val_start"]) & (final_session <= holdout["val_end"])
+    assert in_window.all(), (
+        f"{(~in_window).sum()} of {len(final_session)} bars of the final configured "
+        f"session fall outside [{holdout['val_start']}, {holdout['val_end']}]"
+    )
+    # And it stops there: the session after the configured end stays out.
+    next_session = pd.Timestamp("2022-01-03 09:32")
+    assert next_session > holdout["val_end"]
+
+
+def test_a_holdout_end_naming_an_instant_is_taken_literally() -> None:
+    """A config that names a time of day means that time, not the end of the day."""
+    import pandas as pd
+
+    from utils.modeling import _inclusive_end_of
+
+    assert _inclusive_end_of("2021-12-31 15:58") == pd.Timestamp("2021-12-31 15:58")
+    assert _inclusive_end_of("2021-12-31") > pd.Timestamp("2021-12-31 23:59:59")
+    assert _inclusive_end_of("2021-12-31") < pd.Timestamp("2022-01-01")
+
+    # An explicitly configured midnight is an instant, not a day. It parses to the
+    # same Timestamp as the bare date, so the configured string is what decides.
+    assert _inclusive_end_of("2021-12-31 00:00:00") == pd.Timestamp("2021-12-31")
+
+
+# The second seal mechanism. ``PER_SYMBOL_ENDPOINT_NOTEBOOKS`` above checks a purge on a
+# shifted label endpoint by reading it out of the source. Stage 03 does not purge: it
+# rebuilds the whole feature panel from the pre-holdout rows alone and requires every
+# emitted column to reproduce the values the full build produced on the rows the two
+# panels share (``case_studies/utils/feature_engineering.py::assert_values_agree``). That
+# catches a transform fitted across the sample -- a winsorization bound, a scaler, an
+# encoder -- for every column at once, rather than for the ones someone remembered to flag.
+#
+# The seal is stronger than a source pattern and it is checked by *executing* the notebook,
+# which is why nothing statically asserted it was still there: a future edit could delete it
+# and every static gate would stay green. That is the failure this file's docstring records
+# against the 2026-07-21 revert, so the seal gets a list of its own here. Eight of the nine
+# stage-03 notebooks carry it. ``us_equities_panel/03_financial_features`` is deliberately
+# absent and has its own test above
+# (``test_us_equities_panel_03_restricts_the_evaluation_on_the_label_endpoint``): it draws a
+# winsorization bound from development rows rather than rebuilding, so there is no second
+# build to compare against.
+RECONSTRUCTION_SEALED_NOTEBOOKS = [
+    "case_studies/cme_futures/03_financial_features.py",
+    "case_studies/crypto_perps_funding/03_financial_features.py",
+    "case_studies/etfs/03_financial_features.py",
+    "case_studies/fx_pairs/03_financial_features.py",
+    "case_studies/nasdaq100_microstructure/03_financial_features.py",
+    "case_studies/sp500_equity_option_analytics/03_financial_features.py",
+    "case_studies/sp500_options/03_financial_features.py",
+    "case_studies/us_firm_characteristics/03_financial_features.py",
+]
+
+
+def _module_level_bindings(tree: ast.Module) -> dict[str, ast.expr]:
+    """Every ``name = expr`` assigned once at module scope, by name."""
+    bindings: dict[str, ast.expr] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings[target.id] = node.value
+    return bindings
+
+
+def _expanded_source(node: ast.expr, bindings: dict[str, ast.expr], source: str) -> str:
+    """The node's source with module-level names substituted, three levels deep.
+
+    A notebook may name the boundary filter (``_before``), the restricted frame
+    (``pre_holdout``) or both, so the boundary is not always spelled inside the
+    call itself. Following the binding is what lets one check cover all eight
+    rather than eight regexes.
+    """
+    text = ast.get_source_segment(source, node) or ""
+    for _ in range(3):
+        names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        expansion = [
+            ast.get_source_segment(source, bindings[name]) or ""
+            for name in sorted(names)
+            if name in bindings
+        ]
+        if not expansion:
+            break
+        text = text + "\n" + "\n".join(expansion)
+        node = ast.parse("(" + ", ".join(f"({e})" for e in expansion) + ",)").body[0].value
+    return text
+
+
+@pytest.mark.parametrize("rel_path", RECONSTRUCTION_SEALED_NOTEBOOKS)
+def test_stage_03_is_sealed_by_reconstruction(rel_path: str) -> None:
+    """Stage 03 rebuilds the panel without the holdout and compares every column.
+
+    Four things have to hold together, and each of them alone is satisfiable by a
+    seal that checks nothing: the call is there, the second frame is *rebuilt*
+    rather than sliced out of the first, both frames stop at the boundary, and the
+    comparison covers the emitted feature columns rather than a hand-picked few.
+    """
+    path = REPO_ROOT / rel_path
+    source = path.read_text()
+    tree = ast.parse(source)
+    bindings = _module_level_bindings(tree)
+
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "assert_values_agree"
+    ]
+    assert calls, (
+        f"{rel_path}: no call to assert_values_agree. The holdout seal at this stage is a "
+        "rebuild of the panel from the pre-holdout rows compared against the full build; "
+        "deleting it leaves every other gate in this file green"
+    )
+    call = calls[0]
+    assert len(call.args) == 2, (
+        f"{rel_path}: assert_values_agree takes the full build and the withheld build as "
+        f"its two positional arguments; found {len(call.args)}"
+    )
+    full, withheld = call.args
+    keywords = {kw.arg: kw.value for kw in call.keywords}
+
+    # The withheld side must call a build function. Without this the seal is
+    # satisfiable by passing the same frame twice, which compares a panel to itself.
+    rebuilt = [
+        node
+        for node in ast.walk(withheld)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert any(node.func.id.startswith("build") for node in rebuilt), (
+        f"{rel_path}: the second argument must rebuild the panel from the pre-holdout rows "
+        "(a build_* call); slicing the full build instead compares it against itself"
+    )
+
+    for label, side in (("full", full), ("withheld", withheld)):
+        expanded = _expanded_source(side, bindings, source)
+        assert "HOLDOUT_START" in expanded, (
+            f"{rel_path}: the {label} frame passed to assert_values_agree is not restricted "
+            "to the rows before HOLDOUT_START, so the comparison does not run on the rows "
+            "the two panels share"
+        )
+
+    assert "columns" in keywords, f"{rel_path}: assert_values_agree needs columns="
+    columns = keywords["columns"]
+    assert isinstance(columns, ast.Name), (
+        f"{rel_path}: columns= must be the notebook's emitted feature-column list, not a "
+        f"literal; a hand-written list seals only the columns someone typed out "
+        f"({ast.get_source_segment(source, columns)})"
+    )
+    assert columns.id in bindings, (
+        f"{rel_path}: columns={columns.id} is not assigned at module scope, so what the "
+        "seal covers cannot be read from the source"
+    )
+    assert "keys" in keywords, (
+        f"{rel_path}: assert_values_agree needs keys=, the panel key both builds are sorted "
+        "on before the values are compared"
     )

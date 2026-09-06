@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from case_studies.utils.latent_factors.common import TaskType
 from case_studies.utils.latent_factors.library_bridge import run_cae_fold_with_library
+
+# Bumped when a change to this module would change a fitted CAE result. It enters
+# every cae training identity through `adapter._source_identity`, which declares behaviour
+# rather than hashing these bytes - see that function for why.
 
 
 def run_cae_fold(
@@ -30,6 +35,7 @@ def run_cae_fold(
     seed: int = 42,
     device: str = "cpu",
     log_fn=print,
+    artifact_dir: Path | None = None,
 ) -> tuple[dict[int, np.ndarray], dict[str, Any]]:
     """Train the CAE and emit forecasts from the requested checkpoint grid."""
     del log_fn
@@ -51,4 +57,5 @@ def run_cae_fold(
         task_type=task_type,
         seed=seed,
         device=device,
+        artifact_dir=artifact_dir,
     )

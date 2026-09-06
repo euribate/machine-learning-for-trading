@@ -19,14 +19,14 @@
 # Every model in this case study predicts the label defined here, so an error in it is
 # silent where it is made and reaches every metric and every backtest after it. This
 # notebook fixes the execution convention, proves each labelled row has a complete
-# forward window inside one trading session, measures how much independent information
-# those rows carry, establishes the floor a feature has to clear, and writes the files
-# stage 03 reads.
+# forward window inside one scheduled trading session, measures how much independent
+# information those rows carry, establishes the floor a feature has to clear, and writes the
+# label files the evaluation and modelling stages read.
 #
 # ## Learning objectives
 #
-# - Write an intraday forward return as an execution convention - which price is bought,
-#   at which time, and sold at which time - rather than as a row shift
+# - Write an intraday forward return as an execution convention - which bar the position
+#   opens on and which one it closes on - rather than as a row shift
 # - Measure the bar grid the horizon is counted on, and convert a declared duration into
 #   bars against it instead of assuming the two agree
 # - Assert, rather than describe, that every labelled window is complete inside one session
@@ -38,12 +38,15 @@
 #
 # Chapter 7, Section 7.2. Reads AlgoSeek NASDAQ-100 minute bars with NBBO quotes through
 # `load_nasdaq100_bars()`, whose coverage
-# [`01_feasibility_analysis`](01_feasibility_analysis.ipynb) establishes, and
-# `config/setup.yaml`, which declares the universe, the label set, the horizons and the
-# holdout boundary. Writes `labels/fwd_ret_5m.parquet`, `labels/fwd_ret_15m.parquet`,
-# `labels/fwd_ret_60m.parquet` and `labels/fwd_dir_15m.parquet`, each with a
-# `.digest.json` sidecar beside it. `03_financial_features.py` reads
-# `fwd_ret_15m.parquet`, which it names directly.
+# [`01_feasibility_analysis`](01_feasibility_analysis.ipynb) establishes, the NYSE trading
+# calendar, and `config/setup.yaml`, which declares the universe, the label set, the
+# horizons and the holdout boundary. Writes `labels/fwd_ret_5m.parquet`,
+# `labels/fwd_ret_15m.parquet`, `labels/fwd_ret_60m.parquet` and
+# `labels/fwd_dir_15m.parquet`, each with a `.digest.json` sidecar beside it.
+# [`05_evaluation`](05_evaluation.ipynb) joins these files to the feature panel, and the
+# modelling notebooks from `06_linear` on load the primary label through
+# `utils.modeling.load_modeling_dataset`. `03_financial_features.py` reads none of them:
+# it builds features from the bars and leaves the join to `05_evaluation`.
 
 # %%
 """NASDAQ-100 Microstructure: Label Engineering."""
@@ -56,6 +59,7 @@ import numpy as np
 import polars as pl
 import yaml
 from ml4t.diagnostic.metrics import compute_ic_hac_stats, cross_sectional_ic_series
+from ml4t.diagnostic.splitters.calendar import TradingCalendar
 from ml4t.engineer.labeling import fixed_time_horizon_labels
 
 from case_studies.utils.artifact_digest import value_digest, write_artifact
@@ -112,13 +116,17 @@ DIRECTION_LABEL = next(n for n in LABEL_NAMES if n.startswith("fwd_dir"))
 HORIZONS = {name: declared_horizon(name) for name in LABEL_NAMES}
 PRIMARY_HORIZON = HORIZONS[PRIMARY_LABEL]
 FLAT_BAND = setup["costs"]["friction_floor_bps"] / 10_000
+CALENDAR = setup["evaluation"]["calendar"]
 HOLDOUT_START = date.fromisoformat(setup["evaluation"]["holdout_start"])
 HOLDOUT_TS = datetime.combine(HOLDOUT_START, time())
+UNIVERSE = sorted(setup["universe"]["symbols"])
 GROUP_COLS = ["symbol", "session_date"]
 PALETTE = dict(zip(RETURN_LABELS, (COLORS["blue"], COLORS["amber"], COLORS["copper"])))
 
 print(f"Labels {LABEL_NAMES}, primary {PRIMARY_LABEL}, flat band {FLAT_BAND:.2%}")
-print(f"Holdout opens {HOLDOUT_START} and seals each label on its own endpoint")
+print(f"Universe: the {len(UNIVERSE)} names `setup.yaml` declares")
+print(f"Sessions come from the {CALENDAR} calendar; holdout opens {HOLDOUT_START}")
+print("Each label is sealed on its own endpoint, not on the bar it was observed from")
 
 # %% [markdown]
 # ## A. The learning task
@@ -143,16 +151,28 @@ print(f"Holdout opens {HOLDOUT_START} and seals each label on its own endpoint")
 #
 # Three things have to be true of the price series before a forward window means anything.
 #
-# **The price has to be one a trade could cross at.** Trade prices alternate between bid
-# and ask as buyers and sellers arrive, so a return taken between two of them carries a
-# bounce that has nothing to do with information (Hasbrouck, 2007). The midprice of the
-# closing NBBO quote removes it, and the half-spread taken from the same quote is what
-# Section E prices the move against.
+# **The price has to measure where the market is, not which side happened to trade.** Trade
+# prices alternate between bid and ask as buyers and sellers arrive, so a return taken
+# between two of them carries a bounce that has nothing to do with information (Hasbrouck,
+# 2007). The midpoint of the closing NBBO quote removes that bounce. It is not itself a
+# price anyone transacts at - a marketable order crosses at the bid or the ask - so what is
+# built from it is a midprice return, and the cost of crossing is charged against it
+# separately in Section E, out of the half-spread of the same quote.
 #
-# **The window has to sit inside one session.** An overnight gap is not an intraday move,
-# so `session_date` joins `symbol` in the entity key and no label crosses either. Regular
-# hours only: the pre-market and after-hours books are thin enough that their quotes
-# describe a different market.
+# **The window has to sit inside one session, and the session is the one the exchange
+# scheduled.** An overnight gap is not an intraday move, so `session_date` joins `symbol` in
+# the entity key and no label crosses either. Regular hours only: the pre-market and
+# after-hours books are thin enough that their quotes describe a different market.
+#
+# Where the session ends cannot be read off the clock, because the vendor emits the same
+# padded grid on every date. The half-sessions printed below close early and still carry
+# bars out to the usual hour, quoting a price carried forward from before the close. Two
+# things go wrong if those bars are kept, and only the first is visible: they get labels of
+# their own, and - the one that survives any filter applied further down the pipeline - the
+# genuine bars in the final `horizon` minutes before the close take their **exit** price
+# from a quote that postdates it. No trade could have been closed at that price, so the
+# return is not one anyone could have earned. The bound therefore comes from the exchange
+# calendar and is applied before any label is built.
 #
 # **No eligibility filter runs before the label.** Once rows are dropped from inside a
 # series a shift counts survivors rather than bars, and the window silently spans whatever
@@ -164,20 +184,38 @@ print(f"Holdout opens {HOLDOUT_START} and seals each label on its own endpoint")
 # run inside a couple of gigabytes instead of the twenty-eight the whole schema costs.
 
 # %%
-_hour, _minute = pl.col("timestamp").dt.hour(), pl.col("timestamp").dt.minute()
-REGULAR_HOURS = ((_hour > 9) | ((_hour == 9) & (_minute >= 30))) & (_hour < 16)
+_exchange = TradingCalendar(CALENDAR).calendar
+_schedule = _exchange.schedule(start_date=START_DATE, end_date=END_DATE).apply(
+    lambda col: col.dt.tz_convert(_exchange.tz).dt.tz_localize(None)
+)
+sessions = pl.DataFrame(
+    {
+        "session_date": [stamp.date() for stamp in _schedule.index],
+        "session_open": _schedule["market_open"].to_list(),
+        "session_close": _schedule["market_close"].to_list(),
+    }
+)
+_scheduled = sessions["session_close"] - sessions["session_open"]
+N_EARLY = int((_scheduled < _scheduled.max()).sum())
+_lengths = ", ".join(sorted({str(length) for length in _scheduled}))
+print(f"{sessions.height} {CALENDAR} sessions of length {_lengths}, {N_EARLY} closing early")
+
+# %%
+_clock = pl.col("timestamp").dt.time()
+_widest = (sessions["session_open"].dt.time().min(), sessions["session_close"].dt.time().max())
 _bid, _ask = pl.col("close_bid_price"), pl.col("close_ask_price")
 
-bars = (
+padded = (
     load_nasdaq100_bars(
         start_date=START_DATE,
         end_date=END_DATE,
         include_microstructure=True,
         max_symbols=MAX_SYMBOLS,
+        symbols=UNIVERSE,
         lazy=True,
     )
-    .select(["timestamp", "symbol", "close_bid_price", "close_ask_price"])
-    .filter(REGULAR_HOURS)
+    .select(["timestamp", "symbol", "close_bid_price", "close_ask_price", "vwap"])
+    .filter((_clock >= _widest[0]) & (_clock < _widest[1]))
     .with_columns(
         ((_bid + _ask) / 2).alias("mid_close"),
         ((_ask - _bid) / (_bid + _ask)).alias("half_spread"),
@@ -185,21 +223,32 @@ bars = (
     )
     .collect()
 )
+bars = (
+    padded.join(sessions, on="session_date", how="inner")
+    .filter(pl.col("timestamp").is_between(pl.col("session_open"), pl.col("session_close"), "left"))
+    .drop(["session_open", "session_close"])
+)
 quoted = bars.filter(pl.col("mid_close") > 0).sort([*GROUP_COLS, "timestamp"])
 
 # %%
-print(f"{bars.height:,} regular-hours bars, {bars['symbol'].n_unique()} symbols")
+print(
+    f"{padded.height:,} bars inside the widest scheduled window, {padded['symbol'].n_unique()} symbols"
+)
+print(f"{padded.height - bars.height:,} dropped past the scheduled close on {N_EARLY} early closes")
 print(f"{bars.height - quoted.height:,} dropped for a missing or non-positive quote midpoint")
 print(f"{quoted.height:,} quoted bars over {quoted['session_date'].n_unique():,} sessions")
 
 # %% [markdown]
 # The horizon is declared in minutes and applied to a frame of bars, so the spacing of
-# those bars is what converts one into the other. Measuring it is the whole of the fix for
-# a defect this notebook used to carry: a 15-row shift is a 15-minute return only on a
-# one-minute grid, and nothing in the loader promises one. The spacing is measured, the
-# grid is required to be uniform inside a session, and every horizon is required to be a
-# whole number of bars - at least two of them, so that the entry bar and the exit bar are
-# different bars.
+# those bars is what converts one into the other. A 15-row shift is a 15-minute return only
+# on a one-minute grid, and the loader returns the raw partition without promising one. The
+# spacing is therefore measured, the grid is required to be uniform inside a session, and
+# every horizon is required to be a whole number of bars - at least two of them, so that the
+# entry bar and the exit bar are different bars.
+#
+# Uniformity is a weaker property than it sounds and does not subsume the bound above: a
+# padded grid is exactly uniform, so this assertion passes on an early close whether or not
+# the padding was removed. The schedule is what removes it; this only checks the spacing.
 
 # %%
 _gap = pl.col("timestamp") - pl.col("timestamp").shift(1).over(GROUP_COLS)
@@ -207,6 +256,11 @@ spacing = quoted.select(_gap.drop_nulls().unique().alias("gap"))["gap"].to_list(
 assert len(spacing) == 1, f"the intraday grid is not uniform: spacings {sorted(spacing)}"
 BAR = spacing[0]
 HORIZON_BARS = {name: horizon // BAR for name, horizon in HORIZONS.items()}
+# The bar the exit leg is read from: the horizon, plus the one bar the entry already spent.
+# Named rather than written as `+ 1` wherever an endpoint is needed, because the `+ 1` is
+# exactly what a later reader who trusts the label's name would drop - and because a purge
+# taken from the horizon alone leaves the last training bar inside the first held-out label.
+LABEL_HORIZON_END_BARS = {name: bars + 1 for name, bars in HORIZON_BARS.items()}
 for name, horizon in HORIZONS.items():
     assert horizon % BAR == timedelta(0), f"{name}: {horizon} is not a whole number of {BAR} bars"
     assert HORIZON_BARS[name] >= 2, (
@@ -221,19 +275,55 @@ print(f"Bar spacing {BAR}, uniform within every session; horizons in bars {HORIZ
 #
 # One execution convention, written once and applied at all three horizons:
 #
-# $$r^{(H)}_{s,t} = \frac{M_{s,t+H}}{M_{s,t+B}} - 1$$
+# $$r^{(H)}_{s,t} = \frac{V_{s,t+B+H}}{V_{s,t+B}} - 1$$
 #
-# where $M$ is symbol $s$'s quote midpoint, $B$ is one bar and $H$ is the declared horizon.
-# The decision is taken on the bar closing at $t$, so the earliest price that can be
-# traded is the one a bar later - that is the execution delay `setup.yaml` declares - and
-# the position is held until $H$ after the decision. The numerator and the denominator are
-# both prices a trade could have crossed at, and the gap between them is what the strategy
-# actually earns.
+# where $V$ is symbol $s$'s volume-weighted traded price over a bar, $B$ is one bar and $H$ is
+# the declared horizon. The decision is taken on the bar closing at $t$, the earliest bar that
+# can be acted on is the one after it, and the position is held for $H$ from that fill to the
+# next one - so the span from entry to exit is exactly $H$, and the exit of one decision is
+# the entry of the next.
 #
-# The entry price is the next bar's midpoint, which the uniform grid asserted above makes
-# exactly one bar of wall-clock time later; the last bar of a session has no next bar, so it
-# carries no entry and no label. The exit is resolved by **time**, not by counting rows: the
-# library looks for a bar at exactly $H - B$ past the entry, and a bar that is missing
+# **Both ends are prices something actually traded at, and that is the change.** An earlier
+# version of this notebook used the quote midpoint at each end, which measures how far the
+# market moved rather than what a trade would have realised, and paired it with a backtest
+# filling on a fifteen-minute clock - so the interval the label predicted and the interval the
+# strategy held did not overlap at all. That is ml4t/agent-workspace#187, and the reason it
+# survived review is that both intervals were fifteen minutes long and nothing printed
+# distinguished them.
+#
+# A VWAP is not a price any single order is guaranteed, and it is not free of the spread: it
+# is where the minute's volume actually transacted, which sits inside the quoted spread on
+# average and reflects which side was pressing. What it is not is a midpoint, so the spread is
+# no longer an unpriced extra sitting outside the label - part of it is already inside these
+# two prices. The cost stage charges execution explicitly under two regimes, a flat basis-point
+# assumption and the half spread quoted at the time, and reports the difference rather than
+# picking one. Section G below still draws the median round trip against the label
+# distribution, and under this convention it reads as how the realised move compares with the
+# spread a round trip crosses, rather than as a cost the label ignores.
+#
+# **A minute in which nothing traded has no VWAP, and therefore no fill and no label.** That is
+# not a gap to be filled: at the close of bar $t$ nothing knows whether $t+B$ will print, so
+# substituting a midpoint or carrying the last trade would put information into the label that
+# the decision could not have had. The rows drop out on both legs instead. Within the session
+# this costs 0.0211% of otherwise usable bars on the fixture and 0.2384% on production - the
+# rate is an order of magnitude higher outside regular hours, which this notebook already
+# excludes.
+#
+# All four labels are computed on the **minute** grid the data arrives on, and what differs
+# between them is the horizon: five, fifteen and sixty minutes, plus a direction label cut
+# from the fifteen-minute return. $B$ is therefore one minute, and a horizon of $H$ minutes
+# is a shift of $H$ rows only where the minute grid is complete, which is what the section
+# above measures and Section D asserts. Chapter 16 rebalances this case study on a coarser
+# schedule than the one the labels are built on. Chapter 16 now decides every fifteen minutes
+# and fills on the minute after the decision, which is the same convention as this one; that
+# the two agree is the point of ml4t/agent-workspace#187 and is asserted there rather than
+# assumed here.
+#
+# The entry price is the next bar's VWAP, which the uniform grid asserted above makes exactly
+# one bar of wall-clock time later. Two things carry no entry and therefore no label: the last
+# bar of a session, which has no next bar, and a bar whose successor did not trade, which has
+# no volume-weighted price to fill at. The exit is resolved by **time**, not by counting rows:
+# the library looks for a bar at exactly $H$ past the entry, and a bar that is missing
 # resolves to nothing and nulls the label instead of letting a shift reach past the hole and
 # return a longer window under a shorter name. Materialising the entry price as its own
 # column is what lets the library express this convention - it divides by the price at $t$,
@@ -241,23 +331,29 @@ print(f"Bar spacing {BAR}, uniform within every session; horizons in bars {HORIZ
 
 # %%
 priced = quoted.with_columns(
-    pl.col("mid_close").shift(-1).over(GROUP_COLS).alias("entry_mid")
-).drop_nulls("entry_mid")
+    pl.col("vwap").shift(-1).over(GROUP_COLS).alias("entry_vwap")
+).drop_nulls("entry_vwap")
 
 # %%
 for name in RETURN_LABELS:
-    held = f"{(HORIZONS[name] - BAR) // timedelta(minutes=1)}m"
+    # The declared horizon, not the horizon minus a bar. The subtraction the previous version
+    # carried existed only because the library divides by the price at t, so materialising the
+    # entry one bar forward had already spent a bar of the span - and it made a fourteen-minute
+    # label read as fifteen to anyone who saw `HORIZONS - BAR` and rounded it in their head.
+    # That is how ml4t/agent-workspace#187 stayed invisible for months. Under this convention
+    # the span from entry fill to exit fill *is* the horizon, so it is written as one.
+    held = f"{HORIZONS[name] // timedelta(minutes=1)}m"
     priced = fixed_time_horizon_labels(
         priced,
         horizon=held,
         method="returns",
-        price_col="entry_mid",
+        price_col="entry_vwap",
         group_col=GROUP_COLS,
         timestamp_col="timestamp",
         tolerance="0s",
     ).rename({f"label_return_{held}": name})
 
-print(f"Constructed {', '.join(RETURN_LABELS)} on {priced.height:,} bars with a tradable entry")
+print(f"Constructed {', '.join(RETURN_LABELS)} on {priced.height:,} bars with a fillable entry")
 
 # %% [markdown]
 # The direction label is the primary return discretised into a band around zero: a move
@@ -286,8 +382,10 @@ labels_df = (
     .with_columns(
         (pl.len().over(GROUP_COLS) - 1 - _position).alias("from_end"),
         _position.alias("bar_in_session"),
+        # t+H+1, not t+H: the label reads a quote its own horizon does not name, and every
+        # gap taken from this column has to cover it.
         pl.col("timestamp")
-        .shift(-HORIZON_BARS[PRIMARY_LABEL])
+        .shift(-LABEL_HORIZON_END_BARS[PRIMARY_LABEL])
         .over(GROUP_COLS)
         .alias("_label_end"),
     )
@@ -309,27 +407,49 @@ print(f"market_data digest: {MARKET_DATA_DIGEST}")
 # bar count that happens to agree - so a grid that was ever coarser or gappier than it looks
 # would raise here rather than ship a longer return under a shorter name.
 #
-# The third catches a short label masked by a longer one's null set. Each session has to be
-# short by exactly its own horizon and no more, so `fwd_ret_5m` carries ten more rows per
-# session than `fwd_ret_15m`; an equal count means one label was gated by the other's nulls.
+# The third catches a short label masked by a longer one's null set. A session's tail is
+# short by its own horizon **plus one** - the extra bar is the entry, since the last bar of a
+# session has no bar after it to fill at - and every other missing label has to name its own
+# reason. Under the previous midpoint construction there were no other reasons: a midpoint
+# exists on every bar, so an exact count was the whole check. A VWAP does not. A minute that
+# did not trade has no volume-weighted price, so it drops the label of the bar that would
+# enter on it and the label of the bar that would exit on it, anywhere in the session.
+#
+# So the check is that every unlabelled row outside the tail has a null leg, rather than that
+# there are none. That is the stronger statement: an exact count would pass on a label gated
+# by another's nulls if the totals happened to agree, and this cannot - it asks each row why.
 
 # %%
 for name, h_bars in ((n, HORIZON_BARS[n]) for n in RETURN_LABELS):
     span = pl.col("timestamp").shift(-h_bars).over(GROUP_COLS) - pl.col("timestamp")
     checked = labels_df.with_columns(span.alias("_span"))
-    tail = checked.filter(pl.col("from_end") < h_bars)
+    tail = checked.filter(pl.col("from_end") <= h_bars)
     labelled = checked.drop_nulls(name)
     # 1. An incomplete forward window is null, never a value.
     assert tail[name].null_count() == tail.height, name
     # 2. Every labelled window spans exactly the declared horizon in wall-clock time.
     assert labelled.filter(pl.col("_span") != HORIZONS[name]).height == 0, name
-    # 3. Each session labels its first n - h bars, so no label crosses a session boundary and
-    #    none is gated by another label's null set.
-    counted = checked.group_by(GROUP_COLS).agg(
-        (pl.len() - pl.col(name).is_not_null().sum() - h_bars).alias("excess")
+    # 3. Outside that tail, a row is unlabelled only when one of its two legs did not
+    #    trade. No label crosses a session boundary, and none is gated by another's nulls.
+    exit_vwap = pl.col("vwap").shift(-LABEL_HORIZON_END_BARS[name]).over(GROUP_COLS)
+    unexplained = (
+        checked.with_columns(pl.col("vwap").shift(-1).over(GROUP_COLS).alias("_entry"))
+        .with_columns(exit_vwap.alias("_exit"))
+        .filter(
+            pl.col("from_end").gt(h_bars)
+            & pl.col(name).is_null()
+            & pl.col("_entry").is_not_null()
+            & pl.col("_exit").is_not_null()
+        )
     )
-    assert counted.filter(pl.col("excess") != 0).height == 0, name
-    print(f"{name}: {labelled.height:,} labelled, every window exactly {HORIZONS[name]}")
+    assert unexplained.height == 0, (
+        f"{name}: {unexplained.height:,} rows carry no label with both legs quoted"
+    )
+    untraded = checked.filter(pl.col("from_end").gt(h_bars) & pl.col(name).is_null()).height
+    print(
+        f"{name}: {labelled.height:,} labelled, every window exactly {HORIZONS[name]}; "
+        f"{untraded:,} in-session bars dropped for an untraded leg"
+    )
 
 # %%
 # 4. No discrete label is derived from a null return.
@@ -342,8 +462,8 @@ print(f"{DIRECTION_LABEL}: null on all {_unlabelled.len():,} bars where {PRIMARY
 # fall to zero over exactly the last `horizon` positions and sit flat beyond them, and the
 # three curves have to step down at three different places. A scalar count of valid rows
 # shows neither failure this catches: a tail fabricated instead of nulled, and a short
-# label carried on a longer one's null set - which is what this notebook shipped until now,
-# and which would draw the 5-minute curve exactly on top of the 15-minute one.
+# label carried on a longer one's null set, which draws the 5-minute curve exactly on top
+# of the 15-minute one.
 
 # %%
 profile = (
@@ -357,7 +477,7 @@ profile = (
 fig, ax = plt.subplots(figsize=FIGSIZE["single"])
 for name, colour in PALETTE.items():
     ax.plot(profile["from_end"], profile[name], ds="steps-mid", lw=1.8, c=colour, label=name)
-    ax.axvline(HORIZON_BARS[name] - 0.5, color=colour, linestyle=":", lw=1)
+    ax.axvline(HORIZON_BARS[name] + 0.5, color=colour, linestyle=":", lw=1)
 ax.set_xlabel("Bars from the end of the session")
 ax.set_ylabel("Share of bars carrying a label")
 sub = "Dotted lines mark each horizon; curves lying on top of each other mean one masked another"
@@ -376,9 +496,9 @@ show_with_alt(fig, "Non-null label rate by bar position from the end of each tra
 # seal governs what this notebook looks at rather than what it writes.
 #
 # Each label is sealed on its own endpoint, because they do not resolve together: the
-# 60-minute window closes three quarters of an hour after the 15-minute one opened from
-# the same bar, so one boundary applied to all three would leave the slowest label
-# reaching furthest into the holdout. The symbol-session is carried as one `entity` key,
+# 60-minute window opened from a given bar is still running three quarters of an hour after
+# the 15-minute one opened from that same bar has closed, so one boundary applied to all
+# three would leave the slowest label reaching furthest into the holdout. The symbol-session is carried as one `entity` key,
 # because it is the entity no label may cross and Section F counts overlap within it.
 
 
@@ -386,7 +506,10 @@ show_with_alt(fig, "Non-null label rate by bar position from the end of each tra
 _entity = (pl.col("symbol") + "|" + pl.col("session_date").cast(pl.Utf8)).alias("entity")
 dev = {
     name: labels_df.with_columns(
-        pl.col("timestamp").shift(-HORIZON_BARS[name]).over(GROUP_COLS).alias("_label_end"),
+        pl.col("timestamp")
+        .shift(-LABEL_HORIZON_END_BARS[name])
+        .over(GROUP_COLS)
+        .alias("_label_end"),
         _entity,
     )
     .filter(pl.col("_label_end") < HOLDOUT_TS)
@@ -497,7 +620,7 @@ ax.set_xlabel("Month")
 ax.set_ylabel("Share of labelled bars")
 sub = f"Class shares of {DIRECTION_LABEL} by month, development window"
 add_message_title(ax, "Up and down stay balanced; the flat share does not hold still", sub)
-ax.legend(loc="center right", frameon=False)
+ax.legend(loc="upper right", frameon=False)
 show_with_alt(
     fig, "Monthly class shares of the ternary direction label across the development window."
 )
@@ -508,19 +631,19 @@ for key, tag in classes.items():
     print(f"{tag}: {share:.3f} of labelled bars, ranging {lo:.3f} to {hi:.3f} across months")
 
 # %% [markdown] tags=["results"]
-# On the development window the primary label has a standard deviation of 0.004142, against
-# 0.002324 for the 5-minute label and 0.007884 for the 60-minute one - 0.56x and 1.90x the
+# On the development window the primary label has a standard deviation of 0.004139, against
+# 0.002315 for the 5-minute label and 0.007887 for the 60-minute one - 0.56x and 1.91x the
 # primary, against the 0.58x and 2.00x square-root-of-horizon scaling implies, so the shorter
 # horizon scales as that rule predicts and the longer one falls a little short of it. None of
-# the three is remotely normal: kurtosis runs from 86.0 at 60 minutes to 1147.8 at 5, so the
+# the three is remotely normal: kurtosis runs from 85.4 at 60 minutes to 1135.3 at 5, so the
 # shorter the horizon the more of its variance sits in rare bars.
 #
-# Against cost, the median absolute move is 8.74bps at 5 minutes, 16.34bps at 15 and 32.75bps
-# at 60, while the median round trip is 4.98, 5.03 and 5.25bps on the same bars - the move
+# Against cost, the median absolute move is 8.77bps at 5 minutes, 16.39bps at 15 and 32.84bps
+# at 60, while the median round trip is 4.94, 4.99 and 5.22bps on the same bars - the move
 # roughly doubles with each step up in horizon and the spread does not move at all. The share
-# of bars whose move clears that round trip climbs from 65.3% to 79.3% to 88.8%. Cut at the
-# 5bps friction floor, the direction label splits 0.414 up, 0.404 down and 0.181 flat, and
-# while up and down hold between 0.372-0.471 and 0.359-0.468 across months, the flat share
+# of bars whose move clears that round trip climbs from 65.5% to 79.5% to 89.0%. Cut at the
+# 5bps friction floor, the direction label splits 0.415 up, 0.405 down and 0.180 flat, and
+# while up and down hold between 0.372-0.471 and 0.360-0.468 across months, the flat share
 # runs from 0.061 to 0.268.
 
 # %% [markdown]
@@ -533,10 +656,12 @@ for key, tag in classes.items():
 # horizon was converted into, and both treat the symbol-session as the entity, because a
 # window cannot be concurrent with one on the other side of an overnight gap.
 #
-# What a label consumes is return intervals, and it consumes one fewer than its horizon in
-# bars: entering a bar after the decision and leaving at the horizon spans the moves between
-# those two prices, not the move into the entry. Consecutive rows share all but one of those
-# intervals, so the decay reads as a straight line falling by one interval per lag.
+# What a label consumes is return intervals, and it consumes exactly its horizon in bars:
+# entering a bar after the decision and leaving H bars after that spans the H moves between
+# those two prices. Consecutive rows share all but one of them, so the decay reads as a
+# straight line falling by one interval per lag. Two rows `lag` bars apart share `H - lag` of
+# them, so the last lag that still shares an interval is `H - 1` and the first that shares
+# none is `H`. That is where the dotted lines sit.
 # The longest label does not stop at zero when it gets there but keeps going negative, and
 # that is a property of the session rather than of the label - a one-hour window is a fifth of
 # a trading day, so each session holds few independent windows, and subtracting the session's
@@ -560,37 +685,43 @@ for name, colour in PALETTE.items():
 ax.axhline(0, color=COLORS["neutral"], lw=0.8)
 ax.set_xlabel("Lag in bars")
 ax.set_ylabel("Panel autocorrelation")
-sub = "Dotted lines mark each horizon; pooled across symbol-sessions on the development window"
+sub = "Dotted lines mark the first lag sharing no interval; pooled across symbol-sessions"
 add_message_title(ax, "Overlap decays linearly with lag at every horizon", sub)
 ax.legend(loc="upper right", frameon=False)
 show_with_alt(fig, "Panel autocorrelation of each forward-return label against lag in bars.")
 
 # %%
 for name in RETURN_LABELS:
-    h_bars, spans = HORIZON_BARS[name], HORIZON_BARS[name] - 1
+    spans = HORIZON_BARS[name]
     n_rows, n_eff = effective_sample_size(
         dev[name], horizon=spans, bar_col="bar_in_session", entity_col="entity"
     )
     print(
         f"{name}: N={n_rows:,}, N_eff={n_eff:,.0f}, ratio {n_eff / n_rows:.4f} against "
         f"{1 / spans:.4f} for {spans} intervals overlapping fully; autocorrelation "
-        f"{acf[name][0]:.3f} at lag one and {acf[name][h_bars - 1]:.3f} at its horizon"
+        f"{acf[name][0]:.3f} at lag one, {acf[name][spans - 2]:.3f} at lag {spans - 1} "
+        f"where one interval is still shared, and {acf[name][spans - 1]:.3f} at lag {spans} "
+        f"where none is"
     )
 
 # %% [markdown] tags=["results"]
-# The primary label's 14,370,375 development rows carry 1,062,039 effective observations, a
+# The primary label's 14,474,850 development rows carry 1,069,852 effective observations, a
 # ratio of 0.0739 against the 0.0714 that fourteen fully overlapping intervals imply; the
-# 5-minute label's 14,753,585 rows carry 3,717,137 at 0.2519 against 0.2500, and the
-# 60-minute label's 12,645,930 carry 252,009 at 0.0199 against 0.0169. Each sits above its
+# 5-minute label's 14,861,830 rows carry 3,744,481 at 0.2520 against 0.2500, and the
+# 60-minute label's 12,733,440 carry 253,863 at 0.0199 against 0.0169. Each sits above its
 # reference because a session end closes an overlap early, and the longest label sits
 # furthest above it because the session ends most often relative to its window. Fourteen
 # million rows are worth about a million: the row count overstates the evidence by roughly
 # the number of intervals each label spans.
 #
-# Autocorrelation falls from 0.920 at lag one to -0.038 at lag fifteen for the primary label
-# and from 0.741 to -0.023 at lag five for the fast one. The 60-minute label falls from 0.976
-# to -0.219 at lag sixty, crossing zero around lag fifty. The purge gap a fold needs is set by
-# the forward window itself, not by any of these counts.
+# The primary label's autocorrelation falls from 0.923 at lag one to 0.032 at lag thirteen,
+# the last lag sharing an interval with it, and to -0.040 at fourteen, the first sharing
+# none; the fast label runs 0.748 to 0.233 at three and -0.020 at four. The 60-minute label
+# falls from 0.977 to -0.198 at fifty-eight and -0.218 at fifty-nine, and it crosses zero
+# near lag fifty rather than at its own boundary - each session holds only a handful of
+# hour-long windows, and centring so few of them on their own mean drives what is left
+# negative. The purge gap a fold needs is set by the forward window itself, not by any of
+# these counts.
 
 # %% [markdown]
 # ## G. Baseline floor
@@ -604,9 +735,15 @@ for name in RETURN_LABELS:
 # The information coefficient is the cross-sectional rank correlation across the symbols
 # priced at each decision minute, averaged over minutes, which is the quantity a ranking
 # model is scored on. The minimum cross-section is half the median rather than a bare
-# count, so it means the same thing on a universe of another size. The standard error is
-# HAC-adjusted: consecutive decision minutes share fourteen of their fifteen bars of
-# outcome, and a naive statistic would count each of them as fresh evidence.
+# count, so it means the same thing on a universe of another size.
+#
+# The standard error is heteroskedasticity- and autocorrelation-consistent (HAC): it widens
+# the error bar by however much neighbouring observations repeat each other, instead of
+# assuming they are independent draws. That matters here because the primary label spans
+# fourteen one-minute return intervals and consecutive decision minutes share thirteen of
+# them, so a naive statistic would count each minute as fresh evidence when the outcomes are
+# almost the same outcome. The printed naive statistic is there to be compared against the
+# adjusted one; the gap between them is the size of the mistake.
 
 # %%
 _h = HORIZON_BARS[PRIMARY_LABEL]
@@ -636,20 +773,20 @@ stats = compute_ic_hac_stats(ic, ic_col="ic", label_horizon=_h)
 print(f"Baseline: trailing {PRIMARY_HORIZON} return against {PRIMARY_LABEL}")
 print(f"  {baseline.height:,} rows, minimum cross-section {min_obs} symbols")
 print(
-    f"  decision minutes scored {ic.height:,}, mean IC {stats['mean_ic']:.5f}, "
+    f"  decision minutes scored {stats['n_periods']:,}, mean IC {stats['mean_ic']:.5f}, "
     f"HAC t {stats['t_stat']:.2f} on {stats['effective_lags']} Bartlett lags, "
     f"naive t {stats['naive_t_stat']:.2f}, p {stats['p_value']:.3g}"
 )
 
 # %% [markdown] tags=["results"]
-# The trailing 15-minute return earns a mean information coefficient of -0.00798 against the
-# primary label, over 135,720 scored decision minutes drawn from 13,795,560 rows on a
+# The trailing 15-minute return earns a mean information coefficient of -0.00781 against the
+# primary label, over 135,360 scored decision minutes drawn from 13,894,380 rows on a
 # cross-section of at least 51 symbols. The sign is negative, so on this universe the recent
 # move tends to give part of itself back rather than continue.
 #
-# The Newey-West rule picks 19 Bartlett lags and returns a t-statistic of -6.02 against a
-# naive -16.78, so pricing in the overlap cuts the apparent evidence by nearly two thirds -
-# and what is left is still far from zero, at p 1.74e-09. That is the floor: a feature that
+# The Newey-West rule picks 19 Bartlett lags and returns a t-statistic of -5.91 against a
+# naive -16.47, so pricing in the overlap cuts the apparent evidence by nearly two thirds -
+# and what is left is still far from zero, at p 3.5e-09. That is the floor: a feature that
 # ranks the cross-section no better than the last quarter-hour of price has added nothing.
 # It is a floor on ranking, not on profit - a coefficient of this size is small next to the
 # round trip Section E priced, which is the tension the rest of the case study works through.
@@ -670,7 +807,7 @@ print(
 # boundaries fall.
 
 # %%
-readers = {PRIMARY_LABEL: "03_financial_features.py, as the label it names directly"}
+readers = {PRIMARY_LABEL: "05_evaluation.py, and every modelling notebook from 06_linear on"}
 for name in LABEL_NAMES:
     record = write_artifact(
         labels_df.select(["timestamp", "symbol", name]).drop_nulls(),
@@ -701,40 +838,50 @@ for name in LABEL_NAMES:
         f"\n  resolution   fixed at t+{horizon}; the closing NBBO quote breaks the within-bar tie"
         f"\n  overlap      {h_bars - 2} of its {h_bars - 1} return intervals, with the next row"
         f"\n  base rate    {scale}"
-        f"\n  consumed by  {readers.get(name, 'the model stages, as a variant')}"
+        f"\n  consumed by  {readers.get(name, '05_evaluation.py, as a declared variant')}"
     )
 
 # %% [markdown]
 # ## Key takeaways
 #
 # 1. **Write the label as an execution convention, then resolve the exit by time.** Naming
-#    the two prices a trade crosses - one bar after the decision, and again at the horizon -
-#    fixes what the number means; finding the exit by timestamp rather than by counting rows
-#    is what keeps it meaning that when a bar is missing.
+#    the two moments the position is opened and closed - one bar after the decision, and
+#    again at the horizon - fixes what the number means; finding the exit by timestamp
+#    rather than by counting rows is what keeps it meaning that when a bar is missing.
 # 2. **Measure the bar grid before converting a declared horizon into bars.** A 15-row shift
 #    is a 15-minute return only on a one-minute grid, and a loader that returns a raw
 #    partition promises no such thing. Measure the spacing, require the horizon to be a
 #    whole number of bars, and the conversion stops being an assumption.
-# 3. **Write every label from its own null set.** Dropping rows on the primary label before
+# 3. **Take the end of the session from the exchange, not from the data.** A vendor that pads
+#    every date to the same grid puts bars after an early close, and they are uniformly
+#    spaced, so no grid check finds them. The damage is not confined to those bars: the last
+#    `horizon` genuine bars before the close take their exit price from one of them. Bound
+#    the session by the published schedule before the forward window is built.
+# 4. **Write every label from its own null set.** Dropping rows on the primary label before
 #    saving the others silently truncates the shorter horizons at the session close, and the
 #    row counts look plausible because the file is still large.
-# 4. **Seal a diagnostic on the label's endpoint.** A decision taken before the holdout whose
+# 5. **Seal a diagnostic on the label's endpoint.** A decision taken before the holdout whose
 #    outcome resolves inside it is a holdout row, so the usable boundary is the boundary
 #    minus the horizon, counted within the session.
-# 5. **A row count overstates the evidence when forward windows overlap.** The effective
+# 6. **A row count overstates the evidence when forward windows overlap.** The effective
 #    count says by how much, and the HAC standard error is what stops that overlap from
 #    inflating a t-statistic - here by a factor of nearly three.
 #
 # **Known limitations.** The midprice is not a fill: a marketable order crosses the spread,
 # and the round trip charted in Section E is the quoted spread rather than a measured
 # execution cost - it carries no commission, no market impact and no queue position, so it
-# is a floor on what trading costs. It is also the spread quoted at the decision bar, doubled,
-# rather than the two spreads actually crossed at the entry and exit bars, so it prices the
-# round trip at the moment the decision is taken and not at the moments it is filled. The universe is the fixed NASDAQ-100 membership list
-# `setup.yaml` declares, not a
-# point-in-time index reconstruction, so a name that joined or left mid-sample is present
-# throughout. The flat band is a single constant across every symbol and every regime,
-# where the spread it stands for is neither. The baseline is one signal at one horizon.
+# is a floor on what trading costs. It doubles the half-spread quoted at the decision bar,
+# which is one full spread, rather than adding the two half-spreads actually crossed at the
+# entry and the exit, so it prices the round trip at the moment the decision is taken and
+# not at the two moments it is filled. The universe is the list `setup.yaml` declares, and
+# the archive behind it is point-in-time: a name carries bars only for the sessions it was a
+# constituent, so AAL and WLTW stop in May 2020 where they left the index and the
+# cross-section is narrower at the end of the sample than at its start. What the declared
+# list fixes is membership over the whole sample, not presence in every session. The flat
+# band is a single constant across every
+# symbol and every regime, where the spread it stands for is neither. The baseline is one
+# signal at one horizon.
 #
 # **Next**: `03_financial_features.py` builds the order-flow, liquidity and volatility
-# features and evaluates them against these labels.
+# features from the same bars; `05_evaluation.py` joins them to these labels and measures
+# each feature against them.

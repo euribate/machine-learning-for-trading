@@ -15,7 +15,6 @@ Usage:
 
 from __future__ import annotations
 
-import random
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -25,31 +24,65 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
+def top_entities(
+    data: pl.DataFrame | pl.LazyFrame,
+    max_entities: int,
+    entity_col: str = "symbol",
+) -> list:
+    """The ``max_entities`` entities with the most rows, ties broken by name.
+
+    **This is the one rule for reducing a panel's entity axis**, and every reduction
+    in the test and fixture path has to reach it, whether from a loader or from a
+    modelling helper. Two callers reducing the same panel to the same size have to
+    get the same universe or they are not measuring the same study: a symbol only
+    one side chose carries null features on the other, which runs clean and answers
+    wrongly.
+
+    Measured on nasdaq100_microstructure's CI fixture before the rules were unified:
+    ``02_labels`` and ``03_financial_features`` reduced through the loader to
+    {AAPL, AMD, CMCSA, CSCO, SIRI} - a seeded random sample - while
+    ``04_model_based_features`` took the five most-observed symbols,
+    {AAPL, AMD, AMZN, FB, TSLA}. Three of the five symbols the labels and financial
+    features covered therefore had no temporal features at all.
+
+    Row counts tie readily on these panels - five of the twelve fixture symbols sit
+    at exactly 136,140 bars - and a tie broken by frame order is not stable across
+    runs or across callers, so the entity name is the secondary key.
+
+    Production runs pass 0 and never reach this.
+    """
+    counts = (
+        data.lazy()
+        .group_by(entity_col)
+        .len()
+        .sort(["len", entity_col], descending=[True, False])
+        .head(max_entities)
+        .collect()
+    )
+    return counts[entity_col].to_list()
+
+
 def apply_max_symbols(
     data: pl.DataFrame | pl.LazyFrame,
     max_symbols: int,
     symbol_col: str = "symbol",
-    seed: int = 42,
 ) -> pl.DataFrame | pl.LazyFrame:
-    """Limit data to a random subset of symbols for fast-path testing.
+    """Limit data to the ``max_symbols`` most-observed symbols, for fast-path testing.
 
-    Selects a reproducible random sample of symbols using a fixed seed.
-    Returns data unchanged if max_symbols <= 0 or >= total symbols.
+    The loader-side entry point to :func:`top_entities`; ``utils.modeling`` reaches
+    the same rule from the modelling side. It used to be a seeded random sample of
+    the sorted symbol list, which disagreed with every consumer that reduced by
+    observation count and moved whenever the underlying symbol set changed.
+
+    Returns data unchanged if max_symbols <= 0.
     """
     if max_symbols <= 0:
         return data
 
-    if isinstance(data, pl.LazyFrame):
-        all_symbols = data.select(pl.col(symbol_col).unique()).collect()[symbol_col].to_list()
-    else:
-        all_symbols = data[symbol_col].unique().to_list()
-
-    if max_symbols >= len(all_symbols):
-        return data
-
-    rng = random.Random(seed)
-    selected = rng.sample(sorted(all_symbols), max_symbols)
-    return data.filter(pl.col(symbol_col).is_in(selected))
+    selected = top_entities(data, max_symbols, symbol_col)
+    # implode: is_in against a bare Series of the same dtype is deprecated in polars
+    # as ambiguous, and membership in the value set is what is meant.
+    return data.filter(pl.col(symbol_col).is_in(pl.Series(symbol_col, selected).implode()))
 
 
 def describe_coverage(
@@ -435,52 +468,101 @@ def validate_features(
     df: pl.DataFrame,
     feature_cols: Sequence[str],
     max_abs_value: float = 1e6,
+    allow_missing: bool = False,
 ) -> list[str]:
-    """Check feature columns for infinities, all-null, and extreme values.
+    """Check feature columns for infinities, absent values, and extreme values.
+
+    A NaN counts as absent here, not as a number. Polars evaluates ``NaN > x`` as
+    True, so a feature carrying the warm-up head every rolling window leaves would
+    otherwise be reported as holding values above ``max_abs_value``: a 252-session
+    warm-up over 30 products reported 7,560 extreme values for a Shannon entropy
+    bounded well below ten. Reading it the other way round also matters - a column
+    that is entirely NaN carries no value at all, and was previously reported as
+    neither absent nor extreme.
+
+    A column named in ``feature_cols`` that ``df`` does not carry raises. A check
+    that cannot find what it is checking has not passed, and reporting success is
+    the one thing it must not do: called with one frame's column names against a
+    different frame, this skipped all 22 columns it was given and reported the
+    panel clean. An empty ``feature_cols`` fails for the same reason. Where a
+    caller genuinely holds a superset - a column list spanning several artifacts,
+    checked one artifact at a time - pass ``allow_missing=True`` and the absent
+    names are reported as a warning instead.
 
     Args:
         df: DataFrame containing feature columns
         feature_cols: List of feature column names to validate
         max_abs_value: Threshold for flagging extreme values
+        allow_missing: Report columns absent from ``df`` as a warning rather than
+            raising. The default refuses them.
 
     Returns list of warning/error strings.
+
+    Raises:
+        ValueError: If ``feature_cols`` is empty, or names a column ``df`` does
+            not carry and ``allow_missing`` is False.
     """
     issues: list[str] = []
-    n_rows = df.height
+
+    if not feature_cols:
+        raise ValueError(
+            "validate_features was given no columns to check. A gate over nothing "
+            "reports success without reading a value; pass the columns the frame "
+            "carries, or do not call the gate."
+        )
+
+    missing = [col for col in feature_cols if col not in df.columns]
+    if missing and not allow_missing:
+        raise ValueError(
+            f"validate_features cannot find {len(missing)} of the {len(feature_cols)} "
+            f"columns it was asked to check: {missing[:10]}"
+            f"{'...' if len(missing) > 10 else ''}. The frame carries "
+            f"{len(df.columns)} columns. Pass the frame these names come from, or "
+            f"allow_missing=True if the list deliberately spans several frames."
+        )
+    if missing:
+        issues.append(
+            f"WARNING: {len(missing)} of {len(feature_cols)} columns are not in the frame "
+            f"and were not checked: {missing[:10]}{'...' if len(missing) > 10 else ''}"
+        )
 
     inf_cols = []
-    null_cols = []
+    absent_cols = []
     extreme_cols = []
 
     for col in feature_cols:
         if col not in df.columns:
             continue
 
-        series = df[col]
-        n_null = series.null_count()
-        non_null = series.drop_nulls()
+        present = df[col].drop_nulls()
+        is_float = present.dtype.is_float()
+        if is_float:
+            present = present.filter(present.is_not_nan())
 
-        if n_null == n_rows:
-            null_cols.append(col)
+        if present.len() == 0:
+            absent_cols.append(col)
             continue
 
-        if non_null.len() > 0:
-            n_inf = non_null.filter(non_null.is_infinite()).len()
+        if is_float:
+            n_inf = present.filter(present.is_infinite()).len()
             if n_inf > 0:
                 inf_cols.append((col, n_inf))
+            # The three conditions are reported separately, so an infinity is not
+            # also counted among the finite values that ran large.
+            present = present.filter(present.is_finite())
 
-            n_extreme = non_null.filter(non_null.abs() > max_abs_value).len()
-            if n_extreme > 0:
-                extreme_cols.append((col, n_extreme))
+        n_extreme = present.filter(present.abs() > max_abs_value).len()
+        if n_extreme > 0:
+            extreme_cols.append((col, n_extreme))
 
     if inf_cols:
         details = ", ".join(f"{c}({n})" for c, n in inf_cols[:10])
         issues.append(f"CRITICAL: {len(inf_cols)} features have infinite values: {details}")
 
-    if null_cols:
+    if absent_cols:
         issues.append(
-            f"WARNING: {len(null_cols)} features are entirely null: "
-            f"{null_cols[:10]}{'...' if len(null_cols) > 10 else ''}"
+            f"WARNING: {len(absent_cols)} features carry no value, null or NaN throughout: "
+            f"{absent_cols[:10]}{'...' if len(absent_cols) > 10 else ''}"
         )
 
     if extreme_cols:
@@ -503,6 +585,7 @@ def validate_modeling_inputs(
     max_abs_return: float = 0.5,
     max_abs_feature: float = 1e6,
     fail_on_critical: bool = True,
+    allow_missing_features: bool = False,
 ) -> dict:
     """Run all data quality checks before modeling.
 
@@ -520,12 +603,16 @@ def validate_modeling_inputs(
         max_abs_return: Max plausible absolute return for labels
         max_abs_feature: Max plausible absolute feature value
         fail_on_critical: If True, raise ValueError on CRITICAL issues
+        allow_missing_features: Passed to ``validate_features``. The default
+            refuses a feature column ``features_df`` does not carry, because the
+            gate would otherwise skip it and still report the panel clean.
 
     Returns:
         Dict with 'issues' (list of strings), 'n_critical', 'n_warning'
 
     Raises:
-        ValueError: If fail_on_critical=True and any CRITICAL issues found
+        ValueError: If fail_on_critical=True and any CRITICAL issues found, or if
+            ``feature_cols`` names a column ``features_df`` does not carry
     """
     all_issues: list[str] = []
 
@@ -537,7 +624,14 @@ def validate_modeling_inputs(
     all_issues.extend(validate_labels(label_df, label_col, max_abs_return))
 
     # 3. Feature checks
-    all_issues.extend(validate_features(features_df, feature_cols, max_abs_feature))
+    all_issues.extend(
+        validate_features(
+            features_df,
+            feature_cols,
+            max_abs_feature,
+            allow_missing=allow_missing_features,
+        )
+    )
 
     # Summarize
     n_critical = sum(1 for i in all_issues if i.startswith("CRITICAL"))

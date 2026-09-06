@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
+import uuid
 from pathlib import Path
+from typing import Any
 
 from .specs import (
+    SUPPORTED_IDENTITY_VERSIONS,
+    _hashable_strategy_spec,
     _validate_spec,
     backtest_hash_from_parts,
     build_training_spec,
     canonical_json,
     prediction_hash_from_parts,
+    project_training_identity,
     training_hash_from_spec,
 )
 from .store import (
@@ -23,14 +30,159 @@ from .store import (
     _prediction_dir,
     _save_json,
     _save_parquet,
+    _timestamps_as_utc,
     _training_dir,
     _upsert_wide_metrics,
     _utc_now,
+    causal_identities_retired,
+    current_causal_identities,
 )
 
 logger = logging.getLogger(__name__)
 
 VALID_PREDICTION_SPLITS = frozenset({"validation", "holdout"})
+
+# Columns a schema migration added, which an immutable row may therefore be missing
+# through no change of its own. Nothing else is filled on NULL: see the comment at the
+# backfill itself for why a nullable column is not the same as a migrated one.
+MIGRATION_BACKFILLED_COLUMNS = frozenset({"refutation_n_successful", "refutation_placebo_json"})
+MAX_PREDICTION_STD_RATIO = 100.0
+
+
+def _atomic_save_json(path: Path, data: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        _save_json(temporary, data)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _sampling_reduced(spec_json: str | None) -> bool:
+    """Whether the parent training run declared a sampling reduction.
+
+    Every family records ``computation.sampling`` and each writes its own no-op
+    value into it: a count reads 0 and a fraction reads 1.0 when nothing was
+    reduced (``deep_learning.py``, ``gbm.py``, ``linear.py``, ``tabular_dl.py``
+    and ``latent_factors/adapter.py`` each build the dict, and each already
+    compares against exactly that shape before reconstructing a locked request).
+    Anything else means a preview drew less than the run declares.
+    """
+    if not spec_json:
+        return False
+    try:
+        computation = json.loads(spec_json).get("computation")
+    except (TypeError, ValueError):
+        return False
+    sampling = (computation or {}).get("sampling") if isinstance(computation, dict) else None
+    if not isinstance(sampling, dict):
+        return False
+    for key, value in sampling.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        if value != (1.0 if key.endswith("_frac") else 0):
+            return True
+    return False
+
+
+def _validate_prediction_dispersion(predictions, *, refuse: bool = True) -> None:
+    """Reject a prediction set with an implausible score scale on any fold.
+
+    The bound is deliberately wide. Across 8,090 finite folds in the nine
+    production registries, the largest fold below the failure population was
+    72.72. The known divergent folds started at 187.41 and extended to
+    9.22e39. Rank correlation cannot detect this failure because it is invariant
+    to score scale.
+
+    ``refuse`` is false for a run that declared a sampling reduction or a preview
+    tier. The ratio compares the score scale to the label scale, and that says
+    something about the fit only once the fit has converged: before then the
+    numerator is set by weight initialization and the input scale, the
+    denominator by the label alone, so the quotient tracks the label's magnitude
+    rather than the model's behaviour. Under the CI fixture a sequence preset
+    draws one batch of 2,048 windows from a 2,000-window sample and takes two
+    optimizer steps, which is not a fit that can have diverged; the eight case
+    studies that pass there do so because their labels sit near 1e-2, not
+    because anything about them converged. The ratio is still computed and
+    logged on such a run, so the number stays visible; it does not refuse.
+
+    A non-finite score is refused either way. That failure does not depend on how
+    far a fit progressed, and a NaN score breaks every downstream read of the
+    prediction set whatever produced it.
+    """
+    import math
+
+    import polars as pl
+
+    if not isinstance(predictions, pl.DataFrame):
+        predictions = pl.from_pandas(predictions)
+
+    fold_col = _detect_fold_col(predictions)
+    y_true_col, y_score_col = _detect_score_cols(predictions)
+    if fold_col is None or not {y_true_col, y_score_col}.issubset(predictions.columns):
+        return
+
+    typed = predictions.lazy().select(
+        pl.col(fold_col).alias("fold"),
+        pl.col(y_true_col).cast(pl.Float64, strict=False).alias("actual"),
+        pl.col(y_score_col).cast(pl.Float64, strict=False).alias("score"),
+    )
+    fold_health = (
+        typed.group_by("fold")
+        .agg(
+            pl.len().alias("n_total"),
+            pl.col("score").is_finite().sum().alias("n_finite"),
+        )
+        .collect()
+    )
+    invalid_folds = []
+    for row in fold_health.iter_rows(named=True):
+        n_invalid = row["n_total"] - row["n_finite"]
+        if n_invalid:
+            invalid_folds.append(f"fold {row['fold']}: {n_invalid} non-finite score(s)")
+    if invalid_folds:
+        raise ValueError(
+            "Refusing to register predictions with a non-finite fold: " + "; ".join(invalid_folds)
+        )
+
+    dispersion = (
+        typed.filter(pl.col("actual").is_finite() & pl.col("score").is_finite())
+        .group_by("fold")
+        .agg(
+            pl.len().alias("n"),
+            pl.col("actual").std().alias("actual_std"),
+            pl.col("score").std().alias("score_std"),
+        )
+        .collect()
+    )
+
+    violations = []
+    for row in dispersion.iter_rows(named=True):
+        actual_std = row["actual_std"]
+        score_std = row["score_std"]
+        if row["n"] < 2 or actual_std is None or actual_std <= 0 or score_std is None:
+            continue
+        ratio = float(score_std / actual_std)
+        if not math.isfinite(ratio) or ratio > MAX_PREDICTION_STD_RATIO:
+            violations.append(
+                f"fold {row['fold']}: prediction dispersion ratio {ratio:.6g} "
+                f"(score std {score_std:.6g} / target std {actual_std:.6g})"
+            )
+
+    if not violations:
+        return
+    detail = (
+        f"the maximum allowed per-fold dispersion ratio is "
+        f"{MAX_PREDICTION_STD_RATIO:g}: " + "; ".join(violations)
+    )
+    if not refuse:
+        logger.warning(
+            "Prediction dispersion exceeds the bound on a run that declared a reduction, so "
+            "it is reported rather than refused; %s",
+            detail,
+        )
+        return
+    raise ValueError("Refusing to register predictions with a diverged fold; " + detail)
 
 
 def clear_prediction_sets(
@@ -105,6 +257,10 @@ def clear_prediction_sets(
             prediction_hashes,
         )
         db.execute(
+            f"DELETE FROM prediction_coverage WHERE prediction_hash IN ({placeholders})",
+            prediction_hashes,
+        )
+        db.execute(
             f"DELETE FROM prediction_sets WHERE prediction_hash IN ({placeholders})",
             prediction_hashes,
         )
@@ -165,6 +321,107 @@ def register_training_run(
     spec = _validate_spec(spec)
     t_hash = training_hash_from_spec(spec)
     spec_json_str = canonical_json(spec)
+    # Defaulted here rather than only in `ResultsCatalog.register_training`, because this
+    # function has five other callers and none of them supplied it. A NULL `started_at` is
+    # what leaves a row with no recoverable timing at all: `elapsed_s` is filled in later by
+    # `record_training_runtime` and stays NULL when a run does not reach it, and without a
+    # start there is nothing to fall back on. Measured on the current nasdaq registry,
+    # 2026-09-05: 13 of 13 linear rows carry NULL for both, registered across 3.1 seconds.
+    # "When the identity was registered" is within seconds of "when work on it began" on
+    # every path that registers before fitting, which is all of them.
+    started_at = started_at or _utc_now()
+
+    if spec.get("identity_version") in SUPPORTED_IDENTITY_VERSIONS:
+        identity_version = int(spec["identity_version"])
+        tier = spec.get("execution_tier")
+        if tier not in {"canonical", "preview"}:
+            raise ValueError("versioned training spec requires execution_tier canonical or preview")
+        db = _open_registry(case_dir)
+        try:
+            existing = db.execute(
+                "SELECT spec_json, identity_version, execution_tier FROM training_runs "
+                "WHERE training_hash = ?",
+                (t_hash,),
+            ).fetchone()
+            if existing is not None:
+                existing_spec = json.loads(existing[0])
+                if project_training_identity(existing_spec) != project_training_identity(
+                    spec
+                ) or existing[1:] != (identity_version, tier):
+                    raise ValueError(f"immutable training identity conflict for {t_hash}")
+                spec_path = _training_dir(case_dir, t_hash) / "spec.json"
+                try:
+                    artifact_spec = json.loads(spec_path.read_text())
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"immutable training spec artifact conflict for {t_hash}"
+                    ) from exc
+                if artifact_spec != existing_spec:
+                    raise ValueError(f"immutable training spec artifact conflict for {t_hash}")
+                return t_hash
+
+            train_dir = _training_dir(case_dir, t_hash)
+            spec_path = train_dir / "spec.json"
+            if spec_path.exists():
+                try:
+                    orphaned_spec = json.loads(spec_path.read_text())
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ValueError(
+                        f"immutable training spec artifact conflict for {t_hash}"
+                    ) from exc
+                if orphaned_spec != spec:
+                    raise ValueError(f"immutable training spec artifact conflict for {t_hash}")
+            else:
+                _atomic_save_json(spec_path, spec)
+            if runtime_provenance is not None:
+                runtime_path = train_dir / "runtime.json"
+                if runtime_path.exists():
+                    try:
+                        orphaned_runtime = json.loads(runtime_path.read_text())
+                    except (OSError, json.JSONDecodeError) as exc:
+                        raise ValueError(
+                            f"immutable training runtime artifact conflict for {t_hash}"
+                        ) from exc
+                    if orphaned_runtime != runtime_provenance:
+                        raise ValueError(
+                            f"immutable training runtime artifact conflict for {t_hash}"
+                        )
+                else:
+                    _atomic_save_json(runtime_path, runtime_provenance)
+            try:
+                db.execute(
+                    """
+                    INSERT INTO training_runs
+                    (training_hash, family, label, config_name, spec_json, created_at,
+                     git_commit, entry_point, started_at, elapsed_s, runtime_json,
+                     identity_version, execution_tier)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        t_hash,
+                        spec["family"],
+                        spec["label"],
+                        spec.get("config_name"),
+                        spec_json_str,
+                        _utc_now(),
+                        _git_hash(),
+                        entry_point,
+                        started_at,
+                        elapsed_s,
+                        canonical_json(runtime_provenance)
+                        if runtime_provenance is not None
+                        else None,
+                        identity_version,
+                        tier,
+                    ),
+                )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+        finally:
+            db.close()
+        return t_hash
 
     # Write spec.json (authoritative identity artifact)
     train_dir = _training_dir(case_dir, t_hash)
@@ -202,6 +459,70 @@ def register_training_run(
         db.close()
 
     return t_hash
+
+
+def record_training_runtime(
+    case_study: str,
+    training_hash: str,
+    *,
+    case_dir: Path | None = None,
+    measured: dict,
+) -> None:
+    """Record what a completed training run cost, against the row it produced.
+
+    A training run is registered before it is fitted, because the identity has to exist before
+    anything can be written under it. Nothing then came back to say what the fit cost, so
+    ``training_runs.elapsed_s`` was NULL on every row the current path produced while the value
+    sat in the run's ``runtime.json`` where no query looks. Scheduling the next run from recorded
+    cost - which is what ``reference/case-study-runtimes.md`` exists to do - needs the column.
+
+    ``measured`` carries the resource capture: wall seconds, CPU seconds, cores actually used and
+    peak resident memory. ``elapsed_s`` is promoted to its own column because that is what is
+    queried; the rest is merged into ``runtime_json``.
+
+    The ``runtime.json`` artifact beside the row is deliberately left alone. It records what the
+    run *was* and is compared byte for byte when the same identity is registered again, so
+    writing a measurement into it would turn a legitimate re-run into an identity conflict.
+    """
+    if not measured:
+        return
+    if case_dir is None:
+        case_dir = _case_dir(case_study)
+    elapsed = measured.get("elapsed_s")
+
+    db = _open_registry(case_dir)
+    try:
+        row = db.execute(
+            "SELECT runtime_json FROM training_runs WHERE training_hash = ?",
+            (training_hash,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"no training run registered for {training_hash}")
+        try:
+            runtime = json.loads(row[0]) if row[0] else {}
+        except json.JSONDecodeError:
+            runtime = {}
+        if not isinstance(runtime, dict):
+            runtime = {}
+        # Measurements are namespaced so they cannot collide with a declared provenance field,
+        # and so a reader can tell what the run declared from what it turned out to cost.
+        resources = dict(runtime.get("resources") or {})
+        resources.update(measured)
+        runtime["resources"] = resources
+        db.execute(
+            "UPDATE training_runs SET elapsed_s = ?, runtime_json = ? WHERE training_hash = ?",
+            (
+                float(elapsed) if elapsed is not None else None,
+                canonical_json(runtime),
+                training_hash,
+            ),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def register_epoch_checkpoint(
@@ -409,6 +730,52 @@ def register_epoch_checkpoint(
 # ---------------------------------------------------------------------------
 
 
+def _declared_label_buffer(case_study: str, label: str | None) -> str | None:
+    """The holding period the case study declares for ``label``."""
+    if not label:
+        return None
+    try:
+        from utils.artifact_specs import load_setup_config, resolve_label_buffer
+
+        return resolve_label_buffer(case_study, label, load_setup_config(case_study))
+    except Exception:  # noqa: BLE001 - a missing declaration is not a registration failure
+        return None
+
+
+def _sibling_direction_labels(case_study: str, case_dir, label: str | None):
+    """The binary direction label cut from ``label``, loaded, or ``(None, None)``.
+
+    Scoring a regression model by AUC needs the direction label derived from the same return,
+    which ``labels.classification_eval_label`` already declares in the other direction. A label
+    with more than two levels is skipped rather than collapsed: ``fwd_dir_8h_3c`` has a neutral
+    band, so "up" in it is "up beyond the band", a different event from the plain direction
+    label's "up", and storing the two under one column is how a distinction gets lost. Where a
+    case study declares both, the strictly binary one is used.
+
+    A missing or unreadable label is not a registration failure - the AUC is a secondary
+    reading, and the run that produced the predictions is what matters.
+    """
+    if not label:
+        return None, None
+    try:
+        import polars as pl
+
+        from utils.modeling import get_direction_labels
+
+        for name in get_direction_labels(case_study, label):
+            path = case_dir / "labels" / f"{name}.parquet"
+            if not path.exists():
+                continue
+            frame = pl.read_parquet(path)
+            if name not in frame.columns:
+                continue
+            if frame.get_column(name).drop_nulls().n_unique() == 2:
+                return frame, name
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("no sibling direction label for %s/%s: %s", case_study, label, exc)
+    return None, None
+
+
 def register_prediction_set(
     case_study: str,
     training_hash: str,
@@ -423,6 +790,8 @@ def register_prediction_set(
     eval_col: str | None = None,
     label: str | None = None,
     case_dir: Path | None = None,
+    expected_keys=None,
+    allow_partial: bool = False,
 ) -> str:
     """Register a prediction set. Returns prediction_hash.
 
@@ -468,45 +837,204 @@ def register_prediction_set(
     if case_dir is None:
         case_dir = _case_dir(case_study)
 
-    p_hash = prediction_hash_from_parts(training_hash, checkpoint_value, split)
-
-    # Save predictions
-    if predictions is not None:
-        pred_dir = _prediction_dir(case_dir, p_hash)
-        _save_parquet(pred_dir / "predictions.parquet", predictions)
-
-    # Insert into DB
     db = _open_registry(case_dir)
     try:
-        db.execute(
-            """
-            INSERT OR REPLACE INTO prediction_sets
-            (prediction_hash, training_hash, checkpoint_value, checkpoint_kind,
-             split, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                p_hash,
-                training_hash,
-                checkpoint_value,
-                checkpoint_kind,
-                split,
-                _utc_now(),
-            ),
-        )
-
-        if metrics:
-            _upsert_wide_metrics(db, "prediction_metrics", {"prediction_hash": p_hash}, metrics)
-
-        db.commit()
+        parent = db.execute(
+            "SELECT identity_version, execution_tier, spec_json FROM training_runs "
+            "WHERE training_hash = ?",
+            (training_hash,),
+        ).fetchone()
     finally:
         db.close()
+    if parent is None:
+        raise ValueError(f"unknown training_hash {training_hash}")
+    identity_version, execution_tier, parent_spec_json = parent
+
+    # After the parent lookup, not before it: the dispersion bound is a statement about a
+    # converged fit, and only the parent row says whether this run claims to be one. The
+    # reduction is read from what was registered rather than from what the caller asserts.
+    if predictions is not None:
+        _validate_prediction_dispersion(
+            predictions,
+            refuse=not (
+                str(execution_tier or "canonical") == "preview"
+                or _sampling_reduced(parent_spec_json)
+            ),
+        )
+    # Before coverage, not after. `schema_json` records the dtypes of the frame handed in
+    # and the immutability check compares one checkpoint's against another's, so
+    # normalizing later would store a naive schema beside a UTC-aware parquet and make two
+    # equivalent checkpoints disagree on nothing but the zone.
+    predictions = _timestamps_as_utc(predictions)
+    coverage = None
+    if identity_version in SUPPORTED_IDENTITY_VERSIONS:
+        if predictions is None or expected_keys is None:
+            raise ValueError(
+                "versioned prediction registration requires predictions and expected_keys"
+            )
+        from .completeness import evaluate_prediction_coverage
+
+        coverage = evaluate_prediction_coverage(expected_keys, predictions)
+        if not coverage.complete and not allow_partial:
+            raise ValueError(f"prediction coverage is partial: {coverage.as_dict()}")
+        db = _open_registry(case_dir)
+        try:
+            existing_schema = db.execute(
+                """
+                SELECT c.schema_json
+                FROM prediction_coverage c
+                JOIN prediction_sets p ON p.prediction_hash = c.prediction_hash
+                WHERE p.training_hash = ? AND p.split = ?
+                LIMIT 1
+                """,
+                (training_hash, split),
+            ).fetchone()
+        finally:
+            db.close()
+        if existing_schema is not None and existing_schema[0] != coverage.schema_json:
+            raise ValueError("prediction schema differs from an existing checkpoint")
+
+    p_hash = prediction_hash_from_parts(
+        training_hash,
+        checkpoint_value,
+        split,
+        checkpoint_kind=checkpoint_kind,
+        identity_version=identity_version,
+    )
+
+    if identity_version in SUPPORTED_IDENTITY_VERSIONS:
+        assert coverage is not None
+        import polars as pl
+
+        from case_studies.utils.artifact_digest import value_digest
+
+        normalized_predictions = (
+            predictions if isinstance(predictions, pl.DataFrame) else pl.from_pandas(predictions)
+        )
+        prediction_artifact_digest = value_digest(normalized_predictions)
+        pred_dir = _prediction_dir(case_dir, p_hash)
+        pred_path = pred_dir / "predictions.parquet"
+        temporary = pred_dir / f".predictions.{uuid.uuid4().hex}.tmp"
+        db = _open_registry(case_dir)
+        created_artifact = False
+        try:
+            existing = db.execute(
+                "SELECT training_hash, checkpoint_value, checkpoint_kind, split "
+                "FROM prediction_sets WHERE prediction_hash = ?",
+                (p_hash,),
+            ).fetchone()
+            expected_row = (training_hash, checkpoint_value, checkpoint_kind, split)
+            if existing is not None:
+                if existing != expected_row:
+                    raise ValueError(f"immutable prediction identity conflict for {p_hash}")
+                if (
+                    not pred_path.exists()
+                    or value_digest(pl.read_parquet(pred_path)) != prediction_artifact_digest
+                ):
+                    raise ValueError(f"immutable prediction artifact conflict for {p_hash}")
+                recorded_digest = db.execute(
+                    "SELECT artifact_digest FROM prediction_coverage WHERE prediction_hash = ?",
+                    (p_hash,),
+                ).fetchone()
+                if recorded_digest is None:
+                    raise ValueError(f"prediction {p_hash} has no coverage record")
+                if recorded_digest[0] not in (None, prediction_artifact_digest):
+                    raise ValueError(f"immutable prediction digest conflict for {p_hash}")
+                if recorded_digest[0] is None:
+                    db.execute(
+                        "UPDATE prediction_coverage SET artifact_digest = ? "
+                        "WHERE prediction_hash = ? AND artifact_digest IS NULL",
+                        (prediction_artifact_digest, p_hash),
+                    )
+                    db.commit()
+            else:
+                if pred_path.exists():
+                    try:
+                        orphaned_digest = value_digest(pl.read_parquet(pred_path))
+                    except (OSError, ValueError, pl.exceptions.PolarsError) as exc:
+                        raise ValueError(
+                            f"immutable prediction artifact conflict for {p_hash}"
+                        ) from exc
+                    if orphaned_digest != prediction_artifact_digest:
+                        raise ValueError(f"immutable prediction artifact conflict for {p_hash}")
+                else:
+                    _save_parquet(temporary, normalized_predictions)
+                try:
+                    db.execute(
+                        """
+                        INSERT INTO prediction_sets
+                        (prediction_hash, training_hash, checkpoint_value, checkpoint_kind,
+                         split, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (p_hash, *expected_row, _utc_now()),
+                    )
+                    values = coverage.as_dict()
+                    values["artifact_digest"] = prediction_artifact_digest
+                    columns = ", ".join(("prediction_hash", *values))
+                    placeholders = ", ".join("?" for _ in range(len(values) + 1))
+                    db.execute(
+                        f"INSERT INTO prediction_coverage ({columns}) VALUES ({placeholders})",
+                        (p_hash, *values.values()),
+                    )
+                    if metrics:
+                        _upsert_wide_metrics(
+                            db, "prediction_metrics", {"prediction_hash": p_hash}, metrics
+                        )
+                    pred_dir.mkdir(parents=True, exist_ok=True)
+                    if not pred_path.exists():
+                        os.replace(temporary, pred_path)
+                        created_artifact = True
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    if created_artifact:
+                        pred_path.unlink(missing_ok=True)
+                    raise
+        finally:
+            temporary.unlink(missing_ok=True)
+            db.close()
+    else:
+        # Save predictions
+        if predictions is not None:
+            pred_dir = _prediction_dir(case_dir, p_hash)
+            _save_parquet(pred_dir / "predictions.parquet", predictions)
+
+        # Insert into DB
+        db = _open_registry(case_dir)
+        try:
+            db.execute(
+                """
+                INSERT OR REPLACE INTO prediction_sets
+                (prediction_hash, training_hash, checkpoint_value, checkpoint_kind,
+                 split, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    p_hash,
+                    training_hash,
+                    checkpoint_value,
+                    checkpoint_kind,
+                    split,
+                    _utc_now(),
+                ),
+            )
+
+            if metrics:
+                _upsert_wide_metrics(db, "prediction_metrics", {"prediction_hash": p_hash}, metrics)
+
+            db.commit()
+        finally:
+            db.close()
 
     # Auto-compute fold metrics when predictions are provided
     if predictions is not None and _has_fold_column(predictions):
         try:
             fold_col = _detect_fold_col(predictions)
+            assert fold_col is not None
             y_true_col, y_score_col = _detect_score_cols(predictions)
+            prediction_columns = set(predictions.columns)
+            metric_entity_col = "product" if "product" in prediction_columns else "symbol"
             # Resolve label from training_runs if caller didn't supply it.
             resolved_label = label
             if not resolved_label:
@@ -521,15 +1049,24 @@ def register_prediction_set(
                     db_lookup.close()
                 except Exception:  # noqa: BLE001
                     pass
+            direction_frame, direction_name = (
+                _sibling_direction_labels(case_study, case_dir, resolved_label)
+                if task_type != "classification"
+                else (None, None)
+            )
             headline, fold_m = compute_prediction_fold_metrics(
                 predictions,
                 y_true_col=y_true_col,
                 y_score_col=y_score_col,
                 fold_col=fold_col,
+                entity_col=metric_entity_col,
                 task_type=task_type,
                 class_values=class_values,
                 eval_col=eval_col,
                 label=resolved_label,
+                label_buffer=_declared_label_buffer(case_study, resolved_label),
+                direction_labels=direction_frame,
+                direction_col=direction_name,
             )
             # Merge auto-computed headline with caller-provided metrics
             merged = {**headline, **(metrics or {})}
@@ -537,6 +1074,8 @@ def register_prediction_set(
             # Store per-fold metrics
             register_fold_metrics(case_study, p_hash, fold_m, case_dir=case_dir)
         except Exception as exc:
+            if identity_version in SUPPORTED_IDENTITY_VERSIONS:
+                raise
             logger.warning("Could not compute fold metrics for %s: %s", p_hash, exc)
 
     return p_hash
@@ -694,36 +1233,184 @@ def register_backtest_run(
     if stage is None:
         stage = _infer_stage(strategy_spec, case_dir=case_dir, prediction_hash=prediction_hash)
 
-    b_hash = backtest_hash_from_parts(prediction_hash, strategy_spec)
-    spec_json_str = canonical_json(strategy_spec)
+    identity_version = strategy_spec.get("identity_version")
+    if identity_version in SUPPORTED_IDENTITY_VERSIONS:
+        db = _open_registry(case_dir)
+        try:
+            ancestry = db.execute(
+                """
+                SELECT t.execution_tier, c.status
+                FROM prediction_sets p
+                JOIN training_runs t ON t.training_hash = p.training_hash
+                LEFT JOIN prediction_coverage c ON c.prediction_hash = p.prediction_hash
+                WHERE p.prediction_hash = ?
+                """,
+                (prediction_hash,),
+            ).fetchone()
+        finally:
+            db.close()
+        if ancestry is None or ancestry[1] != "complete":
+            raise ValueError("backtest requires complete prediction coverage")
+        requested_tier = strategy_spec.get("execution_tier", "canonical")
+        if requested_tier not in {"canonical", "preview"}:
+            raise ValueError("backtest execution_tier must be canonical or preview")
+        if ancestry[0] != requested_tier:
+            raise ValueError("backtest execution tier conflicts with prediction ancestry")
+
+    b_hash = backtest_hash_from_parts(
+        prediction_hash, strategy_spec, identity_version=identity_version
+    )
+    stored_strategy_spec = dict(strategy_spec)
+    stored_strategy_spec.pop("_runtime_backtest_config", None)
+    spec_json_str = canonical_json(stored_strategy_spec)
+    existing_strategy_spec: dict | None = None
+    existing_backtest = False
+    bt_dir = _backtest_dir(case_dir, b_hash)
+    spec_path = bt_dir / "spec.json"
+
+    db = _open_registry(case_dir)
+    try:
+        existing = db.execute(
+            "SELECT prediction_hash, spec_json, "
+            "EXISTS(SELECT 1 FROM backtest_metrics m WHERE m.backtest_hash = ?), "
+            "artifact_digests_json FROM backtest_runs WHERE backtest_hash = ?",
+            (b_hash, b_hash),
+        ).fetchone()
+    finally:
+        db.close()
+    if existing is not None:
+        existing_backtest = True
+        existing_spec = json.loads(existing[1] or "{}")
+        if identity_version in SUPPORTED_IDENTITY_VERSIONS:
+            same_identity = canonical_json(
+                _hashable_strategy_spec(existing_spec)
+            ) == canonical_json(_hashable_strategy_spec(strategy_spec))
+            if existing[0] != prediction_hash or not same_identity:
+                raise ValueError(f"immutable backtest identity conflict for {b_hash}")
+        existing_strategy_spec = existing_spec
+        if spec_path.is_file():
+            try:
+                artifact_spec = json.loads(spec_path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ValueError(f"immutable backtest spec artifact conflict for {b_hash}") from exc
+            artifact_spec.pop("_runtime_backtest_config", None)
+            if canonical_json(artifact_spec) != canonical_json(existing_spec):
+                raise ValueError(f"immutable backtest spec artifact conflict for {b_hash}")
+        import polars as pl
+
+        from case_studies.utils.artifact_digest import value_digest
+
+        artifact_values = {
+            "daily_returns.parquet": returns,
+            "trades.parquet": trades,
+            "fills.parquet": fills,
+            "equity.parquet": equity,
+            "portfolio_state.parquet": portfolio_state,
+            "weights.parquet": weights,
+        }
+        for filename, value in artifact_values.items():
+            if value is None:
+                continue
+            new_frame = value if isinstance(value, pl.DataFrame) else pl.from_pandas(value)
+            existing_path = _backtest_dir(case_dir, b_hash) / filename
+            if existing_path.exists() and value_digest(
+                pl.read_parquet(existing_path)
+            ) != value_digest(new_frame):
+                raise ValueError(f"immutable backtest artifact conflict for {b_hash}")
+        existing_returns = _backtest_dir(case_dir, b_hash) / "daily_returns.parquet"
+        try:
+            recorded_digests = json.loads(existing[3] or "")
+        except (json.JSONDecodeError, TypeError):
+            recorded_digests = None
+        digests_valid = (
+            isinstance(recorded_digests, dict) and "daily_returns.parquet" in recorded_digests
+        )
+        if digests_valid:
+            for filename, expected_digest in recorded_digests.items():
+                path = existing_returns.parent / filename
+                if not path.is_file() or value_digest(pl.read_parquet(path)) != expected_digest:
+                    digests_valid = False
+                    break
+        if (
+            identity_version in SUPPORTED_IDENTITY_VERSIONS
+            and existing_returns.exists()
+            and existing[2]
+            and digests_valid
+        ):
+            return b_hash
 
     # Write spec.json
-    bt_dir = _backtest_dir(case_dir, b_hash)
-    _save_json(bt_dir / "spec.json", strategy_spec)
+    expected_artifact_spec = (
+        existing_strategy_spec if existing_strategy_spec is not None else stored_strategy_spec
+    )
+    if spec_path.exists():
+        try:
+            artifact_spec = json.loads(spec_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"immutable backtest spec artifact conflict for {b_hash}") from exc
+        artifact_spec.pop("_runtime_backtest_config", None)
+        if canonical_json(artifact_spec) != canonical_json(expected_artifact_spec):
+            raise ValueError(f"immutable backtest spec artifact conflict for {b_hash}")
+    else:
+        _save_json(
+            spec_path,
+            expected_artifact_spec,
+        )
+
+    import polars as pl
+
+    from case_studies.utils.artifact_digest import value_digest
+
+    artifact_values = {
+        "daily_returns.parquet": returns,
+        "trades.parquet": trades,
+        "fills.parquet": fills,
+        "equity.parquet": equity,
+        "portfolio_state.parquet": portfolio_state,
+        "weights.parquet": weights,
+    }
+    for filename, value in artifact_values.items():
+        if value is None:
+            continue
+        frame = value if isinstance(value, pl.DataFrame) else pl.from_pandas(value)
+        path = bt_dir / filename
+        if path.exists() and value_digest(pl.read_parquet(path)) != value_digest(frame):
+            raise ValueError(f"immutable backtest artifact conflict for {b_hash}")
 
     # Save returns
-    if returns is not None:
+    if returns is not None and not (
+        existing_backtest and (bt_dir / "daily_returns.parquet").exists()
+    ):
         _save_parquet(bt_dir / "daily_returns.parquet", returns)
 
     # Save trade log
-    if trades is not None:
+    if trades is not None and not (existing_backtest and (bt_dir / "trades.parquet").exists()):
         _save_parquet(bt_dir / "trades.parquet", trades)
 
     # Save fill-level execution records
-    if fills is not None:
+    if fills is not None and not (existing_backtest and (bt_dir / "fills.parquet").exists()):
         _save_parquet(bt_dir / "fills.parquet", fills)
 
     # Save bar-level equity curve
-    if equity is not None:
+    if equity is not None and not (existing_backtest and (bt_dir / "equity.parquet").exists()):
         _save_parquet(bt_dir / "equity.parquet", equity)
 
     # Save bar-level portfolio state
-    if portfolio_state is not None:
+    if portfolio_state is not None and not (
+        existing_backtest and (bt_dir / "portfolio_state.parquet").exists()
+    ):
         _save_parquet(bt_dir / "portfolio_state.parquet", portfolio_state)
 
     # Save target weights
-    if weights is not None:
+    if weights is not None and not (existing_backtest and (bt_dir / "weights.parquet").exists()):
         _save_parquet(bt_dir / "weights.parquet", weights)
+
+    artifact_digests = {
+        path.name: value_digest(pl.read_parquet(path)) for path in sorted(bt_dir.glob("*.parquet"))
+    }
+    if "daily_returns.parquet" not in artifact_digests:
+        raise ValueError("registered backtest has no daily-returns artifact")
+    artifact_digests_json = canonical_json(artifact_digests)
 
     # Defensive: compute per-backtest uncertainty inline from daily
     # returns when the caller didn't pre-compute it. The canonical
@@ -734,6 +1421,7 @@ def register_backtest_run(
     # estimates without the uncertainty pack.
     needs_uncertainty = returns is not None and (metrics is None or "sharpe_se_lo" not in metrics)
     if needs_uncertainty:
+        assert returns is not None
         from case_studies.utils.uncertainty import (
             compute_backtest_uncertainty,
             periods_per_year_from_setup,
@@ -769,18 +1457,34 @@ def register_backtest_run(
                 n = returns.height if hasattr(returns, "height") else len(returns)
                 metrics["n_periods"] = float(n)
 
-    # Insert into DB — clean child tables first to avoid FK violations
-    # on INSERT OR REPLACE (which is DELETE + INSERT under the hood)
+    # Insert into DB without replacing an existing parent row. Metric UPSERTs
+    # below update only supplied columns and preserve prior headline and fold data.
     db = _open_registry(case_dir)
     try:
-        db.execute("DELETE FROM backtest_fold_metrics WHERE backtest_hash = ?", (b_hash,))
-        db.execute("DELETE FROM backtest_metrics WHERE backtest_hash = ?", (b_hash,))
+        if identity_version in SUPPORTED_IDENTITY_VERSIONS:
+            existing = db.execute(
+                "SELECT prediction_hash, spec_json FROM backtest_runs WHERE backtest_hash = ?",
+                (b_hash,),
+            ).fetchone()
+            if existing is not None:
+                existing_spec = json.loads(existing[1] or "{}")
+                same_identity = canonical_json(
+                    _hashable_strategy_spec(existing_spec)
+                ) == canonical_json(_hashable_strategy_spec(strategy_spec))
+                if existing[0] != prediction_hash or not same_identity:
+                    raise ValueError(f"immutable backtest identity conflict for {b_hash}")
+                stored_digest_json = db.execute(
+                    "SELECT artifact_digests_json FROM backtest_runs WHERE backtest_hash = ?",
+                    (b_hash,),
+                ).fetchone()[0]
+                if stored_digest_json not in (None, artifact_digests_json):
+                    raise ValueError(f"immutable backtest artifact digest conflict for {b_hash}")
         db.execute(
             """
-            INSERT OR REPLACE INTO backtest_runs
+            INSERT OR IGNORE INTO backtest_runs
             (backtest_hash, prediction_hash, spec_json, stage, created_at, git_commit,
-             started_at, elapsed_s)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             started_at, elapsed_s, artifact_digests_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 b_hash,
@@ -791,7 +1495,13 @@ def register_backtest_run(
                 _git_hash(),
                 started_at,
                 elapsed_s,
+                artifact_digests_json,
             ),
+        )
+        db.execute(
+            "UPDATE backtest_runs SET artifact_digests_json = ? "
+            "WHERE backtest_hash = ? AND artifact_digests_json IS NULL",
+            (artifact_digests_json, b_hash),
         )
 
         if metrics:
@@ -909,7 +1619,7 @@ def register_paired_metrics(
         except (TypeError, ValueError):
             return None
 
-    def _i(v: object) -> int | None:
+    def _i(v: Any) -> int | None:
         try:
             return int(v) if v is not None else None
         except (TypeError, ValueError):
@@ -1073,6 +1783,208 @@ def register_cohort_metrics(
 # ---------------------------------------------------------------------------
 
 
+def declare_causal_supersedes(
+    case_study: str,
+    causal_hash: str,
+    *,
+    supersedes_hash: str,
+    label: str,
+    tier: str = "canonical",
+    case_dir: Path | None = None,
+) -> None:
+    """Record which identity *causal_hash* retires, without re-running the fit.
+
+    The repair path needs this. A registry holding two undeclared identities is fixed
+    by re-registering the newer one naming the older, and re-registering reproduces the
+    same hash - so the fit is served from cache and never reaches the write. Fill-once,
+    and validated the same way the registering path is: a predecessor that is not
+    itself current is refused rather than recorded.
+    """
+    if case_dir is None:
+        case_dir = _case_dir(case_study)
+    db = _open_registry(case_dir)
+    try:
+        row = db.execute(
+            "SELECT supersedes_hash FROM causal_runs WHERE causal_hash = ?", (causal_hash,)
+        ).fetchone()
+        # This is the one function an author calls by hand, typing a hash copied out of
+        # the `CausalResult.one` error text. Without this check a truncated or mistyped
+        # hash makes the UPDATE below match zero rows, commit, and return None - so the
+        # repair reports success and the label still resolves to two identities.
+        if row is None:
+            raise ValueError(
+                f"no causal run {causal_hash!r} in {case_study}'s registry, so there is "
+                f"nothing to declare a predecessor for. Check the hash against "
+                f"`SELECT causal_hash FROM causal_runs WHERE label = '{label}'`."
+            )
+        stored = row[0]
+        if stored is not None:
+            if stored != supersedes_hash:
+                raise ValueError(
+                    f"causal run {causal_hash} already declares it supersedes {stored}; "
+                    f"it cannot also supersede {supersedes_hash}"
+                )
+            return
+        _enforce_causal_supersedes(
+            db,
+            causal_hash=causal_hash,
+            label=label,
+            tier=tier,
+            supersedes_hash=supersedes_hash,
+            is_repair=True,
+        )
+        db.execute(
+            "UPDATE causal_runs SET supersedes_hash = ? WHERE causal_hash = ?",
+            (supersedes_hash, causal_hash),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def check_causal_supersedes(
+    case_study: str,
+    causal_hash: str,
+    *,
+    label: str,
+    tier: str,
+    supersedes_hash: str | None,
+    case_dir: Path | None = None,
+) -> None:
+    """Raise now what :func:`register_causal_run` would raise after the fit.
+
+    The refusal it wraps is correct and stays where it is; only its timing is the
+    problem. A causal identity moves whenever ``case_studies/utils/causal.py`` changes,
+    because the resolved spec carries a hash of that whole file, so an ordinary edit to
+    the shared resolver leaves every case study on it registering a second identity for
+    its label. The run then misses the cache, pays the full DML fit and every placebo
+    refit, and is refused at the write for naming no predecessor - which is an hour on
+    this panel to be told a hash the registry could have named before the first fold.
+
+    This calls the write-time rule itself rather than restating it. Two copies of this
+    condition would decide what may be written and what is worth starting, and a
+    disagreement between them either refuses a run that would have registered or starts
+    one that cannot. The one place they differ is unavoidable and harmless: another
+    writer can change the registry while the fit runs, so passing here is not a promise
+    that the write will succeed. ``register_causal_run`` remains the authority.
+    """
+    if case_dir is None:
+        case_dir = _case_dir(case_study)
+    db = _open_registry(case_dir)
+    try:
+        _enforce_causal_supersedes(
+            db,
+            causal_hash=causal_hash,
+            label=label,
+            tier=tier,
+            supersedes_hash=supersedes_hash,
+            is_repair=db.execute(
+                "SELECT 1 FROM causal_runs WHERE causal_hash = ?", (causal_hash,)
+            ).fetchone()
+            is not None,
+        )
+    finally:
+        db.close()
+
+
+def _enforce_causal_supersedes(
+    db,
+    *,
+    causal_hash: str,
+    label: str,
+    tier: str,
+    supersedes_hash: str | None,
+    is_repair: bool = False,
+) -> None:
+    """A second canonical identity for a label must say which one it retires.
+
+    Without the declaration the registry ends up holding two rows a reader cannot
+    choose between, and ``CausalResult.one`` refuses forever. Recency is not the
+    fallback: ``created_at`` ties on a fast refit, and it would be the only recency
+    rule in a registry that is otherwise entirely spec-addressed. So the chain is
+    declared by a person, the way a changed population is.
+
+    Refusing here rather than at read time is what makes it fixable. The read happens
+    in a downstream notebook, hours later, with no idea which run introduced the
+    ambiguity.
+
+    ``is_repair`` is what lets an already-broken registry be fixed. A new fit must
+    leave exactly one identity current, because that is the state it is responsible
+    for. Chaining rows that already exist cannot: with three stranded identities,
+    every single declaration leaves two current, so requiring one at every step
+    deadlocks - the middle row is refused because the newest is live and the newest is
+    refused because the middle is. A repair step is allowed to reduce the count
+    without finishing the job, and the reader's error still names what is left.
+    """
+    stored = (
+        db.execute(
+            "SELECT supersedes_hash FROM causal_runs WHERE causal_hash = ?", (causal_hash,)
+        ).fetchone()
+        or (None,)
+    )[0]
+    if supersedes_hash is not None and stored == supersedes_hash:
+        # Re-registering a row that already carries this exact declaration changes
+        # nothing, and it has to be allowed or a wired notebook is not idempotent on
+        # its second run. The check below would reject it: the predecessor is retired
+        # by this row's own edge, so it is no longer in the current set and reads as
+        # "not a current identity ... Current: none".
+        return
+    if stored is not None and supersedes_hash is not None:
+        # One column holds one edge, so a row cannot retire two identities. The INSERT
+        # this guards uses COALESCE, which keeps the stored value and drops the new one
+        # in silence; declare_causal_supersedes refuses the same case. Both paths answer
+        # the same question and must answer it the same way, or which one an author
+        # happened to call decides whether a contradiction is reported.
+        raise ValueError(
+            f"causal run {causal_hash} already declares it supersedes {stored}; "
+            f"it cannot also supersede {supersedes_hash}"
+        )
+    if causal_hash in causal_identities_retired(db, label=label):
+        # Reproducing a retired identity is a no-op, but the declaration it carries is
+        # not exempt from being checked. An author reproducing A from an older checkout
+        # with SUPERSEDES_CAUSAL still pointing at B - the run that retired A - would
+        # otherwise make both rows retired, and the reader would resolve to zero with
+        # no hint at all. Worse than the two-identity state this exists to prevent.
+        if supersedes_hash is not None and supersedes_hash != stored:
+            raise ValueError(
+                f"causal run {causal_hash} is already retired by a later identity, and "
+                f"declaring that it supersedes {supersedes_hash} would retire that one too. "
+                f"It carries {stored or 'no declaration'}; re-register without SUPERSEDES_CAUSAL."
+            )
+        return
+    others = current_causal_identities(db, label=label, tier=tier, exclude=causal_hash)
+    if supersedes_hash is not None:
+        if supersedes_hash == causal_hash:
+            raise ValueError(f"causal run {causal_hash} cannot supersede itself")
+        if supersedes_hash not in others:
+            raise ValueError(
+                f"causal run {causal_hash} declares it supersedes {supersedes_hash}, which is "
+                f"not a current {tier} identity for {label!r}. Current: {others or 'none'}"
+            )
+        remaining = [other for other in others if other != supersedes_hash]
+        if remaining and not is_repair:
+            # One column holds one edge, so a single declaration retires a single row.
+            # A *new* identity that retires one of several would let the write succeed
+            # and leave the label exactly as unresolvable as before, with nothing
+            # saying so - the failure moves back to the downstream notebook, which is
+            # what declaring the chain at the write is here to prevent. Repair first,
+            # then fit.
+            raise ValueError(
+                f"causal run {causal_hash} retires {supersedes_hash}, but {remaining} would "
+                f"still be current for {label!r}, so a reader still resolves to "
+                f"{len(remaining) + 1}. Chain the rows that already exist first: each "
+                "declares the one before it, oldest to newest."
+            )
+        return
+    if others:
+        raise ValueError(
+            f"registering {causal_hash} would leave {len(others) + 1} current {tier} causal "
+            f"identities for {label!r}, and a reader resolves a label to exactly one. Name the "
+            f"one this run retires: set SUPERSEDES_CAUSAL to "
+            f"{others[0] if len(others) == 1 else others}"
+        )
+
+
 def register_causal_run(
     case_study: str,
     causal_hash: str,
@@ -1089,10 +2001,13 @@ def register_causal_run(
     naive_effect: float | None,
     confounding_bias_pct: float | None,
     refutation_p: float | None,
+    refutation_n_successful: int | None = None,
+    refutation_placebo_json: str | None = None,
     spec_json: str,
     notebook: str | None,
     started_at: str | None,
     elapsed_s: float | None,
+    supersedes_hash: str | None = None,
     case_dir: Path | None = None,
 ) -> None:
     """Persist one causal-DML run to ``causal_runs``.
@@ -1101,11 +2016,130 @@ def register_causal_run(
     completeness contract (``ic_mean`` non-null, etc.) does not apply to
     treatment-effect estimates. Callers compute the spec and result fields
     upstream; this function owns the SQL row write.
+
+    ``supersedes_hash`` names the canonical identity this run retires, and a second
+    canonical identity for a label is refused without one. That refusal is the point:
+    ``CausalResult.one`` requires exactly one current identity per label, so an
+    undeclared refit leaves the registry in a state no reader can resolve, and it does
+    so silently at write time and loudly at read time in a different notebook. Mirrors
+    ``official_populations``, where a changed population under an existing name must
+    name the hash it supersedes.
     """
     if case_dir is None:
         case_dir = _case_dir(case_study)
+    import json
+
+    spec = json.loads(spec_json) or {}
+    version = spec.get("identity_version")
+    immutable = version in SUPPORTED_IDENTITY_VERSIONS
     db = _open_registry(case_dir)
     try:
+        _enforce_causal_supersedes(
+            db,
+            causal_hash=causal_hash,
+            label=label,
+            tier=str(spec.get("execution_tier", "canonical")),
+            supersedes_hash=supersedes_hash,
+            # A row that already exists is not a new fit, so this call is a step in
+            # chaining what is already there rather than the write that must leave the
+            # label resolvable.
+            is_repair=db.execute(
+                "SELECT 1 FROM causal_runs WHERE causal_hash = ?", (causal_hash,)
+            ).fetchone()
+            is not None,
+        )
+        comparable_columns = (
+            "label",
+            "treatment",
+            "confounders_json",
+            "embargo",
+            "n_folds",
+            "n_obs",
+            "dml_effect",
+            "dml_se_hac",
+            "p_value_hac",
+            "naive_effect",
+            "confounding_bias_pct",
+            "refutation_p",
+            "refutation_n_successful",
+            "spec_json",
+            "notebook",
+        )
+        existing = db.execute(
+            f"SELECT {', '.join(comparable_columns)} FROM causal_runs WHERE causal_hash = ?",
+            (causal_hash,),
+        ).fetchone()
+        existing_supersedes = (
+            db.execute(
+                "SELECT supersedes_hash FROM causal_runs WHERE causal_hash = ?", (causal_hash,)
+            ).fetchone()
+            or (None,)
+        )[0]
+        expected = (
+            label,
+            treatment,
+            confounders_json,
+            embargo,
+            n_folds,
+            n_obs,
+            dml_effect,
+            dml_se_hac,
+            p_value_hac,
+            naive_effect,
+            confounding_bias_pct,
+            refutation_p,
+            refutation_n_successful,
+            spec_json,
+            notebook,
+        )
+        if immutable and existing is not None:
+            # A row written before a column existed carries NULL there, and filling it in
+            # is not a conflict: nothing about the run changed, the registry simply had no
+            # place to record that fact yet. Treating it as one would make an upgrade break
+            # re-registration of results that are identical - the same shape as a fix that
+            # forces a refit without changing a number.
+            #
+            # Only a column a migration added is filled this way. The other comparable
+            # columns are nullable for reasons that have nothing to do with the schema:
+            # refutation_p is None whenever the refutation produced too few successful
+            # placebos, so a later run that does produce one has genuinely changed and must
+            # still conflict. Filling on NULL alone would write that over an immutable row
+            # and refresh its execution provenance on the way through.
+            stored = list(existing)
+            backfilled_positions: set[int] = set()
+            for position, value in enumerate(expected):
+                if comparable_columns[position] not in MIGRATION_BACKFILLED_COLUMNS:
+                    continue
+                if stored[position] is None and value is not None:
+                    stored[position] = value
+                    backfilled_positions.add(position)
+            backfilled = bool(backfilled_positions)
+            if tuple(stored) != expected:
+                # Excluded because it was filled, not because of its name. A migrated
+                # column whose stored value is not NULL - a recording convention that
+                # changes 1000 to 998, or a re-registration passing None where 10 was
+                # stored - is a genuine difference, and excluding it by name would raise
+                # naming nothing. That empty message is the same defect this branch
+                # already fixed once, reached from the other side.
+                conflicting = [
+                    name
+                    for position, (name, was, now) in enumerate(
+                        zip(comparable_columns, existing, expected, strict=True)
+                    )
+                    if was != now and position not in backfilled_positions
+                ]
+                raise ValueError(
+                    f"immutable causal result conflict for {causal_hash}: "
+                    f"{', '.join(conflicting)} would change"
+                )
+            if supersedes_hash is not None and existing_supersedes is None:
+                db.execute(
+                    "UPDATE causal_runs SET supersedes_hash = ? WHERE causal_hash = ?",
+                    (supersedes_hash, causal_hash),
+                )
+                db.commit()
+            if not backfilled:
+                return
         # ON CONFLICT DO UPDATE rather than INSERT OR REPLACE — consistent with
         # register_paired_metrics, avoids the implicit DELETE that triggers
         # FK cascades and loses the original created_at timestamp.
@@ -1115,8 +2149,10 @@ def register_causal_run(
                 causal_hash, label, treatment, confounders_json, embargo,
                 n_folds, n_obs, dml_effect, dml_se_hac, p_value_hac,
                 naive_effect, confounding_bias_pct, refutation_p,
-                spec_json, notebook, started_at, elapsed_s, git_commit, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                refutation_n_successful, refutation_placebo_json,
+                spec_json, notebook, started_at, elapsed_s, git_commit,
+                supersedes_hash, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(causal_hash) DO UPDATE SET
                 label=excluded.label,
                 treatment=excluded.treatment,
@@ -1130,11 +2166,24 @@ def register_causal_run(
                 naive_effect=excluded.naive_effect,
                 confounding_bias_pct=excluded.confounding_bias_pct,
                 refutation_p=excluded.refutation_p,
+                refutation_n_successful=excluded.refutation_n_successful,
+                -- Fill-once, like supersedes_hash. A row registered before this column
+                -- existed carries NULL, and a re-registration that recomputes the draws
+                -- should fill it; one that does not must not erase them.
+                refutation_placebo_json=COALESCE(
+                    excluded.refutation_placebo_json, causal_runs.refutation_placebo_json
+                ),
                 spec_json=excluded.spec_json,
                 notebook=excluded.notebook,
                 started_at=excluded.started_at,
                 elapsed_s=excluded.elapsed_s,
-                git_commit=excluded.git_commit
+                git_commit=excluded.git_commit,
+                -- Fill-once, matching the UPDATE above. A re-registration that
+                -- passes no declaration must not clobber one that was made: the row
+                -- it retired would go live again and the reader would see two.
+                -- Reachable through the migration backfill path, which skips the
+                -- early return.
+                supersedes_hash=COALESCE(excluded.supersedes_hash, causal_runs.supersedes_hash)
             WHERE causal_runs.label IS NOT excluded.label
                OR causal_runs.treatment IS NOT excluded.treatment
                OR causal_runs.confounders_json IS NOT excluded.confounders_json
@@ -1147,8 +2196,11 @@ def register_causal_run(
                OR causal_runs.naive_effect IS NOT excluded.naive_effect
                OR causal_runs.confounding_bias_pct IS NOT excluded.confounding_bias_pct
                OR causal_runs.refutation_p IS NOT excluded.refutation_p
+               OR causal_runs.refutation_n_successful IS NOT excluded.refutation_n_successful
                OR causal_runs.spec_json IS NOT excluded.spec_json
                OR causal_runs.notebook IS NOT excluded.notebook
+               OR (excluded.supersedes_hash IS NOT NULL
+                   AND causal_runs.supersedes_hash IS NOT excluded.supersedes_hash)
             """,
             (
                 causal_hash,
@@ -1164,11 +2216,14 @@ def register_causal_run(
                 naive_effect,
                 confounding_bias_pct,
                 refutation_p,
+                refutation_n_successful,
+                refutation_placebo_json,
                 spec_json,
                 notebook,
                 started_at,
                 elapsed_s,
                 _git_hash(),
+                supersedes_hash,
                 _utc_now(),
             ),
         )

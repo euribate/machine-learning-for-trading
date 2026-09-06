@@ -55,6 +55,14 @@
 
 import warnings
 
+# lightgbm must be imported before scikit-learn. Both ship their own OpenMP
+# runtime and the first one loaded wins for the whole process; on macOS ARM64,
+# getting scikit-learn's libomp first makes LightGBM's next multithreaded fit
+# segfault in __kmp_suspend_initialize_thread, killing the kernel with no
+# traceback. The `import lightgbm` further down, beside the training cell that
+# uses it, cannot fix this - by then the module header has already lost the
+# race - so the binding is established here and re-stated there for the reader.
+import lightgbm as lgb  # noqa: F401
 import numpy as np
 import plotly.graph_objects as go
 import polars as pl
@@ -365,7 +373,7 @@ def ci_test_pvalue(data: np.ndarray, i: int, j: int, conditioning_set: list) -> 
 
     z = 0.5 * np.log((1 + partial_corr) / (1 - partial_corr))
     z_stat = abs(z) / (1.0 / np.sqrt(n - k - 3))
-    return 2 * (1 - stats.norm.cdf(z_stat))
+    return 2 * stats.norm.sf(z_stat)
 
 
 # %% [markdown]

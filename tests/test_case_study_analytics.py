@@ -11,7 +11,7 @@ The tests pin three layers:
    case-study IDs must agree on keys, so a new case study can't be added
    to one dict and forgotten in another.
 
-2. **Path resolution** — ``_cs_dir`` / ``_registry_path`` honor
+2. **Path resolution** — ``_cs_dir`` / ``registry_path`` honor
    ``ML4T_OUTPUT_DIR`` for test isolation.
 
 3. **Query contracts** — against a seeded SQLite registry:
@@ -104,7 +104,7 @@ def test_registry_path_is_three_levels_deep(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ML4T_OUTPUT_DIR", str(tmp_path))
     (tmp_path / "etfs" / "run_log").mkdir(parents=True)
     (tmp_path / "etfs" / "run_log" / "registry.db").touch()
-    p = analytics._registry_path("etfs")
+    p = analytics.registry_path("etfs")
     assert p == tmp_path / "etfs" / "run_log" / "registry.db"
 
 
@@ -311,6 +311,84 @@ def seeded_registries(tmp_path, monkeypatch) -> Path:
 # -----------------------------------------------------------------------------
 
 
+def _seed_coverage_registry(db_path: Path) -> None:
+    """A current-shape registry where one config was scored on fewer days."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    _create_registry_schema(conn)
+    conn.execute("ALTER TABLE prediction_metrics ADD COLUMN ic_mean_daily REAL")
+    conn.execute("ALTER TABLE prediction_metrics ADD COLUMN ic_n_days INTEGER")
+    conn.executemany(
+        "INSERT INTO training_runs (training_hash, family, config_name, label, spec_json, "
+        "created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("th_short", "gbm", "short_window", "fwd_ret_21d", "{}", "2024-01-01"),
+            ("th_full", "gbm", "full_window", "fwd_ret_21d", "{}", "2024-01-01"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO prediction_sets (prediction_hash, training_hash, checkpoint_value, "
+        "checkpoint_kind, split, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("ph_short", "th_short", 0, "final", "validation", "2024-01-02"),
+            ("ph_full", "th_full", 0, "final", "validation", "2024-01-02"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO prediction_metrics (prediction_hash, computed_at, ic_mean, ic_mean_daily, "
+        "ic_n_days, task_type) VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("ph_short", "2024-01-03", 0.40, 0.40, 40, "regression"),
+            ("ph_full", "2024-01-03", 0.10, 0.10, 500, "regression"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_load_model_ic_drops_partially_covered_prediction_sets(tmp_path, monkeypatch) -> None:
+    """The short window scores four times higher and is not comparable."""
+    monkeypatch.setenv("ML4T_OUTPUT_DIR", str(tmp_path))
+    _seed_coverage_registry(tmp_path / "etfs" / "run_log" / "registry.db")
+
+    guarded = analytics.load_model_ic(case_studies=["etfs"], split="validation")
+    assert guarded["config_name"].to_list() == ["full_window"]
+    assert guarded["coverage_enforced"].to_list() == [True]
+
+    # Without the guard the 40-day row leads the ranking.
+    unguarded = analytics.load_model_ic(
+        case_studies=["etfs"], split="validation", require_full_coverage=False
+    )
+    assert unguarded["config_name"].to_list() == ["short_window", "full_window"]
+    assert unguarded["coverage_enforced"].to_list() == [False, False]
+
+
+def test_load_model_ic_does_not_empty_a_registry_mid_backfill(tmp_path, monkeypatch) -> None:
+    """The column exists but holds nothing: guard off, rows returned, flag false."""
+    monkeypatch.setenv("ML4T_OUTPUT_DIR", str(tmp_path))
+    db = tmp_path / "etfs" / "run_log" / "registry.db"
+    _seed_coverage_registry(db)
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE prediction_metrics SET ic_n_days = NULL")
+    conn.commit()
+    conn.close()
+
+    df = analytics.load_model_ic(case_studies=["etfs"], split="validation")
+
+    assert sorted(df["config_name"].to_list()) == ["full_window", "short_window"]
+    assert df["coverage_enforced"].unique().to_list() == [False]
+
+
+def test_load_model_ic_reports_when_a_legacy_registry_cannot_be_guarded(
+    seeded_registries,
+) -> None:
+    """A registry with no coverage column returns rows flagged as unguarded."""
+    df = analytics.load_model_ic(case_studies=["etfs"], split="validation")
+
+    assert df.height > 0
+    assert df["coverage_enforced"].unique().to_list() == [False]
+
+
 def test_load_model_ic_returns_all_families_by_default(seeded_registries) -> None:
     df = analytics.load_model_ic(case_studies=["etfs", "crypto_perps_funding"], split="validation")
     # etfs: 3 validation rows (lin_a, lin_b, gbm_a) with regression task_type;
@@ -364,6 +442,98 @@ def test_load_classification_metrics_excludes_regression_rows(seeded_registries)
     df = analytics.load_classification_metrics(case_studies=["etfs"], split="validation")
     # Spec: no rows with null AUC should appear
     assert df.filter(pl.col("auc_roc").is_null()).is_empty()
+
+
+def test_auc_is_the_cross_sectional_value_or_nothing(seeded_registries) -> None:
+    """`auc` never carries the pooled figure, whichever reason a row has no daily one.
+
+    The two reasons are indistinguishable from the column. `_declare_uncertainty_columns` ALTERs
+    `auc_mean_daily` into every registry on open, so a registry written before the metric existed
+    has it present and empty; a current registry leaves it null on a row whose cross-section is
+    too thin to average. Filling either from `auc_roc` puts the pooled number under a name that
+    says cross-sectional and ranks the two against each other.
+    """
+    db_path = seeded_registries / "etfs" / "run_log" / "registry.db"
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("ALTER TABLE prediction_metrics ADD COLUMN auc_mean_daily REAL")
+        conn.commit()
+
+    legacy = analytics.load_classification_metrics(case_studies=["etfs"], split="validation")
+
+    assert legacy.height == 1
+    assert legacy["auc"].to_list() == [None]
+    assert legacy["auc_roc"].to_list() == [0.62]
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("UPDATE prediction_metrics SET auc_mean_daily = 0.58")
+        conn.commit()
+
+    current = analytics.load_classification_metrics(case_studies=["etfs"], split="validation")
+
+    assert current["auc"].to_list() == [0.58]
+    assert current["auc_roc"].to_list() == [0.62]
+
+
+def test_a_legacy_and_a_current_registry_load_together(seeded_registries) -> None:
+    """One registry with no cross-sectional AUC and one with it must concatenate.
+
+    `auc` is all-null where a registry computes no cross-sectional AUC, which polars reads back
+    as the Null dtype, and the concat across registries raises rather than widening when another
+    one returns Float64. A repo registry is in exactly that state today, so the default
+    case-study list hit it.
+    """
+    etfs_db = seeded_registries / "etfs" / "run_log" / "registry.db"
+    crypto_db = seeded_registries / "crypto_perps_funding" / "run_log" / "registry.db"
+    with sqlite3.connect(str(crypto_db)) as conn:
+        conn.execute(
+            "INSERT INTO training_runs VALUES (?, ?, ?, ?, ?, ?)",
+            ("th_c", "linear", "fwd_dir_5d", "logistic", None, "2024-01-01T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO prediction_sets VALUES (?, ?, ?, ?, ?, ?)",
+            ("ph_c_val", "th_c", 0, "final", "validation", "2024-01-02T00:00:00"),
+        )
+        # `ic_mean` null here and populated on the etfs side: a classification run stores no
+        # cross-sectional IC when no fold has a defined one, which is the same Null-against-
+        # Float64 concat under a third column name.
+        conn.execute(
+            "INSERT INTO prediction_metrics (prediction_hash, computed_at, ic_mean, task_type, "
+            "auc_roc, accuracy) VALUES (?, ?, ?, ?, ?, ?)",
+            ("ph_c_val", "2024-01-03", None, "classification", 0.55, 0.51),
+        )
+        conn.commit()
+    # crypto never gained the column, so its rows carry no cross-sectional AUC at all.
+    with sqlite3.connect(str(etfs_db)) as conn:
+        conn.execute("ALTER TABLE prediction_metrics ADD COLUMN auc_mean_daily REAL")
+        conn.execute("UPDATE prediction_metrics SET auc_mean_daily = 0.58")
+        # `auc` is not the only column a registry can leave empty throughout: the multiclass
+        # rows in `nasdaq100_microstructure` carry `auc_roc` and `accuracy` and leave `auc_pr`,
+        # `log_loss` and `brier_score` null on every row, so the same concat meets Null against
+        # Float64 under a different name.
+        conn.execute("UPDATE prediction_metrics SET log_loss = 0.61")
+        conn.commit()
+
+    # Both orders: the concat widens a Null column onto a Float64 one but not the reverse, so
+    # only the listing that reaches the null-only registry first exercises the failure.
+    for order in (
+        ["crypto_perps_funding", "etfs"],
+        ["etfs", "crypto_perps_funding"],
+    ):
+        df = analytics.load_classification_metrics(case_studies=order, split="validation")
+
+        assert set(df["case_study"].to_list()) == {"etfs", "crypto_perps_funding"}
+        assert df.schema["auc"] == pl.Float64
+        assert df.schema["log_loss"] == pl.Float64
+        assert df.schema["ic_mean"] == pl.Float64
+        by_case = dict(zip(df["case_study"], df["auc"], strict=True))
+        assert by_case["etfs"] == 0.58
+        assert by_case["crypto_perps_funding"] is None
+        by_case_log_loss = dict(zip(df["case_study"], df["log_loss"], strict=True))
+        assert by_case_log_loss["etfs"] == 0.61
+        assert by_case_log_loss["crypto_perps_funding"] is None
+        by_case_ic = dict(zip(df["case_study"], df["ic_mean"], strict=True))
+        assert by_case_ic["etfs"] == 0.04
+        assert by_case_ic["crypto_perps_funding"] is None
 
 
 # -----------------------------------------------------------------------------

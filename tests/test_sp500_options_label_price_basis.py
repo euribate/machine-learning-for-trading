@@ -15,19 +15,73 @@ NOTEBOOK = Path(__file__).parents[1] / "case_studies" / "sp500_options" / "02_la
 
 
 def _assignment_nodes(*targets: str) -> list[ast.stmt]:
+    """The top-level assignments to ``targets``, in source order."""
     tree = ast.parse(NOTEBOOK.read_text())
-    selected = []
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
+    return [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and {target.id for target in node.targets if isinstance(target, ast.Name)}.intersection(
+            targets
+        )
+    ]
+
+
+def _bindings_by_name() -> tuple[dict[str, list[ast.stmt]], dict[int, int]]:
+    """Every top-level statement that binds a name, indexed by that name and by source order.
+
+    Imports as well as assignments: the notebook imports the split-guard thresholds its regime
+    logic compares against, so a slice that resolved assignments only still left them unbound.
+    """
+    tree = ast.parse(NOTEBOOK.read_text())
+    by_name: dict[str, list[ast.stmt]] = {}
+    order: dict[int, int] = {}
+    for position, node in enumerate(tree.body):
+        if isinstance(node, ast.Assign):
+            bound = [target.id for target in node.targets if isinstance(target, ast.Name)]
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            bound = [alias.asname or alias.name.split(".")[0] for alias in node.names]
+        else:
             continue
-        names = {target.id for target in node.targets if isinstance(target, ast.Name)}
-        if names.intersection(targets):
-            selected.append(node)
-    return selected
+        order[id(node)] = position
+        for name in bound:
+            by_name.setdefault(name, []).append(node)
+    return by_name, order
 
 
 def _run_assignments(targets: tuple[str, ...], namespace: dict[str, object]) -> None:
-    module = ast.Module(body=_assignment_nodes(*targets), type_ignores=[])
+    """Execute the notebook statements that produce ``targets``, and the ones they read.
+
+    Naming only the outputs was how this was written, and it broke every time the notebook grew
+    something between them: a guard against corporate actions added ``regime`` and an import of
+    two thresholds between ``settlement`` and ``panel``, and the sliced ``panel`` then referred
+    to names nothing had bound. The dependency is the notebook's, so the slice follows it rather
+    than being restated at each call site and going stale there.
+
+    A name the caller already bound is left alone. That is how a test substitutes a fixture
+    frame for what the notebook loads - the point of slicing rather than executing - so
+    resolving those from the notebook too would overwrite the inputs under test.
+    """
+    by_name, order = _bindings_by_name()
+    selected: dict[int, ast.stmt] = {}
+    resolved: set[str] = set()
+    pending = [(name, True) for name in targets]
+    while pending:
+        name, requested = pending.pop()
+        if name in resolved or name not in by_name or (not requested and name in namespace):
+            continue
+        resolved.add(name)
+        for node in by_name[name]:
+            selected[order[id(node)]] = node
+            value = getattr(node, "value", None)
+            if value is None:
+                continue
+            pending.extend(
+                (ref.id, False)
+                for ref in ast.walk(value)
+                if isinstance(ref, ast.Name) and isinstance(ref.ctx, ast.Load)
+            )
+    module = ast.Module(body=[selected[position] for position in sorted(selected)], type_ignores=[])
     ast.fix_missing_locations(module)
     exec(compile(module, NOTEBOOK, "exec"), namespace)
 
@@ -76,10 +130,13 @@ def test_vrp_rv_respects_splits_security_boundaries_and_segment_scale() -> None:
             "load_sp500_daily_bars": lambda: prices,
             "load_sp500_options_straddles": lambda: straddles,
             "PRIMARY_LABEL": "ret_to_expiry",
+            "RV_WINDOW": 21,
+            "SESSIONS_PER_YEAR": 252,
             "dev": {"ret_to_expiry": labels},
         }
         _run_assignments(
-            ("straddles", "underlying", "annualised_rv", "realised", "baseline"), namespace
+            ("straddles", "underlying", "dense", "RV_COL", "annualised_rv", "realised", "baseline"),
+            namespace,
         )
         return namespace
 
@@ -122,6 +179,11 @@ def test_expiry_intrinsic_value_keeps_historical_close_basis() -> None:
             "symbol": ["SPLT"],
             "close": [52.0],
             "adj_factor": [4.0],
+            # The cumulative factor is 4 because a split happened at some point, which is what
+            # this test is about. The per-session factor is what the regime guard reads, and it
+            # is 1 because no corporate action falls inside this contract's window - a label
+            # spanning one would be nulled rather than priced.
+            "adjustment_factor": [1.0],
         }
     )
     contract_returns = pl.DataFrame(
@@ -153,6 +215,58 @@ def test_expiry_intrinsic_value_keeps_historical_close_basis() -> None:
     assert result["dte_calendar"].item() == 28
     # Entry is one session after the signal, so 21 sessions to expiry is 20 of exposure.
     assert result["window"].item() == 20
+
+
+def test_rv_window_is_counted_on_the_market_calendar_not_on_quoted_rows() -> None:
+    """A session the market was open for and the stock missed must null the window.
+
+    Counting the window on the stock's own rows closes over the absence, so a 21-session
+    volatility spans 21 rows that cover more than 21 sessions and nothing says so. The
+    two symbols are what makes the check bind: `FULL` trades every session and keeps its
+    value on the session `GAPS` misses, so a fix that simply nulled more would fail here.
+    """
+    dates = pl.date_range(pl.date(2020, 1, 1), pl.date(2020, 3, 20), eager=True)
+    n, hole = len(dates), 30
+    frames = []
+    for symbol in ("FULL", "GAPS"):
+        frame = pl.DataFrame(
+            {
+                "timestamp": dates,
+                "symbol": [symbol] * n,
+                "sec_id": [1] * n,
+                "close": np.linspace(100.0, 110.0, n),
+                "adj_factor": [1.0] * n,
+            }
+        )
+        frames.append(
+            frame.filter(pl.col("timestamp") != dates[hole]) if symbol == "GAPS" else frame
+        )
+    bars = pl.concat(frames)
+
+    namespace = {
+        "np": np,
+        "pl": pl,
+        "reconcile_underlying_log_returns": reconcile_underlying_log_returns,
+        "load_sp500_daily_bars": lambda: bars,
+        "RV_WINDOW": 21,
+        "SESSIONS_PER_YEAR": 252,
+    }
+    _run_assignments(("underlying", "dense", "RV_COL", "annualised_rv", "realised"), namespace)
+
+    assert namespace["dense"].height == 2 * n, "the absent session is not reindexed back in"
+    realised = namespace["realised"].sort(["symbol", "timestamp"])
+    rv = {
+        symbol: group["rv_21d"].to_list()
+        for (symbol,), group in realised.group_by(["symbol"], maintain_order=True)
+    }
+
+    # The absent session leaves no return on itself and none on the session after it, and
+    # the window is 21 returns wide, so every window from the absence to 21 sessions past
+    # the session after it is short of an observation and yields nothing.
+    assert rv["FULL"][21] is not None and rv["FULL"][hole] is not None
+    assert rv["GAPS"][hole - 1] is not None
+    assert all(value is None for value in rv["GAPS"][hole : hole + 22])
+    assert rv["GAPS"][hole + 22] is not None
 
 
 def test_notebook_rv_rolls_within_full_security_identity() -> None:

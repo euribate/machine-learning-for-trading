@@ -54,6 +54,8 @@ def _run_full_notebook(
 ) -> dict:
     import papermill as pm
 
+    from tests.pm_helpers import KERNEL_THREAD_CAPS
+
     start = time.perf_counter()
     ipynb_path = _sync_if_needed(py_path, sync_policy)
     tmp_out = Path(tempfile.gettempdir()) / f"ml4t-full-{os.getpid()}-{py_path.stem}.ipynb"
@@ -67,6 +69,7 @@ def _run_full_notebook(
         "PLOTLY_RENDERER": "json",
         "PYTHONUNBUFFERED": "1",
         "MATPLOTLIBRC": str(rc_file),
+        **KERNEL_THREAD_CAPS,
     }
     if output_dir:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -164,7 +167,7 @@ def main() -> None:
             sync_policy=args.sync_policy,
         )
     else:
-        from tests.pm_helpers import run_notebook
+        from tests.pm_helpers import REPO_ROOT, get_overrides, run_notebook
 
         result = run_notebook(
             py_path=path,
@@ -173,6 +176,12 @@ def main() -> None:
             output_dir=output_dir,
             data_dir=data_dir,
             extra_env=extra_env,
+            # Same rule as tests/test_case_studies.py: a notebook that only READS at
+            # the tier it is handed cannot run preview in a fresh workspace, because
+            # nothing wrote preview rows there. overrides.yaml decides per notebook.
+            research_preview=get_overrides(str(path.relative_to(REPO_ROOT).with_suffix(""))).get(
+                "research_preview", True
+            ),
         )
     elapsed = time.perf_counter() - started
 

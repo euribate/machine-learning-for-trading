@@ -22,6 +22,12 @@ from utils.paths import get_case_study_dir
 
 logger = logging.getLogger(__name__)
 
+# The schema `training_input_identity` returns. A notebook that records the spec's
+# fields asserts against this rather than against a literal of its own: the literal
+# "v1" outlived the move to v2 and took etfs/11e down at its fourth cell, which
+# abandoned the eight etfs notebooks queued behind it.
+INPUT_IDENTITY_VERSION = "v2"
+
 
 @dataclass(slots=True)
 class LatentFactorCaseStudyContext:
@@ -47,6 +53,7 @@ class LatentFactorCaseStudyContext:
     temporal_by_fold: pd.DataFrame | None
     temporal_keys: list[str]
     temporal_feature_names: list[str]
+    temporal_artifact_splits: list[dict[str, Any]]
     max_symbols: int = 0
     max_folds: int = 0
     device: str = "cpu"
@@ -96,7 +103,14 @@ def load_case_study_context(
     if use_macro and macro_context_config:
         macro_panel, macro_context_spec = load_configured_macro_context(macro_context_config)
     elif use_macro:
-        macro_panel, macro_context_spec = _load_macro_panel(lf_setup), None
+        macro_panel = _load_macro_panel(lf_setup)
+        macro_context_spec = {
+            "policy": "load_macro_fallback",
+            "version": "v1",
+            "series": [column for column in macro_panel.columns if column != "timestamp"],
+            "availability_lag_days": int(lf_setup.get("macro_availability_lag_days", 0)),
+            "alignment": "backward_asof",
+        }
     else:
         macro_panel, macro_context_spec = (
             None,
@@ -113,7 +127,11 @@ def load_case_study_context(
     modeling_dataset = load_modeling_dataset(
         case_study_id, resolved_primary, max_symbols=max_symbols
     )
-    input_data_spec = _training_input_identity(case_study_id, resolved_primary)
+    input_data_spec = training_input_identity(
+        case_study_id,
+        resolved_primary,
+        eval_label=modeling_dataset.eval_label_col,
+    )
     splits = modeling_dataset.splits[:max_folds] if max_folds else modeling_dataset.splits
 
     return LatentFactorCaseStudyContext(
@@ -139,6 +157,7 @@ def load_case_study_context(
         temporal_by_fold=modeling_dataset.temporal_by_fold,
         temporal_keys=modeling_dataset.temporal_keys,
         temporal_feature_names=modeling_dataset.temporal_feature_names,
+        temporal_artifact_splits=modeling_dataset.temporal_artifact_splits,
         max_symbols=max_symbols,
         max_folds=max_folds,
         device=device,
@@ -263,7 +282,11 @@ def run_case_study_variants(
         modeling_dataset = load_modeling_dataset(
             context.case_study_id, variant_label, max_symbols=context.max_symbols
         )
-        input_data_spec = _training_input_identity(context.case_study_id, variant_label)
+        input_data_spec = training_input_identity(
+            context.case_study_id,
+            variant_label,
+            eval_label=modeling_dataset.eval_label_col,
+        )
         # Honour the same max_folds truncation the primary run uses, so a
         # `max_folds=2` smoke test does not silently retrain variants on the
         # full split set.
@@ -317,9 +340,13 @@ def run_case_study_variants(
     return results
 
 
-def _training_input_identity(case_study_id: str, label: str) -> dict[str, Any]:
+def training_input_identity(
+    case_study_id: str,
+    label: str,
+    *,
+    eval_label: str | None = None,
+) -> dict[str, Any]:
     """Return portable content identity for every materialized modeling input."""
-    case_dir = get_case_study_dir(case_study_id)
     inputs = {
         "financial": resolve_storage_path(
             case_study_id,
@@ -331,7 +358,6 @@ def _training_input_identity(case_study_id: str, label: str) -> dict[str, Any]:
             load_label_spec(case_study_id, label),
             f"labels/{label}.parquet",
         ),
-        "setup": case_dir / "config" / "setup.yaml",
     }
     temporal_path = resolve_storage_path(
         case_study_id,
@@ -340,6 +366,12 @@ def _training_input_identity(case_study_id: str, label: str) -> dict[str, Any]:
     )
     if temporal_path.exists():
         inputs["model_based"] = temporal_path
+    if eval_label is not None and eval_label != label:
+        inputs["evaluation_label"] = resolve_storage_path(
+            case_study_id,
+            load_label_spec(case_study_id, eval_label),
+            f"labels/{eval_label}.parquet",
+        )
 
     missing = [role for role, path in inputs.items() if not path.exists()]
     if missing:
@@ -352,7 +384,11 @@ def _training_input_identity(case_study_id: str, label: str) -> dict[str, Any]:
     aggregate = sha256(
         "\n".join(f"{item['role']}={item['sha256']}" for item in files).encode()
     ).hexdigest()
-    return {"version": "v1", "files": files, "input_digest": f"sha256:{aggregate}"}
+    return {
+        "version": INPUT_IDENTITY_VERSION,
+        "files": files,
+        "input_digest": f"sha256:{aggregate}",
+    }
 
 
 def _sha256_file(path: Path) -> str:
@@ -394,3 +430,10 @@ def _merge_model_kwargs(
         merged.setdefault(model_name, {})
         merged[model_name].update(params)
     return merged
+
+
+# Deprecated private aliases. Thirty notebook cells import these names with their leading
+# underscore, which is what made them look private in the first place; each is a
+# cross-module interface and is now public. The aliases keep those callers working until
+# each notebook is re-executed with the public name, and go when the last one moves.
+_training_input_identity = training_input_identity

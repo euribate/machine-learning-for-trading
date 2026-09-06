@@ -19,6 +19,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from case_studies.utils.sequence_dataset import (
+    materialize_store_metadata,
+    prepare_fold_sequence_stores,
+    sequence_validation_keys,
+)
+
 
 def _synthetic_fold_df(
     *,
@@ -133,6 +139,74 @@ def test_val_sequence_count_matches_val_calendar_days():
     )
 
 
+def test_sequence_store_carries_fitted_training_preprocessing():
+    from case_studies.utils.sequence_dataset import prepare_fold_sequence_stores
+
+    df, train_mask, val_mask, val_start_ts, _ = _synthetic_fold_df()
+    train_store, val_store, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=20,
+        val_start=val_start_ts,
+    )
+
+    assert train_store.feature_mean is not None
+    assert train_store.feature_scale is not None
+    np.testing.assert_array_equal(val_store.feature_mean, train_store.feature_mean)
+    np.testing.assert_array_equal(val_store.feature_scale, train_store.feature_scale)
+
+
+@pytest.mark.parametrize("missing_validation_row", [False, True])
+def test_declared_validation_keys_equal_sequence_store(missing_validation_row):
+    df, train_mask, val_mask, val_start_ts, val_end_ts = _synthetic_fold_df()
+    if missing_validation_row:
+        df = df.loc[
+            ~((df["symbol"] == "S1") & (df["timestamp"] == pd.Timestamp("2021-02-01")))
+        ].reset_index(drop=True)
+        train_mask = df["timestamp"] <= pd.Timestamp("2020-12-31")
+        val_mask = df["timestamp"].between(val_start_ts, val_end_ts, inclusive="both")
+    df.loc[(df["symbol"] == "S2") & (df["timestamp"] == pd.Timestamp("2021-03-01")), "y"] = np.nan
+    split = {
+        "fold": 3,
+        "train_start": pd.Timestamp("2020-01-01"),
+        "train_end": pd.Timestamp("2020-12-31"),
+        "val_start": val_start_ts,
+        "val_end": val_end_ts,
+    }
+
+    _, val_store, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=20,
+        val_start=val_start_ts,
+    )
+    _, timestamps, symbols = materialize_store_metadata(val_store)
+    actual = {
+        (str(symbol), pd.Timestamp(timestamp), 3)
+        for symbol, timestamp in zip(symbols, timestamps, strict=True)
+    }
+    declared = sequence_validation_keys(
+        df,
+        [split],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=20,
+    )
+
+    assert set(declared.iter_rows()) == actual
+
+
 def test_val_sequence_targets_never_include_train_period():
     """No val sequence should have a target timestamp < val_start.
 
@@ -200,3 +274,326 @@ def test_backwards_compatible_without_val_start():
         assert int(end_positions.min()) == lookback, (
             "Legacy path should start sequences at position=lookback"
         )
+
+
+def test_sequence_windows_do_not_span_missing_entity_periods():
+    from case_studies.utils.sequence_dataset import prepare_fold_sequence_stores
+
+    df, train_mask, val_mask, val_start_ts, _ = _synthetic_fold_df(
+        train_end="2021-03-31",
+        val_start="2021-04-01",
+        val_end="2021-06-30",
+    )
+    missing_date = pd.Timestamp("2020-10-15")
+    keep = ~((df["symbol"] == "S0") & (df["timestamp"] == missing_date))
+    df = df.loc[keep].reset_index(drop=True)
+    train_mask = train_mask.loc[keep].reset_index(drop=True)
+    val_mask = val_mask.loc[keep].reset_index(drop=True)
+    lookback = 20
+
+    train_store, _, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=lookback,
+        val_start=val_start_ts,
+    )
+
+    calendar = pd.Index(sorted(df["timestamp"].unique()))
+    for symbol_id, end_idx in zip(train_store.symbol_idx, train_store.end_idx, strict=True):
+        timestamps = train_store.timestamps[int(symbol_id)]
+        window = timestamps[int(end_idx) - lookback : int(end_idx) + 1]
+        positions = calendar.get_indexer(window)
+        assert np.all(np.diff(positions) == 1)
+
+
+def test_fixed_cadence_windows_do_not_span_missing_panel_periods():
+    from case_studies.utils.sequence_dataset import prepare_fold_sequence_stores
+
+    dates = pd.date_range("2021-01-01", periods=100, freq="8h", tz="UTC")
+    missing_date = dates[40]
+    rows = [
+        {
+            "symbol": symbol,
+            "timestamp": timestamp,
+            "feat0": float(i),
+            "y": float(i),
+        }
+        for symbol in ("S0", "S1")
+        for i, timestamp in enumerate(dates)
+        if timestamp != missing_date
+    ]
+    df = pd.DataFrame(rows)
+    train_mask = df["timestamp"] < dates[75]
+    val_mask = df["timestamp"] >= dates[75]
+    lookback = 12
+
+    train_store, _, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=lookback,
+        val_start=dates[75],
+    )
+
+    cadence = np.timedelta64(8, "h")
+    for symbol_id, end_idx in zip(train_store.symbol_idx, train_store.end_idx, strict=True):
+        timestamps = train_store.timestamps[int(symbol_id)]
+        window = timestamps[int(end_idx) - lookback : int(end_idx) + 1]
+        assert np.all(np.diff(window) == cadence)
+
+
+def test_weekday_intraday_windows_reject_a_panel_wide_missing_bar():
+    from case_studies.utils.sequence_dataset import prepare_fold_sequence_stores
+
+    session_days = pd.date_range("2021-01-04", periods=4, freq="B")
+    dates = pd.DatetimeIndex(
+        [
+            day + pd.Timedelta(hours=9, minutes=30) + pd.Timedelta(minutes=15 * slot)
+            for day in session_days
+            for slot in range(26)
+        ]
+    )
+    missing_date = session_days[1] + pd.Timedelta(hours=10)
+    rows = [
+        {
+            "symbol": symbol,
+            "timestamp": timestamp,
+            "feat0": float(i),
+            "y": float(i),
+        }
+        for symbol in ("S0", "S1")
+        for i, timestamp in enumerate(dates)
+        if timestamp != missing_date
+    ]
+    df = pd.DataFrame(rows)
+    train_mask = df["timestamp"].dt.normalize() < session_days[3]
+    val_mask = df["timestamp"].dt.normalize() == session_days[3]
+    lookback = 2
+
+    train_store, _, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=lookback,
+        val_start=session_days[3] + pd.Timedelta(hours=9, minutes=30),
+        calendar_id="NYSE",
+    )
+
+    complete_positions = dates.get_indexer
+    crossed_session = False
+    for symbol_id, end_idx in zip(train_store.symbol_idx, train_store.end_idx, strict=True):
+        timestamps = train_store.timestamps[int(symbol_id)]
+        window = timestamps[int(end_idx) - lookback : int(end_idx) + 1]
+        assert np.all(np.diff(complete_positions(window)) == 1)
+        crossed_session |= len(pd.DatetimeIndex(window).normalize().unique()) > 1
+    assert crossed_session
+
+
+def test_monthly_period_numbers_preserve_gaps_at_millisecond_resolution():
+    from case_studies.utils.sequence_dataset import _sequence_period_numbers
+
+    timestamps = pd.Series(
+        np.asarray(["2021-01-31", "2021-02-28", "2021-04-30"], dtype="datetime64[ms]")
+    )
+
+    periods = _sequence_period_numbers(timestamps)
+
+    assert np.diff(periods).tolist() == [1, 2]
+
+
+def test_daily_period_numbers_use_the_declared_market_calendar():
+    from case_studies.utils.sequence_dataset import _sequence_period_numbers
+
+    around_holiday = pd.Series(
+        pd.to_datetime(["2022-06-29", "2022-06-30", "2022-07-01", "2022-07-05", "2022-07-06"])
+    )
+    missing_session = pd.Series(
+        pd.to_datetime(["2022-06-29", "2022-06-30", "2022-07-01", "2022-07-06", "2022-07-07"])
+    )
+
+    observed = _sequence_period_numbers(around_holiday, calendar_id="NYSE")
+    missing = _sequence_period_numbers(missing_session, calendar_id="NYSE")
+
+    assert np.diff(observed).tolist() == [1, 1, 1, 1]
+    assert np.diff(missing).tolist() == [1, 1, 2, 1]
+
+
+def test_sequence_period_cache_is_recomputed_for_a_declared_calendar():
+    from case_studies.utils.sequence_dataset import prepare_fold_sequence_stores
+
+    dates = pd.to_datetime(["2022-06-30", "2022-07-01", "2022-07-06", "2022-07-07"])
+    df = pd.DataFrame(
+        [
+            {"symbol": symbol, "timestamp": timestamp, "feat0": float(i), "y": float(i)}
+            for symbol in ("S0", "S1")
+            for i, timestamp in enumerate(dates)
+        ]
+    )
+    train_mask = df["timestamp"] <= dates[2]
+    val_mask = df["timestamp"] == dates[3]
+    kwargs = {
+        "train_mask": train_mask,
+        "val_mask": val_mask,
+        "feature_names": ["feat0"],
+        "label_col": "y",
+        "date_col": "timestamp",
+        "entity_col": "symbol",
+        "lookback": 1,
+        "val_start": dates[3],
+    }
+
+    fallback_train, _, _ = prepare_fold_sequence_stores(df, **kwargs)
+    calendar_train, _, _ = prepare_fold_sequence_stores(df, calendar_id="NYSE", **kwargs)
+
+    assert fallback_train.n_sequences == 4
+    assert calendar_train.n_sequences == 2
+
+
+def test_priming_includes_label_buffer_gap_rows():
+    from case_studies.utils.sequence_dataset import prepare_fold_sequence_stores
+
+    train_end = pd.Timestamp("2020-12-30")
+    df, train_mask, val_mask, val_start_ts, _ = _synthetic_fold_df(
+        train_end=str(train_end.date()),
+        val_start="2021-01-04",
+    )
+    gap_mask = (df["timestamp"] > train_end) & (df["timestamp"] < val_start_ts) & ~train_mask
+    assert gap_mask.any()
+    lookback = 20
+
+    _, val_store, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=lookback,
+        val_start=val_start_ts,
+    )
+
+    for symbol_id in range(val_store.n_symbols):
+        entity = val_store.entities[symbol_id]
+        end_positions = val_store.end_idx[val_store.symbol_idx == symbol_id]
+        first_end = int(end_positions.min())
+        last_context = pd.Timestamp(val_store.timestamps[symbol_id][first_end - 1])
+        expected_context = pd.Timestamp(
+            df.loc[(df["symbol"] == entity) & (df["timestamp"] < val_start_ts), "timestamp"].max()
+        )
+        assert last_context == expected_context
+        assert last_context > train_end
+
+
+def _strictly_positive_fold_df(
+    *,
+    missing_symbol: str = "S0",
+    n_symbols: int = 3,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series, pd.Timestamp]:
+    """A panel whose `feat0` is strictly positive and missing for one symbol.
+
+    This is the shape a model-based feature has: `garch_cond_vol` is a
+    conditional volatility, so zero is below every value it can take, and a
+    symbol the walk skipped has no estimate at all.
+    """
+    df, train_mask, val_mask, val_start_ts, _ = _synthetic_fold_df(n_symbols=n_symbols)
+    df = df.assign(feat0=df["feat0"].abs() + 1.0)
+    df.loc[df["symbol"] == missing_symbol, "feat0"] = np.nan
+    return df, train_mask, val_mask, val_start_ts
+
+
+def test_missing_feature_is_imputed_at_the_training_mean_not_below_the_minimum():
+    """A symbol with no estimate must read as average, not as the extreme.
+
+    Filling the raw array before the scaler is fitted puts a 0.0 into a
+    strictly positive feature, which lands below its observed minimum once
+    standardized - the skipped symbol is then presented to the model as the
+    calmest name in the panel for its whole history.
+    """
+    df, train_mask, val_mask, val_start_ts = _strictly_positive_fold_df()
+
+    train_store, _, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=20,
+        val_start=val_start_ts,
+    )
+
+    missing_idx = train_store.entities.index("S0")
+    missing_column = train_store.features[missing_idx][:, 0]
+    assert np.all(missing_column == 0.0), (
+        "the skipped symbol's normalized feature is not the training mean; "
+        f"it ranges {missing_column.min()} to {missing_column.max()} standard deviations"
+    )
+
+
+def test_training_statistics_ignore_rows_with_no_observation():
+    """The mean and scale describe the observed rows, not the filled ones."""
+    df, train_mask, val_mask, val_start_ts = _strictly_positive_fold_df()
+
+    train_store, _, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=20,
+        val_start=val_start_ts,
+    )
+
+    observed = df.loc[train_mask & df["feat0"].notna(), "feat0"].to_numpy(dtype=np.float64)
+    assert train_store.feature_mean is not None
+    assert train_store.feature_scale is not None
+    np.testing.assert_allclose(train_store.feature_mean[0], observed.mean(), rtol=1e-4)
+    np.testing.assert_allclose(train_store.feature_scale[0], observed.std(), rtol=1e-4)
+
+
+def test_an_infinity_does_not_reach_the_training_statistics():
+    """`np.nan_to_num` maps posinf to the float32 maximum by default.
+
+    One such value in a training fold would set that feature's mean and scale
+    for every symbol, so an infinity has to be treated as a missing
+    observation rather than as a very large one.
+    """
+    df, train_mask, val_mask, val_start_ts = _strictly_positive_fold_df(missing_symbol="S0")
+    finite_rows = df.index[(df["symbol"] == "S1") & train_mask]
+    df.loc[finite_rows[0], "feat0"] = np.inf
+
+    train_store, _, _ = prepare_fold_sequence_stores(
+        df,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        feature_names=["feat0", "feat1"],
+        label_col="y",
+        date_col="timestamp",
+        entity_col="symbol",
+        lookback=20,
+        val_start=val_start_ts,
+    )
+
+    assert train_store.feature_mean is not None
+    assert train_store.feature_mean[0] < 10.0, (
+        f"an infinity reached the training mean: {train_store.feature_mean[0]}"
+    )
+    for feats in train_store.features:
+        assert np.all(np.isfinite(feats)), "a non-finite value survived normalization"

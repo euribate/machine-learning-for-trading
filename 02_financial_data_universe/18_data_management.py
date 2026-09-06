@@ -79,6 +79,7 @@ from ml4t.data.storage import HiveStorage
 from ml4t.data.storage.backend import StorageConfig
 from ml4t.data.universe import Universe
 
+from utils.downloading import update_through_last_complete_bar
 from utils.paths import REPO_ROOT, get_output_dir
 from utils.style import COLORS
 
@@ -340,15 +341,17 @@ for symbol in symbols:
 # ### Inspect Partition Structure
 
 # %%
-# See the actual file layout
-hive_root = STORAGE_DIR / "hive_demo"
-parquet_files = sorted(hive_root.rglob("*.parquet"))
-print(f"Total Parquet files: {len(parquet_files)}")
-print("\nExample partition paths (first 8):")
-for f in parquet_files[:8]:
-    rel = f.relative_to(hive_root)
-    size_kb = f.stat().st_size / 1024
-    print(f"  {rel}  ({size_kb:.1f} KB)")
+# Ask the store what it wrote. The directory names are not addressable from outside -
+# the key is encoded for filesystem safety, and each write commits into a new generation
+# directory so a failed write cannot leave a half-written partition visible - so
+# `partitions()` is how a caller reports the layout.
+for symbol in symbols:
+    parts = storage.partitions(stored_keys[symbol])
+    print(f"{symbol}: {len(parts)} partitions, {sum(p.size_bytes for p in parts) / 1024:.1f} KB")
+
+print("\nAAPL partitions (first 8):")
+for part in storage.partitions(stored_keys["AAPL"])[:8]:
+    print(f"  {part.label}  ({part.size_bytes / 1024:.1f} KB)")
 
 # %% [markdown]
 # The two-year `AAPL` load lands as one Parquet file per calendar month — the
@@ -358,16 +361,12 @@ for f in parquet_files[:8]:
 # near-uniform, and every new month is a new partition, never a rewrite.
 
 # %%
-aapl_parts = []
-for f in parquet_files:
-    parts = f.relative_to(hive_root).parts
-    if not parts[0].endswith("AAPL"):
-        continue
-    year = int(parts[1].split("=")[1])
-    month = int(parts[2].split("=")[1])
-    aapl_parts.append({"period": f"{year}-{month:02d}", "size_kb": f.stat().st_size / 1024})
-
-aapl_sizes = pl.DataFrame(aapl_parts).sort("period")
+aapl_sizes = pl.DataFrame(
+    [
+        {"period": part.label, "size_kb": part.size_bytes / 1024}
+        for part in storage.partitions(stored_keys["AAPL"])
+    ]
+)
 
 fig = go.Figure(
     go.Bar(
@@ -394,12 +393,26 @@ fig.show()
 
 # %% [markdown]
 # ### Update a Symbol
+#
+# The delta is everything since the last stored bar, up to the newest bar the
+# vendor has actually published. That bound is not optional: Yahoo returns the
+# current exchange date as a row with accumulating volume and no
+# open/high/low/close, and the provider rejects a bar whose prices are null.
+# `DataManager.update()` fetches to `datetime.now()`, so it asks for that row on
+# every trading day. `update_through_last_complete_bar` asks for the same delta
+# and finds the end of the window instead of computing it - it steps back a day
+# at a time while the provider refuses the window, because the placeholder row
+# usually resolves a few hours after the close and sometimes does not. A refused
+# window is logged at error level, so an error line followed by a row count is
+# the retreat working rather than a failure.
 
 # %%
-# update() checks what's already stored and only fetches new data
+# Fetch every bar since the last stored one, up to the last complete session.
 for symbol in symbols:
-    key = dm_stored.update(symbol, lookback_days=7, provider="yahoo")
-    print(f"  Updated {symbol} → {key}")
+    rows = update_through_last_complete_bar(
+        dm_stored, storage, symbol, provider="yahoo", lookback_days=7
+    )
+    print(f"  Updated {symbol} → {rows} rows")
 
 # Verify data is current
 for symbol in symbols:

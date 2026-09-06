@@ -62,6 +62,18 @@ def test_the_bar_is_the_family_best_across_every_prediction(case_dir: Path) -> N
     )
 
 
+def test_the_bar_is_scoped_to_an_explicit_population(case_dir: Path) -> None:
+    bar = queries._canonical_family_coverage_bar(
+        "fixture",
+        "fwd_ret_5d",
+        "validation",
+        case_dir,
+        prediction_hashes={"short"},
+    )
+
+    assert bar == {"gbm": 480}
+
+
 def test_a_prediction_that_cannot_be_evaluated_does_not_set_the_bar(
     case_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -132,7 +144,15 @@ def test_intraday_timestamps_count_one_decision_date_once(
 ) -> None:
     """A minute-bar case study's `timestamp` is a Datetime, so deduplicating before
     the cast to Date counts every bar as its own decision date and the count stops
-    being comparable to the daily `ic_n_days` it stands in for."""
+    being comparable to the daily `ic_n_days` it stands in for.
+
+    The frame carries a realized return and an entity column because the count is
+    of *scorable* dates, and a date is scorable only where at least `min_obs`
+    entities hold a finite prediction and a finite return, varying across the
+    cross-section - a rank correlation is undefined where either side is constant.
+    Eight names per bar, each with its own value, puts every date above the floor
+    with a defined coefficient, so what this measures is the dedup and nothing else.
+    """
     import datetime as dt
 
     import polars as pl
@@ -142,9 +162,15 @@ def test_intraday_timestamps_count_one_decision_date_once(
     pred_dir = tmp_path / "run_log" / "predictions" / "H"
     pred_dir.mkdir(parents=True)
     bars = [dt.datetime(2020, 1, day, hour) for day in (6, 7, 8) for hour in (9, 10, 11, 12)]
-    pl.DataFrame({"timestamp": bars, "prediction": [0.0] * len(bars)}).write_parquet(
-        pred_dir / "predictions.parquet"
-    )
+    rows = [(bar, f"S{i}") for bar in bars for i in range(8)]
+    pl.DataFrame(
+        {
+            "timestamp": [t for t, _ in rows],
+            "symbol": [s for _, s in rows],
+            "prediction": [float(s[1:]) for _, s in rows],
+            "actual": [float(s[1:]) * 0.5 for _, s in rows],
+        }
+    ).write_parquet(pred_dir / "predictions.parquet")
     monkeypatch.setattr(
         cv_window,
         "canonical_window",

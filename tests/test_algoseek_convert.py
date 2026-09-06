@@ -351,6 +351,44 @@ def test_day_source_reads_an_extracted_options_tree(convert, tmp_path):
     assert convert.parse_sp500_options_csv(payloads[0]).height == 1
 
 
+def test_day_source_reads_the_options_archive_as_algoseek_serves_it(convert, tmp_path):
+    """The published options zip was re-zipped on macOS, and that broke every reader.
+
+    It nests everything under one top-level folder and carries explicit directory
+    entries, a __MACOSX shadow tree and .DS_Store files. The directory entry for a
+    day's own folder was collected as a member of that day, read back as zero bytes
+    and hit polars NoDataError, so the conversion died on the first day it reached.
+    """
+    archive = tmp_path / "options_daily_greeks_sp500.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("options_daily_greeks_sp500/", b"")
+        z.writestr("options_daily_greeks_sp500/.DS_Store", b"\x00")
+        z.writestr("__MACOSX/._options_daily_greeks_sp500", b"\x00")
+        z.writestr("options_daily_greeks_sp500/2020/", b"")
+        z.writestr("options_daily_greeks_sp500/2020/20200313/", b"")
+        for symbol in ("AAPL", "MSFT"):
+            z.writestr(
+                f"options_daily_greeks_sp500/2020/20200313/{symbol}.csv.gz",
+                gzip.compress(_options_csv(convert, symbol=symbol)),
+            )
+            z.writestr(
+                f"__MACOSX/options_daily_greeks_sp500/2020/20200313/._{symbol}.csv.gz",
+                b"\x00",
+            )
+        z.writestr("options_daily_greeks_sp500/2020/20200313/.DS_Store", b"\x00")
+
+    days = list(convert.DaySource(archive, "sp500-options").days())
+    assert [d for d, _ in days] == ["20200313"]
+    payloads = days[0][1]()
+    assert len(payloads) == 2
+    assert all(convert.parse_sp500_options_csv(p).height == 1 for p in payloads)
+
+    out = tmp_path / "data"
+    assert convert.convert_sp500_options(archive, out, workers=1, force=False) == 0
+    written = out / "equities" / "market" / "sp500" / "options" / "year=2020" / "20200313.parquet"
+    assert pl.read_parquet(written).height == 2
+
+
 def test_day_source_reads_an_extracted_nasdaq_tree(convert, tmp_path):
     """Extracting the NASDAQ-100 archive one level gives day *zips*, not CSVs.
 
@@ -476,3 +514,124 @@ def test_convert_reports_an_empty_source(convert, tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert convert.convert_sp500_options(empty, tmp_path / "data", workers=1, force=False) == 1
+
+
+def _nasdaq_archive(convert, path: Path, days: list[str], symbols: list[str]) -> Path:
+    """The archive as AlgoSeek serves it: an outer zip of one zip per day."""
+    with zipfile.ZipFile(path, "w") as outer:
+        for day in days:
+            inner = io.BytesIO()
+            with zipfile.ZipFile(inner, "w") as z:
+                for symbol in symbols:
+                    z.writestr(
+                        f"{day}/{symbol[0]}/{symbol}.csv",
+                        _nasdaq100_csv(convert, symbol=symbol, day=day),
+                    )
+            outer.writestr(f"{day[:4]}/{day}.zip", inner.getvalue())
+    return path
+
+
+def _month_path(out: Path) -> Path:
+    return (
+        out / "equities" / "market" / "nasdaq100" / "minute_bars" / "year=2020" / "month=03.parquet"
+    )
+
+
+def _staging_root(out: Path) -> Path:
+    return out / "equities" / "market" / "nasdaq100" / ".minute_bars_staging"
+
+
+def test_nasdaq_month_is_ordered_by_symbol_then_timestamp(convert, tmp_path):
+    """The month is assembled a batch of symbols at a time, so the ordering the
+    whole-month sort used to produce has to survive that."""
+    days = ["20200311", "20200312", "20200313"]
+    # More symbols than one batch holds, so assembly has to span batches and the
+    # ordering claim is about the file as a whole rather than about one write_table
+    # call. Named backwards from the sorted order they must come out in, so a run that
+    # simply preserved arrival order would fail.
+    n_symbols = convert._SYMBOL_BATCH * 2 + 3
+    symbols = [f"SYM{i:02d}" for i in range(n_symbols)][::-1]
+    archive = _nasdaq_archive(convert, tmp_path / "n.zip", days, symbols)
+    out = tmp_path / "data"
+    assert convert.convert_nasdaq100(archive, out, workers=1, force=False) == 0
+
+    df = pl.read_parquet(_month_path(out))
+    assert df.equals(df.sort("symbol", "timestamp")), "not ordered by (symbol, timestamp)"
+    # Every symbol survives, contiguously and in sorted order: a batch dropped or
+    # written twice shows up here, and so does a symbol split across two batches.
+    assert df["symbol"].unique(maintain_order=True).to_list() == sorted(symbols)
+    per_symbol = df.height // n_symbols
+    assert df.height == per_symbol * n_symbols
+    assert df.group_by("symbol").len()["len"].to_list() == [per_symbol] * n_symbols
+    assert not _staging_root(out).exists(), "staging must not outlive a finished month"
+
+
+def test_nasdaq_interrupted_month_resumes_from_the_days_it_staged(convert, tmp_path, monkeypatch):
+    """A killed run used to lose the whole month and restart it, so a run that could not
+    hold a month could never finish one however often it was retried."""
+    days = ["20200311", "20200312", "20200313"]
+    archive = _nasdaq_archive(convert, tmp_path / "n.zip", days, ["AAPL"])
+
+    clean = tmp_path / "clean"
+    assert convert.convert_nasdaq100(archive, clean, workers=1, force=False) == 0
+    expected = pl.read_parquet(_month_path(clean))
+
+    out = tmp_path / "resumed"
+    parse_day = convert._parse_day
+    parsed = 0
+    interrupt_after = 2
+
+    def counting_parse_day(*args, **kwargs):
+        nonlocal parsed
+        parsed += 1
+        if interrupt_after is not None and parsed > interrupt_after:
+            raise KeyboardInterrupt("stands in for the OOM kill")
+        return parse_day(*args, **kwargs)
+
+    monkeypatch.setattr(convert, "_parse_day", counting_parse_day)
+    with pytest.raises(KeyboardInterrupt):
+        convert.convert_nasdaq100(archive, out, workers=1, force=False)
+
+    assert not _month_path(out).exists()
+    staged = sorted(q.name for q in _staging_root(out).rglob("*.parquet"))
+    assert staged == ["20200311.parquet", "20200312.parquet"], "the parsed days must survive"
+
+    interrupt_after = None
+    parsed = 0
+    assert convert.convert_nasdaq100(archive, out, workers=1, force=False) == 0
+    assert pl.read_parquet(_month_path(out)).equals(expected)
+    assert parsed == 1, "a resumed run re-parses only the day it stopped on"
+
+
+def test_staged_days_are_not_visible_to_the_loader(convert, tmp_path, monkeypatch):
+    """load_nasdaq100_bars() scans minute_bars/**/*.parquet with hive_partitioning=True,
+    so a staging directory left inside it would be read back as data."""
+    archive = _nasdaq_archive(convert, tmp_path / "n.zip", ["20200311", "20200312"], ["AAPL"])
+    out = tmp_path / "data"
+
+    def die_immediately(*args, **kwargs):
+        raise KeyboardInterrupt("stands in for the OOM kill")
+
+    monkeypatch.setattr(convert, "_parse_day", die_immediately)
+    with pytest.raises(KeyboardInterrupt):
+        convert.convert_nasdaq100(archive, out, workers=1, force=False)
+
+    minute_bars = out / "equities" / "market" / "nasdaq100" / "minute_bars"
+    assert _staging_root(out).is_dir(), "the run must have staged somewhere"
+    assert list(minute_bars.rglob("*.parquet")) == []
+
+
+def test_a_skipped_month_clears_staging_a_kill_left_behind(convert, tmp_path):
+    """A kill between publishing the month and deleting its staging leaves days that
+    nothing would ever collect: the month exists, so every later run skips it."""
+    archive = _nasdaq_archive(convert, tmp_path / "n.zip", ["20200311", "20200312"], ["AAPL"])
+    out = tmp_path / "data"
+    assert convert.convert_nasdaq100(archive, out, workers=1, force=False) == 0
+
+    # Re-create what the interrupted cleanup would have left.
+    orphan = _staging_root(out) / "202003"
+    orphan.mkdir(parents=True)
+    (orphan / "20200311.parquet").write_bytes(b"stale")
+
+    assert convert.convert_nasdaq100(archive, out, workers=1, force=False) == 0
+    assert not _staging_root(out).exists(), "a skipped month must clear its staged days"

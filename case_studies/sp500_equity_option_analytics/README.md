@@ -33,7 +33,7 @@ the two result versions are not mixed.
 | Stage | Notebook | Chapter | What it teaches | Writes |
 |---|---|---:|---|--------|
 | Feasibility | [`01_feasibility_analysis`](01_feasibility_analysis.ipynb) | 6 | Tests options coverage, weekly cadence, and whether equity trading costs leave room for research. | Nothing - the evidence stays in the notebook |
-| Labels | [`02_labels`](02_labels.ipynb) | 7 | Builds five- and ten-day return, risk-adjusted, and direction labels with walk-forward boundaries. | `labels/fwd_ret_5d.parquet`, `labels/fwd_ret_10d.parquet`, `labels/fwd_ret_risk_adj_5d.parquet`, `labels/fwd_dir_5d.parquet`, `labels/fwd_dir_10d.parquet`, `config/cv_config.json` |
+| Labels | [`02_labels`](02_labels.ipynb) | 7 | Builds five- and ten-day return, risk-adjusted, and direction labels with walk-forward boundaries. | `labels/fwd_ret_5d.parquet`, `labels/fwd_ret_10d.parquet`, `labels/fwd_ret_risk_adj_5d.parquet`, `labels/fwd_dir_5d.parquet`, `labels/fwd_dir_10d.parquet` |
 | Financial features | [`03_financial_features`](03_financial_features.ipynb) | 8 | Joins lagged IV surfaces to realized volatility, momentum, and liquidity features. | `features/financial.parquet` |
 | Temporal features | [`04_model_based_features`](04_model_based_features.ipynb) | 9 | Produces forward-only GJR-GARCH volatility features and documents the pinned single-start feature vintage. | `features/model_based.parquet` |
 | Evaluation | [`05_evaluation`](05_evaluation.ipynb) | 7-9 | Audits coverage, staleness, daily IC, and HAC uncertainty before model selection. | `evaluation/triage_ledger.parquet`, `evaluation/ic_timeseries.parquet` |
@@ -52,9 +52,11 @@ the two result versions are not mixed.
 | Model analysis | [`13_model_analysis`](13_model_analysis.ipynb) | 11-15 | Compares full-coverage families using daily IC with HAC intervals and feature provenance. | Nothing - it reads the registry |
 | Equal-weight baseline | [`14_backtest`](14_backtest.ipynb) | 16 | Runs equal-weight top-k baselines and applies coverage-aware selection. | One backtest run per prediction set and entry scheme; `daily_returns.parquet`, `weights.parquet`, `trades.parquet`, `fills.parquet`, `equity.parquet`, `portfolio_state.parquet`, and `spec.json` under `run_log/backtest/{hash}/` |
 | Allocation | [`15_portfolio_management`](15_portfolio_management.ipynb) | 17 | Tests five alternative allocators on the ten advancing model configurations. | One backtest run per allocation method, same artifact layout |
-| Costs | [`16_costs`](16_costs.ipynb) | 18 | Replays one selected allocation lineage across the exact 17-point cost surface. | One backtest run per cost level, same artifact layout |
-| Risk | [`17_risk_management`](17_risk_management.ipynb) | 19 | Compares 14 predeclared fixed controls with paired return uncertainty. | One backtest run per overlay variant, same artifact layout |
-| Strategy assessment | [`18_strategy_analysis`](18_strategy_analysis.ipynb) | 20 | Separates corrected validation evidence from the historical, non-comparable holdout observation. | Nothing - it reads the registry |
+| Risk | [`16_risk_management`](16_risk_management.ipynb) | 19 | Compares 14 predeclared fixed controls with paired return uncertainty. | One backtest run per overlay variant, same artifact layout |
+| Costs | [`17_costs`](17_costs.ipynb) | 18 | Replays the single best risk-stage configuration across the exact 17-point cost surface. | One backtest run per cost level, same artifact layout |
+| Holdout predictions | [`18_holdout_predictions`](18_holdout_predictions.ipynb) | 20 | Refits the selected configuration on all history before 2021 and predicts the holdout. | One training run and one prediction set |
+| Holdout backtest | [`19_holdout_backtest`](19_holdout_backtest.ipynb) | 20 | Runs the selected strategy unchanged on the holdout predictions. | One backtest run at `stage='holdout'`, same artifact layout |
+| Strategy assessment | [`20_strategy_analysis`](20_strategy_analysis.ipynb) | 20 | Assembles what the case study established, and states which claims the holdout supports. | Nothing - it reads the registry |
 
 ## Running
 
@@ -72,8 +74,8 @@ for notebook in \
   05_evaluation 06_linear 07_gbm 08_tabular_dl 09_dl_lstm 10_dl_patchtst \
   11_latent_factors 11a_pca 11b_ipca 11c_conditional_autoencoder \
   11d_stochastic_discount_factor 11e_supervised_autoencoder 12_causal_dml \
-  13_model_analysis 14_backtest 15_portfolio_management 16_costs \
-  17_risk_management 18_strategy_analysis
+  13_model_analysis 14_backtest 15_portfolio_management 16_risk_management \
+  17_costs 18_holdout_predictions 19_holdout_backtest 20_strategy_analysis
 do
   uv run python "case_studies/sp500_equity_option_analytics/${notebook}.py"
 done

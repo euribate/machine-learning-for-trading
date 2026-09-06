@@ -3,7 +3,7 @@ name = "ml4t"
 version = "3.0.0"
 description = "Machine Learning for Algorithmic Trading — 3rd Edition"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 license = "MIT"
 authors = [{ name = "Stefan Jansen" }]
 
@@ -28,13 +28,19 @@ dependencies = [
     # kaleido>=1.0: 0.2.1 bundled its own Chromium but drives the deprecated
     # plotly.io.kaleido.scope.* API, which plotly 6.x emits DeprecationWarnings for
     # (support removed after Sept 2025). 1.x drives a system/self-provisioned Chrome
-    # (kaleido_get_chrome) and is warning-clean. Static PNG export is used only at
-    # figure-production time; reader-runtime kaleido calls (nb 21) already try/except.
+    # (kaleido_get_chrome) and is warning-clean. The default renderer is
+    # `plotly_mimetype+png`, so every `fig.show()` is a kaleido call and PNG export is a
+    # reader-runtime path, not only a figure-production one. Two things carry that:
+    # `utils/__init__` drops the `+png` half where no Chrome is resolvable, and
+    # `envs/ml4t/Dockerfile` installs Chrome for Testing so the image does resolve one.
     "kaleido>=1.3",
     # ===================
     # Machine Learning
     # ===================
     "scikit-learn>=1.4",
+    # Imported directly by case_studies/utils/temporal.py to pin the BLAS thread count
+    # around HMM fits, so it is declared rather than relied on through scikit-learn.
+    "threadpoolctl>=3.1",
     "xgboost>=3.1",
     "lightgbm>=4.6",
     "catboost>=1.2.8",
@@ -45,15 +51,19 @@ dependencies = [
     "gymnasium>=1.2",
     "stable-baselines3>=2.7",
     # ===================
-    # ML4T Libraries (PyPI, pre-release)
+    # ML4T Libraries (PyPI)
     # ===================
-    # b19: the missing-data errors name the download command a reader can run and
-    # the path the data root resolved from, instead of a Python API call.
-    "ml4t-data>=0.1.0b19",
-    "ml4t-diagnostic>=0.1.0b25",
-    "ml4t-engineer>=0.1.0b10",
-    "ml4t-backtest>=0.1.0b20",
-    "ml4t-live>=0.1.0b3",
+    # ml4t-data 0.1.2: HiveStorage.partitions() reports what a write committed, the anomaly
+    # detectors accept a date-typed timestamp column, and get_metadata() no longer lets a
+    # null in the provider block erase the timestamp an update just wrote.
+    "ml4t-data>=0.1.2",
+    # ml4t-diagnostic 0.1.2: cross_sectional_ic_series() reports an undefined date
+    # (all predictions or all returns tied) as null rather than NaN, so a
+    # drop_nulls("ic") followed by .mean() can no longer come back nan.
+    "ml4t-diagnostic>=0.1.4",
+    "ml4t-engineer>=0.1.3",
+    "ml4t-backtest>=0.1.3",
+    "ml4t-live>=0.1.0",
     # ===================
     # Deep Learning
     # ===================
@@ -179,7 +189,7 @@ dependencies = [
     "llama-index-embeddings-huggingface>=0.7.0",
     "chromadb>=1.5.5",
     "pfhedge>=0.22.0",
-    "ml4t-models>=0.1.0b0",
+    "ml4t-models>=0.1.2",
     "llama-index-vector-stores-chroma>=0.5.5",
     "llama-index-llms-openai>=0.7.7",
     # Ch24 Autonomous Agents (required at notebook runtime; Docker installs
@@ -234,6 +244,7 @@ rag = [
 dev = [
     "pytest>=8.0",
     "pytest-rerunfailures>=15.0",
+    "pytest-timeout>=2.3",
     "jupytext>=1.16",
     "pre-commit>=3.6",
     # Pinned exactly, and the same version .pre-commit-config.yaml pins. Two
@@ -245,9 +256,7 @@ dev = [
 ]
 
 [tool.uv]
-# ml4t-engineer only has pre-release versions on PyPI. Spelled "if-necessary" rather
-# than the deprecated "if-necessary-or-explicit", which makes uv print a deprecation
-# warning on every single `uv run` a reader types.
+# Permit a pre-release only when a transitive dependency has no stable release.
 prerelease = "if-necessary"
 
 # Download CPython rather than reusing whatever the machine already has. uv reuses
@@ -276,7 +285,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["utils", "data", "case_studies"]
+include = ["utils", "data", "case_studies", "scripts"]
 namespaces = false
 
 # Auto-loaded at interpreter startup to put numbered chapter dirs on sys.path
@@ -325,3 +334,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short -p no:torchtyping"
+markers = [
+    "production_extract: asserts an absolute property of the full production dataset (a name count, a surplus), which no CI checkout carries - the test-data extract is reduced by design. Runs locally against the real data; deselected in CI.",
+]

@@ -22,6 +22,14 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+# Import lightgbm before ml4t.diagnostic, which transitively loads
+# scikit-learn. Both ship their own OpenMP runtime and the first one loaded
+# wins for the whole process; on macOS ARM64 the loser's first multithreaded
+# fit dies inside `__kmp_suspend_initialize_thread`, taking the kernel with it
+# and printing no traceback. `learning_curve_data` re-imports it locally for
+# reading; this one exists only to lose no race. `import x` sorts ahead of
+# `from x import y`, so isort keeps it here.
+import lightgbm  # noqa: F401
 import numpy as np
 import polars as pl
 
@@ -36,7 +44,7 @@ from ml4t.diagnostic.metrics import cross_sectional_ic
 
 from utils.paths import get_case_study_dir
 
-from .notebook_contracts import degenerate_prediction_sql
+from .notebook_contracts import defined_ic, degenerate_prediction_sql
 
 # ---------------------------------------------------------------------------
 # Fast metrics from registry (no raw prediction loading needed)
@@ -269,22 +277,77 @@ def best_model_per_family_fast(
     metrics: pl.DataFrame,
     *,
     ic_col: str = "ic_mean_daily",
+    coverage_col: str = "ic_n_days",
+    require_full_coverage: bool = True,
 ) -> pl.DataFrame:
-    """Find the best (config, checkpoint) per family from pre-computed metrics.
+    """Find the representative (config, checkpoint) per family from stored metrics.
 
-    Much faster than select_best_per_family() which recomputes IC from raw predictions.
+    The representative stands in for its family in every comparison downstream, so
+    it has to have been scored over the same period as the rows it will be compared
+    against. A prediction set that failed partway still leaves rows in the registry,
+    and its score is an average over the decision days it managed rather than the
+    days it was asked for. Those scores are frequently the highest ones, because a
+    shorter window is an easier window.
+
+    Rows are therefore restricted to the maximum ``coverage_col`` observed within
+    each ``(family, label)`` before the highest score is taken. Restricting per
+    label rather than globally keeps labels with genuinely different histories
+    comparable within themselves.
+
+    Exact ties on ``ic_col`` resolve on ``prediction_hash`` so the same registry
+    returns the same representative on every machine and every re-run.
+
+    Set ``require_full_coverage=False`` for a diagnostic view of every scored row,
+    which is not a basis for comparing one family against another.
     """
     if metrics.height == 0:
         return metrics
     if ic_col not in metrics.columns:
         raise ValueError(f"Selection metric {ic_col!r} is not present")
 
+    eligible = metrics.filter(pl.col(ic_col).is_not_null())
+
+    if require_full_coverage:
+        if coverage_col not in eligible.columns:
+            raise ValueError(
+                f"Coverage column {coverage_col!r} is not present, so no representative "
+                f"can be shown to cover the same period as the rows it is compared "
+                f"against. Backfill it, or pass require_full_coverage=False and treat "
+                f"the result as a diagnostic rather than a comparison."
+            )
+        group_keys = ["family", "label"] if "label" in eligible.columns else ["family"]
+        covered = eligible.filter(
+            pl.col(coverage_col).is_not_null()
+            & (pl.col(coverage_col) == pl.col(coverage_col).max().over(group_keys))
+        )
+
+        # A group whose rows all carry a null coverage count cannot be shown to
+        # span the same days as any other, and the filter above removes it
+        # entirely. Checking at the granularity the filter groups on matters: a
+        # family with one label backfilled and another not would survive a
+        # family-level check while the unbacked label vanished, and because the
+        # representative is taken across labels that silent drop can change which
+        # configuration represents the family.
+        def _groups(frame: pl.DataFrame) -> set[tuple]:
+            return set(map(tuple, frame.select(group_keys).unique().rows()))
+
+        lost = sorted(_groups(eligible) - _groups(covered))
+        if lost:
+            named = ", ".join("/".join(str(part) for part in group) for group in lost)
+            raise ValueError(
+                f"No prediction set carries {coverage_col!r} for {named}, so those rows "
+                f"cannot be compared against the ones that do. Backfill the column for "
+                f"those runs, or pass require_full_coverage=False and treat the whole "
+                f"result as a diagnostic rather than a comparison."
+            )
+        eligible = covered
+
+    tie_break = ["prediction_hash"] if "prediction_hash" in eligible.columns else []
     return (
-        metrics.filter(pl.col(ic_col).is_not_null())
-        .sort(ic_col, descending=True)
+        eligible.sort([ic_col, *tie_break], descending=[True, *[False] * len(tie_break)])
         .group_by("family")
         .first()
-        .sort(ic_col, descending=True)
+        .sort([ic_col, "family"], descending=[True, False])
     )
 
 
@@ -500,9 +563,10 @@ def model_summary_table(
             min_obs=5,
         )
         unc: dict[str, float] = {}
-        if isinstance(daily_ic, pl.DataFrame) and daily_ic.drop_nulls("ic").height >= 3:
+        defined = defined_ic(daily_ic) if isinstance(daily_ic, pl.DataFrame) else None
+        if defined is not None and defined.height >= 3:
             u = compute_ic_uncertainty(
-                daily_ic.drop_nulls("ic").select("ic"),
+                defined.select("ic"),
                 horizon=int(max(1, horizon)),
                 n_boot=n_boot,
             )
@@ -1134,18 +1198,54 @@ def load_daily_metrics_series(
     case_study_id: str,
     prediction_hash: str,
 ) -> pl.DataFrame:
-    """Load the per-fold daily IC (and AUC if present) parquet for one prediction set.
+    """Load or compute the per-fold daily IC series for one prediction set.
 
-    Returns the frame at `run_log/predictions/{hash}/daily_metrics.parquet`
-    (shipped with the downloaded case-study artifacts). Use this for
-    rolling-IC plots and re-running the bootstrap on the daily series
-    without re-touching raw predictions. Empty DataFrame if missing.
+    Prefer `daily_metrics.parquet` when present. Older registered predictions
+    may lack that derived artifact, so compute the same series from their raw
+    validation predictions without writing into the registry. Returns an empty
+    frame only when neither artifact is available.
     """
     case_dir = get_case_study_dir(case_study_id)
     path = case_dir / "run_log" / "predictions" / prediction_hash / "daily_metrics.parquet"
-    if not path.exists():
+    if path.exists():
+        # Files written before ml4t-diagnostic 0.1.2 store an undefined date as
+        # NaN, not null; normalise here so every consumer sees one convention.
+        return pl.read_parquet(path).with_columns(
+            pl.when(pl.col("ic").is_finite()).then(pl.col("ic")).otherwise(None).alias("ic")
+        )
+
+    predictions = load_predictions(
+        case_study_id,
+        prediction_hash=prediction_hash,
+        split="validation",
+    )
+    if predictions.is_empty():
         return pl.DataFrame()
-    return pl.read_parquet(path)
+
+    from ml4t.diagnostic.metrics import cross_sectional_ic_series
+
+    entity_col = next(
+        (column for column in ("symbol", "product") if column in predictions.columns),
+        None,
+    )
+    join_columns = ["timestamp", *([entity_col] if entity_col else [])]
+    fold_series = []
+    for fold_id in predictions["fold_id"].unique().drop_nulls().sort().to_list():
+        fold = predictions.filter(pl.col("fold_id") == fold_id)
+        series = cross_sectional_ic_series(
+            fold.select(*join_columns, "y_score"),
+            fold.select(*join_columns, "y_true"),
+            pred_col="y_score",
+            ret_col="y_true",
+            date_col="timestamp",
+            entity_col=entity_col,
+            method="spearman",
+            min_obs=5,
+        )
+        fold_series.append(
+            series.rename({"timestamp": "date"}).with_columns(fold_id=pl.lit(fold_id))
+        )
+    return pl.concat(fold_series) if fold_series else pl.DataFrame()
 
 
 def indistinguishable_groups(
@@ -1192,3 +1292,121 @@ def indistinguishable_groups(
             running_lo = float(lo)
 
     return ordered.with_columns(pl.Series("group", groups))
+
+
+def _align_date_dtype(keyed: dict[str, pl.DataFrame], date_col: str) -> dict[str, pl.DataFrame]:
+    """*keyed* with ``date_col`` brought to one dtype, so the intersection join can run.
+
+    One registry can hold both conventions for the same trading day: etfs stores
+    ``timestamp`` as ``Date`` in 277 of its prediction files and as midnight ``Datetime``
+    in 123, because the families were registered by notebooks written months apart. A
+    join on mismatched key dtypes raises ``SchemaError`` rather than returning nothing,
+    so comparing across those families failed outright.
+
+    Widening ``Date`` to ``Datetime`` is lossless - a date becomes midnight, which is
+    what the datetime-typed rows already carry - so it is the direction taken whenever
+    both appear. Narrowing would truncate a genuine time of day, so it is never taken:
+    a case study whose timestamps really are intraday keeps them, and if it also holds
+    date-typed rows the intersection comes back empty, which is the true answer about
+    two sets that do not share keys. Anything other than these two dtypes is left alone
+    for the join to reject, because guessing a cast for it would be a fabrication.
+    """
+    dtypes = {frame.schema[date_col] for frame in keyed.values()}
+    if len(dtypes) < 2 or not dtypes <= {pl.Date, *(pl.Datetime(u) for u in ("ms", "us", "ns"))}:
+        return keyed
+    target = next(dt for dt in dtypes if dt != pl.Date)
+    return {
+        name: (
+            frame.with_columns(pl.col(date_col).cast(target))
+            if frame.schema[date_col] == pl.Date
+            else frame
+        )
+        for name, frame in keyed.items()
+    }
+
+
+def common_sample_daily_ic(
+    predictions: dict[str, pl.DataFrame],
+    *,
+    entity_col: str = "symbol",
+    date_col: str = "timestamp",
+    score_col: str = "y_score",
+    target_col: str = "y_true",
+) -> tuple[dict[str, float], int, int]:
+    """Daily rank IC for several prediction sets over the rows all of them share.
+
+    Two families can be scored over the same *number* of validation dates and still not be
+    comparable: sequence models drop the warm-up rows a flat model keeps, so the same date can
+    carry a different cross-section in each. Comparing the stored ICs then measures the samples
+    as much as the models.
+
+    This intersects on exact ``(entity, date)`` keys and recomputes the daily cross-sectional
+    Spearman correlation on what survives.
+
+    **Intersecting the keys is not sufficient, and the second intersection is why.** A date
+    whose scores are constant within one model has no cross-sectional correlation there - the
+    rank correlation is undefined, not zero - while the other models still have one. Dropping
+    those per model leaves each mean taken over a different set of dates, which is the sample
+    difference this function exists to remove, reintroduced one step later. So every model's
+    daily IC is computed first, the dates where **all** of them are defined are intersected, and
+    every mean is taken over that set. Dates with fewer than two entities are undefined for every
+    model at once and fall out of the same intersection.
+
+    The returned counts describe the same set. Reporting the key intersection instead would
+    overstate the comparison by however many dates the second intersection removed, which is
+    exactly the number a reader would need to judge it.
+
+    Column names default to what :func:`load_predictions` returns (``y_score``, ``y_true``),
+    which is the only supported source for these frames.
+
+    Returns ``({name: mean_daily_ic}, n_dates, n_rows_per_set)``.
+    """
+    if not predictions:
+        return {}, 0, 0
+
+    keyed = {
+        name: df.select(entity_col, date_col, score_col, target_col).unique(
+            subset=[entity_col, date_col]
+        )
+        for name, df in predictions.items()
+    }
+    keyed = _align_date_dtype(keyed, date_col)
+    common: pl.DataFrame | None = None
+    for frame in keyed.values():
+        keys = frame.select(entity_col, date_col)
+        common = keys if common is None else common.join(keys, on=[entity_col, date_col])
+    if common is None or common.is_empty():
+        return {}, 0, 0
+
+    per_day: dict[str, pl.DataFrame] = {}
+    scored_dates: pl.DataFrame | None = None
+    for name, frame in keyed.items():
+        sample = frame.join(common, on=[entity_col, date_col])
+        daily = (
+            sample.group_by(date_col)
+            .agg(
+                pl.corr(
+                    pl.col(score_col).rank(), pl.col(target_col).rank(), method="pearson"
+                ).alias("ic"),
+                pl.len().alias("n"),
+            )
+            # Both spellings of undefined. `pl.corr` returns NaN, not null, when one side has
+            # no variance - a date whose scores are all equal - and `is_not_null()` is true of
+            # NaN, so filtering on nullity alone let those dates through and carried the NaN
+            # into the mean.
+            .filter((pl.col("n") >= 2) & pl.col("ic").is_not_null() & pl.col("ic").is_not_nan())
+            .select(date_col, "ic")
+        )
+        per_day[name] = daily
+        dates = daily.select(date_col)
+        scored_dates = dates if scored_dates is None else scored_dates.join(dates, on=date_col)
+
+    if scored_dates is None or scored_dates.is_empty():
+        return {name: float("nan") for name in keyed}, 0, 0
+
+    ics = {
+        name: float(daily.join(scored_dates, on=date_col)["ic"].mean())
+        for name, daily in per_day.items()
+    }
+    shared_rows = common.join(scored_dates, on=date_col)
+    return ics, scored_dates.height, shared_rows.height

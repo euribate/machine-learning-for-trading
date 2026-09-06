@@ -27,8 +27,14 @@ used by the Ch20 paired-bootstrap synthesis:
 
 - ``signal``  → equal-weight benchmark (per case study, registered separately)
 - ``allocation``    → ``signal`` leader of the same (label, family)
-- ``cost_sensitivity`` → ``signal`` leader (no costs)
-- ``risk_overlay``  → ``cost_sensitivity`` leader (with costs, no risk overlay)
+- ``risk_overlay``  → ``allocation`` leader (sized, no overlay)
+- ``cost_sensitivity`` → ``risk_overlay`` leader (sized and overlaid, frictionless)
+
+Each stage is benchmarked against the leader of the stage before it, so the
+chain follows the order the backtest sequence runs: size positions, apply risk
+controls, then measure what realistic costs take off the winner. A stage that a
+case study has not run is skipped, and the benchmark falls back to the nearest
+earlier stage that has rows.
 
 Per-case-study baselines for the signal stage live in
 :data:`SIGNAL_BASELINE_BY_CASE_STUDY`; populate this when the equal-weight
@@ -37,12 +43,14 @@ benchmark name in the registry is non-default.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import numpy as np
 import polars as pl
@@ -123,6 +131,11 @@ def resolve_block_length(
     if rebalance_step and rebalance_step > 0:
         return max(rebalance_step, floor)
 
+    scale = float(np.std(returns))
+    scale_floor = np.finfo(float).eps * max(1.0, abs(float(np.mean(returns))))
+    if returns.size >= 10 and scale <= scale_floor:
+        return max(int(returns.size ** (1 / 3)), floor, 1)
+
     from ml4t.diagnostic.evaluation.stats import _optimal_block_size
 
     optimal = int(round(float(_optimal_block_size(returns))))
@@ -134,11 +147,57 @@ def resolve_block_length(
 # ---------------------------------------------------------------------------
 
 
+#: Stage order of the backtest sequence. Each stage's benchmark is the leader of
+#: the nearest preceding stage that has rows.
+STAGE_SEQUENCE: tuple[str, ...] = (
+    "signal",
+    "allocation",
+    "risk_overlay",
+    "cost_sensitivity",
+)
+
+
+#: The block of a strategy spec each stage introduces. ``cost_sensitivity`` has no entry
+#: because it is terminal - nothing is ever built on top of a cost sweep.
+STAGE_CARRIER_BLOCK: dict[str, str] = {
+    "signal": "signal",
+    "allocation": "allocation",
+    "risk_overlay": "risk",
+}
+
+
+def carried_blocks(stage: str) -> tuple[str, ...]:
+    """Every strategy block a backtest at ``stage`` has inherited or introduced."""
+    if stage not in STAGE_SEQUENCE:
+        return ()
+    upto = STAGE_SEQUENCE[: STAGE_SEQUENCE.index(stage) + 1]
+    return tuple(STAGE_CARRIER_BLOCK[s] for s in upto if s in STAGE_CARRIER_BLOCK)
+
+
+def descends_from(challenger: dict, baseline: dict, baseline_stage: str) -> bool:
+    """Is ``challenger`` a strategy built on top of ``baseline``?
+
+    `champion_lineage` takes the best backtest at each stage independently, so its
+    entries can be siblings rather than parent and child - two strategies that branch
+    off the same allocation carrier, say, one adding a risk overlay and one sweeping
+    costs. Comparing those two attributes the whole difference between two unrelated
+    strategies to whichever stage happens to come second in the chain.
+
+    Descent requires the challenger to match the baseline on the *whole prefix* the
+    baseline carries, not only on the block its own stage introduced. A shared
+    prediction hash fixes the predictions and nothing else: signal-stage runs vary
+    the signal method and ``top_k``, so an allocation leader can differ from the
+    signal leader in the one place the comparison is meant to hold fixed. Checking a
+    single block would pass it.
+    """
+    return all(challenger.get(b) == baseline.get(b) for b in carried_blocks(baseline_stage))
+
+
 STAGE_BASELINE: dict[str, str] = {
     "signal": "equal_weight",
     "allocation": "signal_leader",
-    "cost_sensitivity": "signal_leader",
-    "risk_overlay": "cost_sensitivity_leader",
+    "risk_overlay": "allocation_leader",
+    "cost_sensitivity": "risk_overlay_leader",
 }
 
 
@@ -177,12 +236,17 @@ def _sample_stats(returns: np.ndarray, periods_per_year: int) -> _Stats:
     mu = float(np.mean(returns))
     sd = float(np.std(returns, ddof=1))
     sharpe = (mu / sd * np.sqrt(periods_per_year)) if sd > 0 else 0.0
-    downside = returns[returns < 0]
-    if len(downside) > 1:
-        dsd = float(np.sqrt(np.mean(downside**2)))
-        sortino = (mu / dsd * np.sqrt(periods_per_year)) if dsd > 0 else 0.0
-    else:
-        sortino = 0.0
+    # Downside deviation averages the squared shortfall over EVERY period, not over the
+    # periods that fell. Dividing by the count of negative returns instead inflates the
+    # ratio by sqrt(n / n_negative), and since `backtest_metrics.sortino` is written by
+    # the engine's standard definition, that made the point estimate and the interval
+    # around it two different estimators: on us_firm_characteristics' validation rank-1,
+    # 99 periods with 20 negative, a stored 13.876 against a bootstrap CI of
+    # [4.22, 9.65] - the point outside its own interval, and a forest plot that could
+    # not be drawn.
+    shortfall = np.minimum(returns, 0.0)
+    dsd = float(np.sqrt(np.mean(shortfall**2)))
+    sortino = (mu / dsd * np.sqrt(periods_per_year)) if dsd > 0 else 0.0
     cum = np.cumprod(1.0 + returns)
     total_return = float(cum[-1] - 1.0)
     n_years = len(returns) / periods_per_year
@@ -232,16 +296,22 @@ def _sharpe_se_lo(returns: np.ndarray, periods_per_year: int) -> float:
         return float("nan")
     mu = float(np.mean(returns))
     sd = float(np.std(returns, ddof=1))
-    if sd == 0:
+    scale_floor = np.finfo(float).eps * max(1.0, abs(mu))
+    if sd <= scale_floor:
         return float("nan")
     sr = mu / sd  # native frequency
     centered = returns - mu
     m2 = float(np.mean(centered**2))
-    if m2 == 0:
+    if m2 <= scale_floor**2:
         return float("nan")
     skew = float(np.mean(centered**3) / m2**1.5)
     kurt = float(np.mean(centered**4) / m2**2)  # Pearson convention (normal=3)
-    rho = float(np.corrcoef(returns[:-1], returns[1:])[0, 1])
+    previous = returns[:-1]
+    following = returns[1:]
+    if float(np.std(previous)) == 0.0 or float(np.std(following)) == 0.0:
+        rho = 0.0
+    else:
+        rho = float(np.corrcoef(previous, following)[0, 1])
     if not np.isfinite(rho) or abs(rho) >= 0.999:
         rho = 0.0
     var = compute_sharpe_variance(
@@ -277,21 +347,16 @@ def _stationary_bootstrap_metrics(
     max_dds = np.empty(n_boot)
     calmars = np.empty(n_boot)
 
-    np_state = np.random.get_state()
-    np.random.seed(int(rng.integers(0, 2**31 - 1)))
-    try:
-        for i in range(n_boot):
-            idx = _stationary_bootstrap_indices(len(returns), float(block_length))
-            sample = returns[idx]
-            stats = _sample_stats(sample, periods_per_year)
-            sharpes[i] = stats.sharpe
-            sortinos[i] = stats.sortino
-            ann_rets[i] = stats.ann_return
-            vols[i] = stats.volatility
-            max_dds[i] = stats.max_drawdown
-            calmars[i] = stats.calmar
-    finally:
-        np.random.set_state(np_state)
+    for i in range(n_boot):
+        idx = _stationary_bootstrap_indices(len(returns), float(block_length), rng)
+        sample = returns[idx]
+        stats = _sample_stats(sample, periods_per_year)
+        sharpes[i] = stats.sharpe
+        sortinos[i] = stats.sortino
+        ann_rets[i] = stats.ann_return
+        vols[i] = stats.volatility
+        max_dds[i] = stats.max_drawdown
+        calmars[i] = stats.calmar
 
     return {
         "sharpe": sharpes,
@@ -401,6 +466,80 @@ def compute_backtest_uncertainty(
 # ---------------------------------------------------------------------------
 
 
+def joint_returns(
+    challenger: np.ndarray | pl.Series,
+    baseline: np.ndarray | pl.Series,
+    *,
+    challenger_overlays_baseline: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Coerce a paired return series to the precondition of a paired bootstrap.
+
+    :func:`compute_paired_uncertainty` requires two arrays of the same length whose position
+    ``i`` is the same session on both sides, and it refuses the pair rather than bootstrap a
+    misaligned one. Coercing each side on its own does not deliver that: ``_coerce_returns``
+    drops non-finite values and the leading run of zeros per series, so two series with
+    different amounts of leading inactivity part company. Joining on the timestamp beforehand
+    does not save it either, because the per-side trim happens after.
+
+    So both decisions are taken once, over both series: keep a session only where both sides
+    are finite, then start where the comparison becomes defined.
+
+    Where it becomes defined depends on what the pair is, which is why the caller has to say.
+    A leading flat run on the challenger has two possible meanings and they are
+    indistinguishable in the numbers:
+
+    ``challenger_overlays_baseline=False`` (the default, and the strategy-versus-benchmark
+        case): the two series are independent, each live from its own first traded session.
+        A strategy has a warmup prefix before its first signal while an equal-weight
+        benchmark is invested from the first joined session, and those rows are pre-sample
+        for the strategy rather than a result. The sample starts where **both** are trading,
+        which the code below reads as the first session on which both returns are non-zero;
+        see the comment there for the difference and why it is preserved.
+
+    ``challenger_overlays_baseline=True`` (the risk-overlay case): the challenger runs on top
+        of the baseline, so both are live from the same session and a flat challenger there
+        is a position it chose to hold - the largest instance of the effect the comparison
+        exists to measure. Starting where both traded would delete exactly those rows and pull
+        the measured difference toward zero in the direction the overlay is under test. The
+        sample starts where **either** has traded.
+
+    Returns two empty arrays when no session qualifies.
+    """
+    c = _as_return_array(challenger)
+    b = _as_return_array(baseline)
+    if c.size != b.size:
+        raise ValueError(
+            f"a paired series must arrive aligned; got {c.size} and {b.size} observations"
+        )
+    finite = np.isfinite(c) & np.isfinite(b)
+    c, b = c[finite], b[finite]
+    if c.size == 0:
+        return c, b
+    if challenger_overlays_baseline:
+        # Either side having traded starts the sample, so the first index where anything is
+        # non-zero: the earlier of the two firsts, or nothing if neither ever traded.
+        first_c = np.flatnonzero(c != 0.0)
+        first_b = np.flatnonzero(b != 0.0)
+        starts = [int(x[0]) for x in (first_c, first_b) if x.size]
+        if not starts:
+            return c[:0], b[:0]
+        start = min(starts)
+    else:
+        # The first session on which both are simultaneously non-zero, which is the rule the
+        # per-case-study producer and `20_strategy_synthesis/01_aggregate_synthesis.py` have
+        # both applied since they were split apart. It is not quite the rule the paragraph
+        # above states: the later starter's own first session is skipped when the other side
+        # happens to post an exactly zero return on it, and those observations are live on
+        # both series. Correcting that moves every default pair in the registry and obliges a
+        # re-execution of the Chapter 20 synthesis, so it is left as it stands here rather
+        # than changed underneath a comparison this function was only asked to make paired.
+        both = np.flatnonzero((c != 0.0) & (b != 0.0))
+        if not both.size:
+            return c[:0], b[:0]
+        start = int(both[0])
+    return c[start:], b[start:]
+
+
 def compute_paired_uncertainty(
     challenger: np.ndarray | pl.Series,
     baseline: np.ndarray | pl.Series,
@@ -411,24 +550,35 @@ def compute_paired_uncertainty(
     label: str | None = None,
     n_boot: int = 2000,
     seed: int = 0,
+    challenger_overlays_baseline: bool = False,
 ) -> dict[str, float]:
     """Paired stationary bootstrap on daily-return differences.
 
-    Inputs must be the same length and aligned by date. Returns a flat dict for
-    upsert into ``backtest_paired_metrics``.
+    The two series must arrive the same length and aligned by date, so that position ``i``
+    is the same session on both sides; a pair that does not is refused with an empty mapping
+    rather than truncated. Which rows to drop is then decided over both series at once by
+    :func:`joint_returns`, so a caller does not have to coerce them beforehand.
+    ``challenger_overlays_baseline`` is passed straight through and says which pair this is;
+    read that function before choosing it, because the default is right for a strategy
+    against a benchmark and wrong for a risk overlay against its carrier.
+
+    Returns a flat dict for upsert into ``backtest_paired_metrics``, and an empty mapping
+    when fewer than four sessions survive.
     """
     from ml4t.diagnostic.evaluation.stats import _stationary_bootstrap_indices
 
-    c = _coerce_returns(challenger)
-    b = _coerce_returns(baseline)
-    # Caller's contract: pre-aligned by timestamp via inner-join. If the
-    # per-side leading-zero strip leaves the two arrays at different
-    # lengths, head/tail-truncation would misalign them (challenger
-    # position i and baseline position i would correspond to different
-    # original timestamps). Refuse rather than bootstrap a misaligned
-    # pair silently — callers must pre-align if they bypass _joint_coerce.
-    if c.size != b.size:
+    c_raw = _as_return_array(challenger)
+    b_raw = _as_return_array(baseline)
+    # Caller's contract: the two series arrive pre-aligned by timestamp, so position i is
+    # the same session on both sides. Nothing here can recover that if they do not, because
+    # truncating to the shorter one would compare different sessions. Refuse instead.
+    if c_raw.size != b_raw.size:
         return {}
+    # The coercion is taken once over both series rather than per side. `_coerce_returns`
+    # trims each series' own leading run of zeros, which is exactly what a risk overlay
+    # produces - it sits out sessions its carrier trades - and the two arrays then part
+    # company, so the size check above refused every overlay in `17_risk_management`.
+    c, b = joint_returns(c_raw, b_raw, challenger_overlays_baseline=challenger_overlays_baseline)
     if c.size < 4:
         return {}
 
@@ -458,25 +608,18 @@ def compute_paired_uncertainty(
     irs = np.empty(n_boot)
     wins = 0
 
-    np_state = np.random.get_state()
-    np.random.seed(int(rng.integers(0, 2**31 - 1)))
-    try:
-        for i in range(n_boot):
-            idx = _stationary_bootstrap_indices(c.size, float(block))
-            cs = _sample_stats(c[idx], periods_per_year)
-            bs = _sample_stats(b[idx], periods_per_year)
-            sharpe_diffs[i] = cs.sharpe - bs.sharpe
-            ret_diffs[i] = cs.ann_return - bs.ann_return
-            max_dd_diffs[i] = cs.max_drawdown - bs.max_drawdown
-            d = c[idx] - b[idx]
-            sd = float(np.std(d, ddof=1))
-            irs[i] = (
-                float(np.mean(d) / sd * np.sqrt(periods_per_year)) if sd > 1e-6 else float("nan")
-            )
-            if cs.sharpe > bs.sharpe:
-                wins += 1
-    finally:
-        np.random.set_state(np_state)
+    for i in range(n_boot):
+        idx = _stationary_bootstrap_indices(c.size, float(block), rng)
+        cs = _sample_stats(c[idx], periods_per_year)
+        bs = _sample_stats(b[idx], periods_per_year)
+        sharpe_diffs[i] = cs.sharpe - bs.sharpe
+        ret_diffs[i] = cs.ann_return - bs.ann_return
+        max_dd_diffs[i] = cs.max_drawdown - bs.max_drawdown
+        d = c[idx] - b[idx]
+        sd = float(np.std(d, ddof=1))
+        irs[i] = float(np.mean(d) / sd * np.sqrt(periods_per_year)) if sd > 1e-6 else float("nan")
+        if cs.sharpe > bs.sharpe:
+            wins += 1
 
     sd_lo, sd_hi = _percentile_ci(sharpe_diffs)
     rd_lo, rd_hi = _percentile_ci(ret_diffs)
@@ -559,22 +702,17 @@ def compute_independent_diff_uncertainty(
     mdds_c = np.empty(n_boot)
     mdds_b = np.empty(n_boot)
 
-    np_state = np.random.get_state()
-    np.random.seed(int(rng.integers(0, 2**31 - 1)))
-    try:
-        for i in range(n_boot):
-            idx_c = _stationary_bootstrap_indices(c.size, float(block_c))
-            idx_b = _stationary_bootstrap_indices(b.size, float(block_b))
-            cs = _sample_stats(c[idx_c], periods_per_year)
-            bs = _sample_stats(b[idx_b], periods_per_year)
-            sharpes_c[i] = cs.sharpe
-            sharpes_b[i] = bs.sharpe
-            rets_c[i] = cs.ann_return
-            rets_b[i] = bs.ann_return
-            mdds_c[i] = cs.max_drawdown
-            mdds_b[i] = bs.max_drawdown
-    finally:
-        np.random.set_state(np_state)
+    for i in range(n_boot):
+        idx_c = _stationary_bootstrap_indices(c.size, float(block_c), rng)
+        idx_b = _stationary_bootstrap_indices(b.size, float(block_b), rng)
+        cs = _sample_stats(c[idx_c], periods_per_year)
+        bs = _sample_stats(b[idx_b], periods_per_year)
+        sharpes_c[i] = cs.sharpe
+        sharpes_b[i] = bs.sharpe
+        rets_c[i] = cs.ann_return
+        rets_b[i] = bs.ann_return
+        mdds_c[i] = cs.max_drawdown
+        mdds_b[i] = bs.max_drawdown
 
     sharpe_diffs = sharpes_c - sharpes_b
     ret_diffs = rets_c - rets_b
@@ -667,7 +805,7 @@ def compute_selection_adjustment(
     names = list(arrays.keys())
     arr_list = [arrays[n] for n in names]
     sharpes = {n: _sample_stats(arrays[n], periods_per_year).sharpe for n in names}
-    leader = max(sharpes, key=sharpes.get)
+    leader = max(sharpes, key=lambda name: sharpes[name])
 
     out: dict[str, Any] = {
         "leader": leader,
@@ -702,12 +840,12 @@ def compute_selection_adjustment(
 
 def compute_reality_check(
     challenger_returns: dict[str, np.ndarray | pl.Series],
-    benchmark_returns: np.ndarray | pl.Series,
+    benchmark_returns: np.ndarray | pl.Series | pl.DataFrame,
     *,
     block_size: int | None = None,
     n_bootstrap: int = 2000,
     seed: int = 0,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     """White's reality check: do any of K challengers beat the benchmark?
 
     Returns ``{p_value, test_statistic, best_strategy, k_strategies}``.
@@ -747,7 +885,12 @@ def compute_reality_check(
 # ---------------------------------------------------------------------------
 
 
-def _coerce_returns(x: np.ndarray | pl.Series | pl.DataFrame) -> np.ndarray:
+def _as_return_array(x: np.ndarray | pl.Series | pl.DataFrame) -> np.ndarray:
+    """The return series as a float array, with no row dropped.
+
+    Separate from :func:`_coerce_returns` because a paired comparison has to decide which
+    rows to drop over both series at once; see :func:`joint_returns`.
+    """
     if isinstance(x, pl.DataFrame):
         for col in ("daily_return", "ret", "return", "value"):
             if col in x.columns:
@@ -759,7 +902,11 @@ def _coerce_returns(x: np.ndarray | pl.Series | pl.DataFrame) -> np.ndarray:
         arr = x.to_numpy()
     else:
         arr = np.asarray(x).flatten()
-    arr = arr.astype(np.float64, copy=False)
+    return arr.astype(np.float64, copy=False)
+
+
+def _coerce_returns(x: np.ndarray | pl.Series | pl.DataFrame) -> np.ndarray:
+    arr = _as_return_array(x)
     arr = arr[np.isfinite(arr)]
     # Engine-mode parquets often carry leading zero rows from bars before the
     # first signal. Including them dilates uncertainty by underestimating
@@ -798,6 +945,29 @@ def load_daily_returns(case_study: str, backtest_hash: str) -> np.ndarray | None
     return _coerce_returns(df)
 
 
+def _normalized_timestamp(dtype) -> pl.Expr:
+    """Return an expression casting a daily-returns ``timestamp`` to ``Datetime("us")``, tz-naive.
+
+    Daily-returns parquets across stages and case studies write this column with inconsistent
+    dtypes - ``Date`` for monthly-rebalance aggregations, ``Datetime[ms]`` for some engine paths,
+    ``Datetime[us]`` for others. Polars refuses to join or compare across them, so anything that
+    puts two of these frames side by side has to normalize first.
+
+    This lived only inside :func:`_align_variants_on_timestamp`, which meant a caller that joined
+    two frames itself got the raw dtypes and a comparison error. Defining it once and applying it
+    where the frame is loaded is what makes every caller safe rather than only that one.
+    """
+    expr = pl.col("timestamp")
+    if dtype == pl.Date:
+        return expr.cast(pl.Datetime("us"))
+    if isinstance(dtype, pl.Datetime):
+        if getattr(dtype, "time_zone", None) is not None:
+            expr = expr.dt.replace_time_zone(None)
+        if getattr(dtype, "time_unit", "us") != "us":
+            expr = expr.cast(pl.Datetime("us"))
+    return expr
+
+
 def load_daily_returns_with_timestamp(case_study: str, backtest_hash: str) -> pl.DataFrame | None:
     """Load persisted daily returns as a (timestamp, ret) frame.
 
@@ -829,7 +999,7 @@ def load_daily_returns_with_timestamp(case_study: str, backtest_hash: str) -> pl
     if "timestamp" not in df.columns:
         return None
     return df.select(
-        pl.col("timestamp"),
+        _normalized_timestamp(df.schema["timestamp"]).alias("timestamp"),
         pl.col(ret_col).cast(pl.Float64).alias("ret"),
     ).drop_nulls()
 
@@ -842,13 +1012,8 @@ def _align_variants_on_timestamp(
     Variants with too-few observations after alignment are dropped. Returns
     ``None`` if fewer than 2 variants survive or fewer than 4 timestamps remain.
 
-    Daily-returns parquets across stages/case-studies write the timestamp
-    column with inconsistent dtypes (``Date`` for monthly-rebalance
-    aggregations, ``Datetime[ms]`` for some engine paths, ``Datetime[μs]``
-    for others). The polars inner-join refuses to match across dtypes, so
-    every frame is normalized to ``Datetime[μs]`` before joining. Any
-    timezone is stripped — these are calendar-day rebalance stamps, not
-    instants — so the join is a pure key match.
+    Every frame is normalized through :func:`_normalized_timestamp` before joining, because
+    the polars inner-join refuses to match across the dtypes these parquets carry.
     """
     frames: dict[str, pl.DataFrame] = {}
     for name, frame in returns_by_hash.items():
@@ -856,15 +1021,9 @@ def _align_variants_on_timestamp(
             continue
         if "timestamp" not in frame.columns or "ret" not in frame.columns:
             continue
-        ts_dtype = frame.schema["timestamp"]
-        ts_expr = pl.col("timestamp")
-        if ts_dtype == pl.Date:
-            ts_expr = ts_expr.cast(pl.Datetime("us"))
-        elif isinstance(ts_dtype, pl.Datetime):
-            if getattr(ts_dtype, "time_zone", None) is not None:
-                ts_expr = ts_expr.dt.replace_time_zone(None)
-            if getattr(ts_dtype, "time_unit", "us") != "us":
-                ts_expr = ts_expr.cast(pl.Datetime("us"))
+        # Still normalized here as well as in the loader: `returns_by_hash` may hold frames a
+        # caller assembled itself. One helper, so the two cannot drift apart.
+        ts_expr = _normalized_timestamp(frame.schema["timestamp"])
         frames[name] = frame.select(
             ts_expr.alias("timestamp"),
             pl.col("ret").cast(pl.Float64).alias(name),
@@ -885,10 +1044,20 @@ def _align_variants_on_timestamp(
     return matrix, names
 
 
+def cohort_member_digest(hashes: Iterable[str]) -> str:
+    """Identify a cohort by its members rather than by how many it has.
+
+    Order-independent, so the digest does not depend on how the caller happened to
+    assemble the cohort, and duplicates collapse - a hash is in the cohort or it is not.
+    """
+    unique = sorted(set(str(h) for h in hashes))
+    return hashlib.sha256("\n".join(unique).encode()).hexdigest()
+
+
 def compute_cohort_metrics(
     returns_by_hash: dict[str, pl.DataFrame],
     *,
-    periods_per_year: float,
+    periods_per_year: int,
     baseline_returns: pl.DataFrame | np.ndarray | None = None,
     fold_returns_by_hash: dict[str, np.ndarray] | None = None,
     rademacher_n_simulations: int = 2000,
@@ -942,6 +1111,7 @@ def compute_cohort_metrics(
         variants must share fold cardinality. Skipped if not provided.
     """
     from ml4t.diagnostic.evaluation.stats import (
+        RASResult,
         compute_min_trl,
         deflated_sharpe_ratio,
         effective_number_of_trials,
@@ -967,6 +1137,11 @@ def compute_cohort_metrics(
     out: dict[str, Any] = {
         "leader_hash": leader_hash,
         "k_variants": int(k_variants),
+        # `names` is the cohort the correction below is actually computed over, after
+        # alignment has dropped whatever could not be aligned. Persisting its digest is
+        # what lets a reader establish that a stored correction belongs to the cohort it
+        # is about to report it against, rather than inferring it from a matching count.
+        "member_digest": cohort_member_digest(names),
         "periods_per_year": float(periods_per_year),
         "leader_sharpe": float(sharpes[leader_idx]),
     }
@@ -1005,14 +1180,22 @@ def compute_cohort_metrics(
 
     # DSR — raw, MP, ER (three calls; library handles K correctly per method)
     arr_list = [matrix[:, i] for i in range(k_variants)]
-    for suffix, kwargs in (
-        ("raw", {}),
-        ("mp", {"correlation_method": "marchenko_pastur"}),
-        ("er", {"correlation_method": "effective_rank"}),
-    ):
+    methods: tuple[
+        tuple[str, Literal["marchenko_pastur", "effective_rank"] | None],
+        ...,
+    ] = (
+        ("raw", None),
+        ("mp", "marchenko_pastur"),
+        ("er", "effective_rank"),
+    )
+    for suffix, method in methods:
         try:
-            if "correlation_method" in kwargs:
-                dsr = deflated_sharpe_ratio(matrix, periods_per_year=periods_per_year, **kwargs)
+            if method is not None:
+                dsr = deflated_sharpe_ratio(
+                    matrix,
+                    periods_per_year=periods_per_year,
+                    correlation_method=method,
+                )
             else:
                 dsr = deflated_sharpe_ratio(arr_list, periods_per_year=periods_per_year)
             out[f"dsr_{suffix}"] = float(dsr.deflated_sharpe)
@@ -1034,12 +1217,15 @@ def compute_cohort_metrics(
             random_state=rademacher_seed,
         )
         annualized_sharpes = sharpes  # already annualized
-        ras_result = ras_sharpe_adjustment(
-            annualized_sharpes,
-            complexity=complexity,
-            n_samples=n_periods,
-            n_strategies=k_variants,
-            return_result=True,
+        ras_result = cast(
+            RASResult,
+            ras_sharpe_adjustment(
+                annualized_sharpes,
+                complexity=complexity,
+                n_samples=n_periods,
+                n_strategies=k_variants,
+                return_result=True,
+            ),
         )
         out["ras_complexity"] = float(complexity)
         out["ras_n_strategies"] = float(k_variants)
@@ -1157,18 +1343,29 @@ def _sharpe_per_column(matrix: np.ndarray, periods_per_year: float) -> np.ndarra
 
 
 def _sortino(arr: np.ndarray, periods_per_year: float) -> float:
+    """The same Sortino ratio `_sample_stats` reports, for a cohort leader.
+
+    This file held three downside deviations: the shortfall over all periods, the root
+    mean square of the negative returns alone, and their standard deviation about their
+    own mean. Only the first is the Sortino ratio the engine writes to
+    `backtest_metrics.sortino`, so a `leader_sortino` computed either other way was not
+    comparable to the numbers it was being read beside.
+    """
+    if arr.size < 2:
+        return float("nan")
     mu = float(np.mean(arr))
-    downside = arr[arr < 0]
-    if downside.size < 2:
+    dsd = float(np.sqrt(np.mean(np.minimum(arr, 0.0) ** 2)))
+    if dsd <= 1e-12:
         return float("nan")
-    d_std = float(np.std(downside, ddof=1))
-    if d_std <= 1e-12:
-        return float("nan")
-    return mu / d_std * float(np.sqrt(periods_per_year))
+    return mu / dsd * float(np.sqrt(periods_per_year))
 
 
 __all__ = [
     "STAGE_BASELINE",
+    "STAGE_CARRIER_BLOCK",
+    "carried_blocks",
+    "STAGE_SEQUENCE",
+    "descends_from",
     "SIGNAL_BASELINE_BY_CASE_STUDY",
     "resolve_block_length",
     "compute_backtest_uncertainty",

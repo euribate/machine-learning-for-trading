@@ -31,6 +31,7 @@ from case_studies.utils.latent_factors.panel import (
 from case_studies.utils.latent_factors.pca import run_pca_fold
 from case_studies.utils.latent_factors.sae import run_sae_fold
 from case_studies.utils.latent_factors.sdf import run_sdf_fold
+from case_studies.utils.latent_factors.versions import latent_model_version
 from utils.modeling import RANDOM_SEED, seed_everything
 
 _MODEL_RUNNERS = {
@@ -107,8 +108,9 @@ def _expected_latent_checkpoints(
     *,
     n_epochs: int,
     model_kwargs: dict[str, Any],
+    include_internal_aliases: bool = False,
 ) -> tuple[int, ...]:
-    """Resolve the complete physical and library-defined checkpoint surface."""
+    """Resolve physical checkpoints and, when requested, fitted-state aliases."""
     from case_studies.utils.latent_factors.common import resolve_checkpoint_epochs
 
     if model_name in {"pca", "ipca"}:
@@ -119,6 +121,8 @@ def _expected_latent_checkpoints(
             checkpoint_interval=model_kwargs.get("checkpoint_interval", 5),
             checkpoint_epochs=model_kwargs.get("checkpoint_epochs"),
         )
+        if model_name == "cae" and include_internal_aliases:
+            return tuple(sorted({0, *physical}))
         return tuple(physical)
     if model_name == "sdf":
         n_epochs_unc = int(model_kwargs.get("n_epochs_unc", 256))
@@ -128,7 +132,7 @@ def _expected_latent_checkpoints(
             checkpoint_interval=model_kwargs.get("checkpoint_interval"),
             checkpoint_epochs=model_kwargs.get("checkpoint_epochs"),
         )
-        labels: set[int] = set()
+        labels: set[int] = {-3, -2, -1, 0} if include_internal_aliases else set()
         labels.update(epoch for epoch in physical if epoch <= n_epochs_unc)
         labels.update(n_epochs_unc + epoch for epoch in physical if epoch <= n_epochs_cond)
         return tuple(sorted(labels))
@@ -194,6 +198,7 @@ def _build_expected_latent_training_spec(
         fold_extras = [expected_extra]
     expected = _apply_latent_factor_runtime_spec(
         spec=spec,
+        model_name=model_name,
         n_factors=n_factors,
         n_epochs=n_epochs,
         model_kwargs=model_kwargs,
@@ -402,6 +407,7 @@ def _load_registered_latent_factor(
                     "epoch": epoch,
                     "fold_id": int(fold_id),
                     "ic_mean": float(fold_metric["ic_mean"]),
+                    "n_scored_dates": int(fold_metric["n_periods"]),
                 }
             )
         frames.append(predictions)
@@ -448,6 +454,7 @@ def run_latent_factor_cv(
     temporal_keys: list[str] | None = None,
     temporal_feature_names: list[str] | None = None,
     fold_workers: int = 1,
+    checkpoint_surface: str = "physical",
 ) -> dict[str, Any]:
     """Run walk-forward latent factor CV from the raw dated dataset."""
     del panel_data
@@ -460,6 +467,8 @@ def run_latent_factor_cv(
         raise ValueError("fold_workers must be a positive integer")
     if fold_workers > 1 and models != ["ipca"]:
         raise ValueError("parallel fold execution is currently supported only for IPCA-only runs")
+    if checkpoint_surface not in {"fitted_state", "physical"}:
+        raise ValueError("checkpoint_surface must be 'physical' or 'fitted_state'")
 
     model_kwargs = model_kwargs or {}
     runtime_spec = configure_latent_torch_runtime(
@@ -496,9 +505,7 @@ def run_latent_factor_cv(
     temporal_feature_assembly = TEMPORAL_FEATURE_ASSEMBLY if has_fold_temporal else None
     temporal_feature_digest = (
         _frame_digest(
-            pl.from_pandas(
-                temporal_by_fold.loc[:, ["fold", *temporal_keys, *temporal_feature_names]]
-            )
+            _temporal_digest_frame(temporal_by_fold, temporal_keys, temporal_feature_names)
         )
         if has_fold_temporal
         else None
@@ -630,28 +637,55 @@ def run_latent_factor_cv(
         ):
             preds_df = pl.read_parquet(model_dir / "predictions.parquet")
             metrics_df = pl.read_parquet(model_dir / "fold_metrics.parquet")
-            best_epoch, mean_ic = _select_reporting_epoch(
-                metrics_df,
-                checkpoint_selection_policy=metric_policy["checkpoint_selection_policy"],
-                reporting_epoch=metric_policy["reporting_epoch"],
+            expected_cache_checkpoints = set(
+                _expected_latent_checkpoints(
+                    model_name,
+                    n_epochs=n_epochs,
+                    model_kwargs=model_kwargs.get(model_name, {}),
+                    include_internal_aliases=checkpoint_surface == "fitted_state",
+                )
             )
-            model_results.append(
-                {
-                    "model_name": model_name,
-                    "mean_ic": round(mean_ic, 4),
-                    "best_epoch": best_epoch,
-                    "n_folds": int(metrics_df["fold_id"].n_unique())
-                    if metrics_df.height > 0
-                    else 0,
-                    "elapsed_s": 0.0,
-                    "started_at": None,
-                }
+            expected_cache_surface = {
+                (int(split["fold"]), checkpoint)
+                for split in splits
+                for checkpoint in expected_cache_checkpoints
+            }
+            cached_prediction_surface = set(
+                preds_df.select("fold_id", "epoch").unique().iter_rows()
             )
-            all_predictions[model_name] = preds_df
-            fold_metrics[model_name] = metrics_df
-            all_extras[model_name] = []
-            log(f"  {model_name}: loaded cache (best IC={mean_ic:+.4f})")
-            continue
+            cached_metric_surface = set(metrics_df.select("fold_id", "epoch").unique().iter_rows())
+            if (
+                cached_prediction_surface != expected_cache_surface
+                or cached_metric_surface != expected_cache_surface
+            ):
+                log(f"  {model_name}: cache checkpoint surface mismatch, retraining")
+            elif "n_scored_dates" not in metrics_df.columns:
+                # Written before fold ICs recorded the dates they scored, so the epoch IC
+                # cannot be averaged over decision dates from it.
+                log(f"  {model_name}: cache predates dated fold ICs, retraining")
+            else:
+                best_epoch, mean_ic = _select_reporting_epoch(
+                    metrics_df,
+                    checkpoint_selection_policy=metric_policy["checkpoint_selection_policy"],
+                    reporting_epoch=metric_policy["reporting_epoch"],
+                )
+                model_results.append(
+                    {
+                        "model_name": model_name,
+                        "mean_ic": round(mean_ic, 4),
+                        "best_epoch": best_epoch,
+                        "n_folds": int(metrics_df["fold_id"].n_unique())
+                        if metrics_df.height > 0
+                        else 0,
+                        "elapsed_s": 0.0,
+                        "started_at": None,
+                    }
+                )
+                all_predictions[model_name] = preds_df
+                fold_metrics[model_name] = metrics_df
+                all_extras[model_name] = []
+                log(f"  {model_name}: loaded cache (best IC={mean_ic:+.4f})")
+                continue
 
         active_models.append(model_name)
         started_at[model_name] = datetime.now(UTC).isoformat()
@@ -666,7 +700,11 @@ def run_latent_factor_cv(
     need_pca_inputs = "pca" in active_models
     need_ragged_inputs = any(model_name != "pca" for model_name in active_models)
 
-    def runner_kwargs(model_name: str, model_input: dict[str, Any]) -> dict[str, Any]:
+    def runner_kwargs(
+        model_name: str,
+        model_input: dict[str, Any],
+        fold_id: int,
+    ) -> dict[str, Any]:
         runner = _MODEL_RUNNERS[model_name]
         kwargs: dict[str, Any] = {"n_factors": n_factors}
         if model_name in {"cae", "sae"}:
@@ -684,6 +722,9 @@ def run_latent_factor_cv(
         if model_name == "sdf" and model_input.get("macro_train") is not None:
             kwargs["macro_train"] = model_input["macro_train"]
             kwargs["macro_val"] = model_input["macro_val"]
+        model_dir = model_dirs[model_name]
+        if model_dir is not None and "artifact_dir" in inspect.signature(runner).parameters:
+            kwargs["artifact_dir"] = model_dir / "artifacts" / f"fold_{fold_id}"
         if model_name in model_kwargs:
             merge_preset_into_runner_kwargs(
                 kwargs,
@@ -696,6 +737,7 @@ def run_latent_factor_cv(
     def fit_fold(
         model_name: str,
         model_input: dict[str, Any],
+        fold_id: int,
     ) -> tuple[dict[int, np.ndarray], dict[str, Any], float]:
         fold_started = time.perf_counter()
         result = _MODEL_RUNNERS[model_name](
@@ -703,7 +745,7 @@ def run_latent_factor_cv(
             model_input["returns_train"],
             model_input["chars_val"],
             model_input["returns_val"],
-            **runner_kwargs(model_name, model_input),
+            **runner_kwargs(model_name, model_input, fold_id),
         )
         if isinstance(result[0], dict):
             checkpoint_preds, extra = result
@@ -722,6 +764,21 @@ def run_latent_factor_cv(
         fold_elapsed: float,
     ) -> None:
         state[model_name]["fold_extras"].append({"fold_id": split["fold"], **extra})
+        if checkpoint_surface == "physical":
+            physical = set(
+                _expected_latent_checkpoints(
+                    model_name,
+                    n_epochs=n_epochs,
+                    model_kwargs=model_kwargs.get(model_name, {}),
+                )
+            )
+            checkpoint_preds = {
+                epoch: predictions
+                for epoch, predictions in checkpoint_preds.items()
+                if epoch in physical
+            }
+            if not checkpoint_preds:
+                raise ValueError(f"{model_name} produced no physical checkpoints")
         checkpoint_ics: dict[int, float] = {}
         for epoch, predictions in checkpoint_preds.items():
             frame = _build_prediction_frame(
@@ -811,7 +868,7 @@ def run_latent_factor_cv(
             ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ipca-fold") as pool,
         ):
             futures = {
-                pool.submit(fit_fold, "ipca", model_input): int(split["fold"])
+                pool.submit(fit_fold, "ipca", model_input, int(split["fold"])): int(split["fold"])
                 for split, model_input in prepared_folds
             }
             for future in as_completed(futures):
@@ -871,7 +928,11 @@ def run_latent_factor_cv(
             )
             for model_name in active_models:
                 model_input = fold_inputs["pca"] if model_name == "pca" else fold_inputs["ragged"]
-                checkpoint_preds, extra, fold_elapsed = fit_fold(model_name, model_input)
+                checkpoint_preds, extra, fold_elapsed = fit_fold(
+                    model_name,
+                    model_input,
+                    int(split["fold"]),
+                )
                 record_fold(
                     split=split,
                     model_name=model_name,
@@ -960,7 +1021,12 @@ def run_latent_factor_cv(
                 extras_dir.mkdir(parents=True, exist_ok=True)
                 _save_fold_extras(extras_dir / "fold_extras.json", state[model_name]["fold_extras"])
 
-        log(f"    -> best epoch={best_epoch}, IC={mean_ic:+.4f} ({elapsed:.1f}s)")
+        # Named for the policy that produced it. Under `fixed` this is the configured reporting
+        # epoch and not an arg-max over checkpoints, so calling it "best" asserted a selection
+        # that did not happen - and it read as one, printing epoch 50 for a curve peaking at 20.
+        selection = metric_policy["checkpoint_selection_policy"]
+        epoch_label = "best epoch" if selection == "validation_ic" else "reporting epoch"
+        log(f"    -> {epoch_label}={best_epoch} ({selection}), IC={mean_ic:+.4f} ({elapsed:.1f}s)")
         gc.collect()
 
     if model_results:
@@ -1203,20 +1269,13 @@ def _replace_fold_temporal_features(
     fold_id: int,
 ) -> pl.DataFrame:
     """Replace the schema-placeholder columns with one fold's learned features."""
-    fold_temporal_pd = temporal_by_fold.loc[temporal_by_fold["fold"] == fold_id].drop(
-        columns=["fold"]
-    )
-    if fold_temporal_pd.empty:
-        raise ValueError(f"No temporal features found for fold {fold_id}")
+    from utils.modeling import fold_temporal_frame
 
-    fold_temporal = pl.from_pandas(fold_temporal_pd)
-    casts = {
-        key: dataset.schema[key]
-        for key in temporal_keys
-        if fold_temporal.schema[key] != dataset.schema[key]
-    }
-    if casts:
-        fold_temporal = fold_temporal.cast(casts)
+    fold_temporal = fold_temporal_frame(
+        temporal_by_fold, fold_id, temporal_keys=temporal_keys, schema=dataset.schema
+    )
+    if fold_temporal.is_empty():
+        raise ValueError(f"No temporal features found for fold {fold_id}")
     fold_temporal = fold_temporal.unique(subset=temporal_keys, keep="last")
 
     missing = sorted(set(temporal_feature_names) - set(fold_temporal.columns))
@@ -1259,6 +1318,24 @@ def _to_naive_timestamp(value: Any) -> pd.Timestamp:
     if ts.tz is not None:
         ts = ts.tz_convert("UTC").tz_localize(None)
     return ts
+
+
+def _temporal_digest_frame(
+    temporal_by_fold: Any,
+    temporal_keys: list[str],
+    temporal_feature_names: list[str],
+) -> pl.DataFrame:
+    """The columns the temporal digest covers, projected out of whatever form is held.
+
+    The one consumer that spans every fold rather than selecting one, so it is also the only
+    place the whole artifact is read - and it reads the hashed columns alone, not the table.
+    """
+    columns = ["fold", *temporal_keys, *temporal_feature_names]
+    if isinstance(temporal_by_fold, pl.LazyFrame):
+        return temporal_by_fold.select(columns).collect()
+    if isinstance(temporal_by_fold, pl.DataFrame):
+        return temporal_by_fold.select(columns)
+    return pl.from_pandas(temporal_by_fold.loc[:, columns])
 
 
 def _resolve_metric_policy(
@@ -1492,6 +1569,31 @@ def _select_epoch_from_values(
     return epoch, float(checkpoint_ics[epoch])
 
 
+def _epoch_daily_ic(metrics_df: pl.DataFrame) -> pl.DataFrame:
+    """Average each epoch's fold ICs over decision dates, not over folds.
+
+    Folds cover different numbers of validation dates, so the mean of the fold means is
+    not the IC over the period. Validation windows are disjoint under purged walk-forward
+    splitting, so weighting each fold mean by the dates it scored reproduces the mean of
+    the pooled daily series exactly.
+    """
+    if "n_scored_dates" not in metrics_df.columns:
+        raise ValueError(
+            "fold IC metrics must carry n_scored_dates to average IC over decision dates"
+        )
+    weights = pl.col("n_scored_dates").cast(pl.Float64)
+    return (
+        metrics_df.group_by("epoch")
+        .agg(
+            pl.when(weights.sum() > 0)
+            .then((pl.col("ic_mean") * weights).sum() / weights.sum())
+            .otherwise(pl.col("ic_mean").mean())
+            .alias("mean_ic")
+        )
+        .sort("epoch")
+    )
+
+
 def _select_reporting_epoch(
     metrics_df: pl.DataFrame,
     *,
@@ -1501,9 +1603,7 @@ def _select_reporting_epoch(
     if metrics_df.height == 0:
         return 0, 0.0
 
-    summary = (
-        metrics_df.group_by("epoch").agg(pl.col("ic_mean").mean().alias("mean_ic")).sort("epoch")
-    )
+    summary = _epoch_daily_ic(metrics_df)
     checkpoint_ics = {
         int(epoch): float(mean_ic)
         for epoch, mean_ic in zip(
@@ -1585,6 +1685,7 @@ def _register_model_predictions(
 
     spec = _apply_latent_factor_runtime_spec(
         spec=spec,
+        model_name=model_name,
         n_factors=n_factors,
         n_epochs=n_epochs,
         model_kwargs=model_kwargs,
@@ -1617,7 +1718,9 @@ def _register_model_predictions(
         if epoch_preds.height == 0:
             raise ValueError(f"Missing registered checkpoint {epoch} for {model_name}")
         epoch_metrics = fold_ics_df.filter(pl.col("epoch") == epoch)
-        ic_mean = float(epoch_metrics["ic_mean"].mean()) if epoch_metrics.height > 0 else 0.0
+        ic_mean = (
+            float(_epoch_daily_ic(epoch_metrics)["mean_ic"][0]) if epoch_metrics.height > 0 else 0.0
+        )
         register_prediction_set(
             case_study_id,
             training_hash,
@@ -1636,6 +1739,7 @@ def _register_model_predictions(
 def _apply_latent_factor_runtime_spec(
     *,
     spec: dict[str, Any],
+    model_name: str,
     n_factors: int,
     n_epochs: int,
     model_kwargs: dict[str, Any],
@@ -1675,6 +1779,12 @@ def _apply_latent_factor_runtime_spec(
     params["input_digest"] = input_digest
     params["macro_digest"] = macro_digest
     params["runtime"] = dict(runtime_spec)
+    # The declared behaviour version of the model that produced this fit. `adapter._source_identity`
+    # carries it on the migrated path; without it here, the two registration paths disagree about
+    # what a training hash means, and a runner version bump would move identities on one path while
+    # the other silently served the pre-bump predictions from cache. That is not hypothetical: it is
+    # what `SAE_RUNNER_VERSION = 2` would have done to a notebook still on this path.
+    params["runner_version"] = latent_model_version(model_name)
 
     # IPCA solver controls are part of the configured training identity. If
     # omitted, changing the ALS budget or tolerances reuses the historical
@@ -1691,6 +1801,7 @@ def _apply_latent_factor_runtime_spec(
     if n_epochs:
         runtime_fields["n_epochs"] = n_epochs
     for field in (
+        "batch_size",
         "checkpoint_interval",
         "checkpoint_epochs",
         "n_epochs_unc",

@@ -40,7 +40,6 @@ subset requires a non-default profile such as `py312`, `benchmark`, or `rapids`.
 | Ch12 `10_shap_nlp_sentiment` | torch CUDA bug on 3.14 + shap | py312 |
 | Ch14 `06_conditional_autoencoder` | torch CUDA bug on 3.14 + shap | py312 |
 | Ch15 `06_fed_announcement_bsts` | tfcausalimpact (TFP BSTS, isolated `/opt/bsts/bin/python`) | py312 |
-| Ch21 `05_deep_hedging_pfhedge` | pfhedge (unmaintained, numpy<2) | py312 |
 | Ch02 `21_storage_benchmark_database` | requires benchmark image + database services | benchmark |
 | Ch12 `02_gbm_comparison` (GPU section) | RAPIDS cuML, LightGBM CUDA | rapids |
 
@@ -191,7 +190,7 @@ Every case study follows the same sequence of phases, and **each phase maps to a
 Each case study's own `README.md` lists its exact stage files with this mapping. To see a given case study's stages, list them:
 
 ```bash
-ls case_studies/etfs/        # 01_feasibility_analysis.py … 18_strategy_analysis.py
+ls case_studies/etfs/        # 01_feasibility_analysis.py … 20_strategy_analysis.py
 ```
 
 ### Running a Case Study End to End
@@ -215,9 +214,11 @@ uv run python case_studies/etfs/13_model_analysis.py
 # Build the strategy — backtest, portfolio, costs, risk, synthesis (Ch16–20)
 uv run python case_studies/etfs/14_backtest.py
 uv run python case_studies/etfs/15_portfolio_management.py
-uv run python case_studies/etfs/16_costs.py
-uv run python case_studies/etfs/17_risk_management.py
-uv run python case_studies/etfs/18_strategy_analysis.py
+uv run python case_studies/etfs/16_risk_management.py
+uv run python case_studies/etfs/17_costs.py
+uv run python case_studies/etfs/18_holdout_predictions.py
+uv run python case_studies/etfs/19_holdout_backtest.py
+uv run python case_studies/etfs/20_strategy_analysis.py
 ```
 
 Each stage checks for the artifacts it needs and tells you which earlier stage to run if anything is missing, so you can always pick up partway through.
@@ -461,7 +462,7 @@ Run the analysis notebook with the same output root so it reads the copied regis
 
 ```bash
 ML4T_OUTPUT_DIR=/tmp/ml4t-etf-experiment \
-  uv run python case_studies/etfs/18_strategy_analysis.py
+  uv run python case_studies/etfs/20_strategy_analysis.py
 ```
 
 ### Declarations That Always Come From the Repository
@@ -523,10 +524,12 @@ Some datasets require API keys (set in `.env`):
 - **NASDAQ Data Link** (US equities): Free API key from [data.nasdaq.com](https://data.nasdaq.com/)
 - **Databento** (CME futures): $125 free signup credit from [databento.com](https://databento.com/)
 
-**AlgoSeek** (NASDAQ-100 minute bars, S&P 500 option chains) needs no key and no account. Download
-the archives from [algoseek.com/ml-for-trading](https://algoseek.com/ml-for-trading/) and convert
-them once — see [AlgoSeek datasets](../data/README.md#algoseek-datasets), which also names the two
-datasets AlgoSeek has not published yet and the notebooks that wait on them.
+**AlgoSeek** (NASDAQ-100 minute bars, S&P 500 option chains, NASDAQ-100 TAQ ticks) needs no key and
+no account. Download the archives from
+[algoseek.com/ml-for-trading](https://algoseek.com/ml-for-trading/); the two large ones convert once
+and the ticks only need unzipping — see [AlgoSeek datasets](../data/README.md#algoseek-datasets).
+The fourth AlgoSeek dataset the book uses, the S&P 500 daily bars, ships with this repository, so
+there is nothing to download or configure for it.
 
 ---
 

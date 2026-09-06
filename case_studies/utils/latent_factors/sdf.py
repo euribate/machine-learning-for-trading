@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
@@ -9,6 +10,11 @@ import numpy as np
 from case_studies.utils.latent_factors.library_bridge import run_sdf_fold_with_library
 
 SDFOutputMode = Literal["weights", "expected_returns", "beta_network"]
+
+
+# Bumped when a change to this module would change a fitted SDF result. It enters
+# every sdf training identity through `adapter._source_identity`, which declares behaviour
+# rather than hashing these bytes - see that function for why.
 
 
 def run_sdf_fold(
@@ -42,6 +48,7 @@ def run_sdf_fold(
     log_fn=print,
     seed: int = 42,
     device: str = "cpu",
+    artifact_dir: Path | None = None,
 ) -> tuple[dict[int, np.ndarray], dict[str, Any]]:
     """Train the SDF network and emit checkpoint predictions."""
     del n_factors, log_fn
@@ -73,4 +80,5 @@ def run_sdf_fold(
         weight_decay=weight_decay,
         seed=seed,
         device=device,
+        artifact_dir=artifact_dir,
     )

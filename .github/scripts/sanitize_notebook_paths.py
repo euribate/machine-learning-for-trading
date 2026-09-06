@@ -7,6 +7,8 @@ rewrites them in place:
 
 * repo-internal paths -> repo-relative (matching ``utils.paths.display_path``)
 * anything else under ``~/ml4t`` -> a ``~``-prefixed generic path
+* a scratch root under ``/tmp`` -> ``~/scratch/``, except the two shapes that are
+  not machine-specific (see ``REPLACEMENTS``)
 
 Outputs and metadata only; ``source`` is never touched
 ------------------------------------------------------
@@ -21,6 +23,23 @@ So the notebook is parsed, and only strings reachable through notebook metadata,
 cell metadata and cell outputs are candidates. Two strings in this repository's
 source survive precisely because of that: the mount path above, and a comment in
 ``12_gradient_boosting/02_gbm_comparison`` that names ``/app/`` to explain it.
+
+Image payloads are outputs and are never rewritten
+--------------------------------------------------
+
+A figure is stored in its cell's outputs as base64, and base64's alphabet
+includes ``/``, ``a`` and ``p``, so a long enough payload contains ``/app/`` by
+chance - roughly once per quarter-megabyte. Treating that as a Docker mount path
+and deleting it removes five characters from the encoding, which both corrupts the
+image and leaves a length no longer divisible by four, so the payload stops
+decoding at all and the rendered page shows a broken figure. Measured on
+``case_studies/etfs/05_evaluation``: one 244,684-character PNG, one chance
+occurrence, and the result did not decode.
+
+Nothing announces this. The notebook still parses, the cell still has an output,
+and the only symptom is an image that fails to draw. So binary payloads are held
+out of the candidate set by MIME type, and ``_assert_binary_intact`` re-reads the
+rewritten text and compares every one of them byte for byte before it is returned.
 
 The rewrite itself is still done on the raw text, one substring at a time, so the
 diff is the replaced paths and nothing else - no JSON reserialization, no
@@ -42,6 +61,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,20 +80,108 @@ REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"/app/"), ""),
     (re.compile(r"/home/[^/]+/ml4t/"), "~/ml4t/"),
     (re.compile(r"/home/[^/]+/"), "~/"),
+    # Scratch roots under /tmp. Two of the four shapes found under /tmp are leaks
+    # and two are not, so the rules below are anchored and the two exemptions are
+    # excluded by name rather than left to ordering:
+    #
+    # rewritten - an agent session's scratchpad, whose path carries a user id, a
+    #   working-directory slug and a session uuid, and a staging notebook or
+    #   output directory a maintainer executed from /tmp, whose name is
+    #   per-session and so has no stable replacement;
+    # left alone - `/tmp/ml4t-test-output...`, which is the documented test
+    #   output directory (`AGENTS.md`, "Output isolation"), so a notebook
+    #   printing it is showing real configuration, and `/tmp/ipykernel_<pid>/`,
+    #   which is how IPython names a cell in every user's kernel rather than one
+    #   machine's layout, and which appears inside tracebacks a reader may need
+    #   to follow.
+    #
+    # `(?<![\w.~-])` requires the match to be a filesystem root: without it the
+    # `/tmp/` inside an already-rewritten `~/.claude/jobs/<id>/tmp/run.ipynb`
+    # would be rewritten a second time, splicing a `~` into the middle of a path.
+    # The anchor is not what keeps these rules out of a base64 payload - `+` and
+    # `/` are both in that alphabet and both satisfy it. What does that is the
+    # MIME filter above, which every rule in this list depends on: `t`, `m` and
+    # `p` are as much a part of base64 as `a` and `p` are.
+    (re.compile(r"(?<![\w.~-])/tmp/claude-\d+/[^/\s]+/[0-9a-fA-F-]{36}/scratchpad/"), "~/scratch/"),
+    (re.compile(r"(?<![\w.~-])/tmp/claude-\d+/"), "~/scratch/"),
+    (re.compile(r"(?<![\w.~-])/tmp/(?!ml4t-test-output|ipykernel_)"), "~/scratch/"),
 ]
 
 SKIP_PARTS = {"_reference", ".venv", ".git"}
 
+# The output MIME types nbformat stores base64-encoded rather than as text. A path
+# rule that fires inside one of these has matched the encoding, not a path.
+BINARY_MIME = frozenset(
+    {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/bmp",
+        "image/tiff",
+        "application/pdf",
+    }
+)
+
+
+def _ignored_notebooks() -> set[Path]:
+    """Untracked notebooks git is configured to ignore, so ones no reader ever gets.
+
+    Papermill stages every execution as `.<name>.papermill.<pid>.ipynb` beside the
+    notebook and leaves it behind when a run is killed. Those are gitignored scratch
+    carrying the `tags: []` and the machine paths of a run in progress, and the
+    guards here had been reading them as if they were part of the repository: a
+    working copy that had executed a notebook recently failed the gate while CI,
+    which clones fresh, passed. A file that is ignored but nonetheless tracked stays
+    in scope, because it does reach readers. Outside a git checkout nothing is
+    ignored and every notebook is scanned.
+    """
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "*.ipynb"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return set()
+    return {REPO_ROOT / name for name in listed.split("\0") if name}
+
 
 def _iter_notebooks() -> list[Path]:
+    ignored = _ignored_notebooks()
     out = []
     for p in REPO_ROOT.rglob("*.ipynb"):
         if SKIP_PARTS & set(p.parts):
             continue
         if p.name.startswith("_executed_"):
             continue
+        if p in ignored:
+            continue
         out.append(p)
     return sorted(out)
+
+
+def iter_committed_notebooks() -> list[Path]:
+    """``_iter_notebooks`` restricted to what git tracks.
+
+    The two are deliberately different. This script fixes the working tree, so it has to see
+    a notebook that has not been added yet - that is the moment its fix is most wanted. A test
+    asserting about *committed* content must not see it: an untracked scratch copy in one
+    worktree then fails a gate that CI, checking out only tracked files, can never fail on the
+    same file, and the author has no way to reproduce it. Measured 2026-08-25 on
+    `cs6/cme_futures`, where leftover copies under `.workspace/preserved/` failed
+    `test_no_empty_cell_tags_in_committed_notebooks` locally while `test-unit` was green on the
+    same commit.
+    """
+    listed = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--", "*.ipynb"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    tracked = {REPO_ROOT / name for name in listed.split("\0") if name}
+    return [path for path in _iter_notebooks() if path in tracked]
 
 
 def sanitize_text(text: str) -> tuple[str, int]:
@@ -97,20 +205,68 @@ def _strings(obj: object, out: list[str]) -> None:
             _strings(value, out)
 
 
+def _binary_payloads(nb: dict) -> list[str]:
+    """Every base64 output payload in the notebook, in cell order."""
+    out: list[str] = []
+    for cell in nb.get("cells", []):
+        for output in cell.get("outputs", []):
+            data = output.get("data") or {}
+            for mime in BINARY_MIME & data.keys():
+                payload = data[mime]
+                out.append(payload if isinstance(payload, str) else "".join(payload))
+    return out
+
+
+def _output_strings(outputs: list, into: list[str]) -> None:
+    """Strings from one cell's outputs, minus the base64 image payloads.
+
+    A payload is skipped by MIME rather than by looking at the string, because
+    what makes it ineligible is that it is an encoding rather than prose - not
+    that it happens to be long or to look like base64.
+    """
+    for output in outputs:
+        for key, value in output.items():
+            if key != "data":
+                _strings(value, into)
+                continue
+            for mime, payload in value.items():
+                if mime not in BINARY_MIME:
+                    _strings(payload, into)
+
+
 def _partition(nb: dict) -> tuple[list[str], list[str]]:
     """(strings this tool may rewrite, strings it must leave alone).
 
     The second list is the notebook's ``source``. Everything in the first is
-    reachable only through notebook metadata, cell metadata or cell outputs.
+    reachable only through notebook metadata, cell metadata or cell outputs, and
+    excludes the base64 image payloads for the reason given at the top of this file.
     """
     rewritable: list[str] = []
     protected: list[str] = []
     _strings(nb.get("metadata", {}), rewritable)
     for cell in nb.get("cells", []):
         _strings(cell.get("metadata", {}), rewritable)
-        _strings(cell.get("outputs", []), rewritable)
+        _output_strings(cell.get("outputs", []), rewritable)
         _strings(cell.get("source", []), protected)
     return rewritable, protected
+
+
+def _assert_binary_intact(before: dict, raw: str) -> None:
+    """Every base64 payload survives the rewrite unchanged, or nothing is written.
+
+    The MIME filter above is what keeps payloads out of the candidate set. This is
+    the check that the filter worked, and it runs on the rewritten text rather than
+    on the plan, so a future rule that reaches a payload some other way is caught
+    here instead of in a rendered page.
+    """
+    after = _binary_payloads(json.loads(raw))
+    expected = _binary_payloads(before)
+    if after != expected:
+        moved = sum(1 for a, b in zip(expected, after, strict=False) if a != b)
+        raise AssertionError(
+            f"the rewrite changed {moved} base64 output payload(s): a path rule matched "
+            "inside an encoding rather than inside a path, which corrupts the figure"
+        )
 
 
 def _encoded(text: str) -> str:
@@ -128,7 +284,8 @@ def sanitize_notebook(raw: str) -> tuple[str, int, list[str]]:
         (new text, paths rewritten, strings skipped because the notebook's
         ``source`` contains them too).
     """
-    rewritable, protected = _partition(json.loads(raw))
+    parsed = json.loads(raw)
+    rewritable, protected = _partition(parsed)
     protected_encoded = [_encoded(s) for s in protected]
 
     targets = {value: sanitize_text(value) for value in rewritable}
@@ -146,17 +303,25 @@ def sanitize_notebook(raw: str) -> tuple[str, int, list[str]]:
         occurrences = raw.count(encoded)
         raw = raw.replace(encoded, _encoded(targets[original]))
         replaced += occurrences * sanitize_text(original)[1]
+    _assert_binary_intact(parsed, raw)
     return raw, replaced, skipped
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="report only; exit 1 if any leak found")
+    # Named notebooks, so a caller that has just produced one can sanitize that one.
+    # `run-production-notebook.sh` does exactly that, between stripping papermill's cell
+    # fossils and stamping provenance; without an argument it would rewrite every notebook
+    # in the tree as a side effect of running one.
+    ap.add_argument("notebooks", nargs="*", type=Path, help="default: every tracked notebook")
     args = ap.parse_args()
+
+    targets = [p.resolve() for p in args.notebooks] if args.notebooks else _iter_notebooks()
 
     dirty: list[tuple[Path, int]] = []
     blocked: list[tuple[Path, str]] = []
-    for nb in _iter_notebooks():
+    for nb in targets:
         raw = nb.read_text(encoding="utf-8")
         new, n, skipped = sanitize_notebook(raw)
         blocked += [(nb.relative_to(REPO_ROOT), s) for s in skipped]
@@ -180,7 +345,8 @@ def main() -> int:
             print(f"  {n:4d}  {rel}")
 
     if not dirty and not blocked:
-        print("clean: no machine-specific paths in any notebook's outputs or metadata")
+        scope = "the named notebook(s)" if args.notebooks else "any notebook"
+        print(f"clean: no machine-specific paths in {scope}'s outputs or metadata")
 
     return 1 if blocked or (args.check and dirty) else 0
 

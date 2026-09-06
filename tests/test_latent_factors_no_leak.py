@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -376,6 +377,7 @@ def test_latent_training_identity_includes_input_splits_and_runtime() -> None:
             "label": "return",
             "seed": 42,
         },
+        "model_name": "cae",
         "n_factors": 5,
         "n_epochs": 50,
         "model_kwargs": {"checkpoint_interval": 5},
@@ -544,6 +546,7 @@ def test_latent_input_digest_excludes_sealed_holdout() -> None:
             "label": "return",
             "seed": 42,
         },
+        "model_name": "cae",
         "n_factors": 5,
         "n_epochs": 50,
         "model_kwargs": {"checkpoint_interval": 5},
@@ -582,7 +585,9 @@ def test_sdf_expected_spec_includes_library_output_defaults() -> None:
         "n_epochs_unc": 256,
         "n_epochs_moment": 64,
         "n_epochs_cond": 1024,
-        "checkpoint_epochs": [256, 512, 768, 1024, 1280],
+        # Conditional-relative, as every preset in the corpus now is. The published
+        # labels below are global and unchanged by the renumbering.
+        "checkpoint_epochs": [256, 512, 768, 1024],
         "beta_n_epochs": 256,
         "beta_checkpoint_epochs": [256],
         "beta_default_checkpoint": 256,
@@ -672,7 +677,14 @@ def test_latent_registration_builds_complete_training_identity(
         elapsed=1.0,
         model_kwargs={"checkpoint_interval": 5},
         fold_extras=[{"checkpoint_epochs": [0, 5]}],
-        fold_ics_df=pl.DataFrame({"fold_id": [0, 0], "epoch": [0, 5], "ic_mean": [0.1, 0.2]}),
+        fold_ics_df=pl.DataFrame(
+            {
+                "fold_id": [0, 0],
+                "epoch": [0, 5],
+                "ic_mean": [0.1, 0.2],
+                "n_scored_dates": [5, 5],
+            }
+        ),
         preds_df=pl.DataFrame(
             {
                 "timestamp": [datetime(2021, 1, 1), datetime(2021, 1, 1)],
@@ -712,6 +724,163 @@ def test_latent_registration_builds_complete_training_identity(
     assert spec["checkpoint_epochs"] == [5]
     assert spec["params"]["input_digest"] == "input-a"
     assert captured["checkpoints"] == [5]
+
+
+def test_legacy_fresh_and_cached_outputs_share_physical_checkpoint_surface(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from case_studies.utils.latent_factors import cv
+
+    dates = pl.date_range(datetime(2020, 1, 1), datetime(2020, 1, 20), "1d", eager=True)
+    rows = [
+        {
+            "timestamp": timestamp,
+            "symbol": f"S{symbol}",
+            "value": float(symbol + date_index / 100),
+            "return": float(symbol + date_index / 100),
+        }
+        for date_index, timestamp in enumerate(dates)
+        for symbol in range(6)
+    ]
+    dataset = pl.DataFrame(rows)
+    split = {
+        "fold": 0,
+        "train_start": dates[0],
+        "train_end": dates[14],
+        "val_start": dates[15],
+        "val_end": dates[19],
+    }
+
+    def fake_cae(chars_train, returns_train, chars_val, returns_val, **_kwargs):
+        del chars_train, returns_train, returns_val
+        physical = chars_val[..., 0]
+        return {0: physical - 1.0, 5: physical}, {"checkpoint_epochs": [0, 5]}
+
+    monkeypatch.setitem(cv._MODEL_RUNNERS, "cae", fake_cae)
+    kwargs = {
+        "panel_data": None,
+        "splits": [split],
+        "models": ["cae"],
+        "n_factors": 1,
+        "n_epochs": 5,
+        "model_kwargs": {"cae": {"checkpoint_interval": 5}},
+        "save_dir": tmp_path / "legacy-cache",
+        "dataset": dataset,
+        "feature_names": ["value"],
+        "label_col": "return",
+        "device": "cpu",
+        "num_threads": 1,
+    }
+
+    fitted_state = cv.run_latent_factor_cv(
+        **kwargs,
+        use_cache=False,
+        checkpoint_surface="fitted_state",
+    )
+    fresh = cv.run_latent_factor_cv(**kwargs, use_cache=True)
+    cached = cv.run_latent_factor_cv(**kwargs, use_cache=True)
+
+    fresh_predictions = fresh["all_predictions"]["cae"].sort(
+        "epoch", "fold_id", "timestamp", "symbol"
+    )
+    cached_predictions = cached["all_predictions"]["cae"].sort(
+        "epoch", "fold_id", "timestamp", "symbol"
+    )
+    fresh_metrics = fresh["fold_metrics"]["cae"].sort("epoch", "fold_id")
+    cached_metrics = cached["fold_metrics"]["cae"].sort("epoch", "fold_id")
+
+    assert fitted_state["all_predictions"]["cae"].get_column("epoch").unique().sort().to_list() == [
+        0,
+        5,
+    ]
+    assert fresh_predictions.get_column("epoch").unique().to_list() == [5]
+    assert fresh_metrics.get_column("epoch").unique().to_list() == [5]
+    assert fresh_predictions.equals(cached_predictions)
+    assert fresh_metrics.equals(cached_metrics)
+
+
+def test_filesystem_cache_requires_each_checkpoint_for_each_fold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from case_studies.utils.latent_factors import cv
+
+    dates = pl.date_range(datetime(2020, 1, 1), datetime(2020, 1, 25), "1d", eager=True)
+    dataset = pl.DataFrame(
+        [
+            {
+                "timestamp": timestamp,
+                "symbol": f"S{symbol}",
+                "value": float(symbol + date_index / 100),
+                "return": float(symbol + date_index / 100),
+            }
+            for date_index, timestamp in enumerate(dates)
+            for symbol in range(6)
+        ]
+    )
+    splits = [
+        {
+            "fold": 0,
+            "train_start": dates[0],
+            "train_end": dates[14],
+            "val_start": dates[15],
+            "val_end": dates[19],
+        },
+        {
+            "fold": 1,
+            "train_start": dates[0],
+            "train_end": dates[19],
+            "val_start": dates[20],
+            "val_end": dates[24],
+        },
+    ]
+    fit_calls = 0
+
+    def fake_cae(chars_train, returns_train, chars_val, returns_val, **_kwargs):
+        nonlocal fit_calls
+        del chars_train, returns_train, returns_val
+        fit_calls += 1
+        physical = chars_val[..., 0]
+        return {0: physical - 1.0, 5: physical}, {"checkpoint_epochs": [0, 5]}
+
+    monkeypatch.setitem(cv._MODEL_RUNNERS, "cae", fake_cae)
+    cache_dir = tmp_path / "cache"
+    kwargs = {
+        "panel_data": None,
+        "splits": splits,
+        "models": ["cae"],
+        "n_factors": 1,
+        "n_epochs": 5,
+        "model_kwargs": {"cae": {"checkpoint_interval": 5}},
+        "save_dir": cache_dir,
+        "dataset": dataset,
+        "feature_names": ["value"],
+        "label_col": "return",
+        "device": "cpu",
+        "num_threads": 1,
+        "checkpoint_surface": "fitted_state",
+    }
+
+    cv.run_latent_factor_cv(**kwargs, use_cache=False)
+    assert fit_calls == 2
+
+    for filename in ("predictions.parquet", "fold_metrics.parquet"):
+        path = cache_dir / "cae" / filename
+        corrupted = pl.read_parquet(path).filter(
+            ~((pl.col("fold_id") == 1) & (pl.col("epoch") == 5))
+        )
+        corrupted.write_parquet(path)
+
+    result = cv.run_latent_factor_cv(**kwargs, use_cache=True)
+
+    assert fit_calls == 4
+    assert set(result["fold_metrics"]["cae"].select("fold_id", "epoch").unique().iter_rows()) == {
+        (0, 0),
+        (0, 5),
+        (1, 0),
+        (1, 5),
+    }
 
 
 @pytest.mark.gpu
@@ -824,6 +993,7 @@ def test_reporting_epoch_defaults_to_last_checkpoint() -> None:
             "fold_id": [0, 0, 1, 1],
             "epoch": [5, 10, 5, 10],
             "ic_mean": [0.12, 0.03, 0.11, 0.02],
+            "n_scored_dates": [40, 40, 40, 40],
         }
     )
 
@@ -845,6 +1015,7 @@ def test_reporting_epoch_excludes_validation_selected_checkpoint_zero_by_default
             "fold_id": [0, 0, 1, 1],
             "epoch": [0, 10, 0, 10],
             "ic_mean": [0.04, 0.03, 0.05, 0.02],
+            "n_scored_dates": [40, 40, 40, 40],
         }
     )
 
@@ -866,6 +1037,7 @@ def test_reporting_epoch_allows_explicit_checkpoint_zero() -> None:
             "fold_id": [0, 0, 1, 1],
             "epoch": [0, 10, 0, 10],
             "ic_mean": [0.04, 0.03, 0.05, 0.02],
+            "n_scored_dates": [40, 40, 40, 40],
         }
     )
 
@@ -902,7 +1074,7 @@ def test_latent_registry_cache_replays_exact_complete_surface(
     assert result is not None
     training_hash, metrics, predictions = result
     assert training_hash == training_hash_from_spec(training_spec)
-    assert metrics.shape == (4, 3)
+    assert metrics.shape == (4, 4)
     assert predictions.shape == (20, 6)
 
 
@@ -1010,6 +1182,7 @@ def test_ipca_solver_controls_change_training_identity() -> None:
     }
     old = _apply_latent_factor_runtime_spec(
         spec=base,
+        model_name="ipca",
         n_factors=5,
         n_epochs=50,
         model_kwargs={"max_iter": 100},
@@ -1018,6 +1191,7 @@ def test_ipca_solver_controls_change_training_identity() -> None:
     )
     corrected = _apply_latent_factor_runtime_spec(
         spec=base,
+        model_name="ipca",
         n_factors=5,
         n_epochs=50,
         model_kwargs={"max_iter": 10_000},
@@ -1060,6 +1234,7 @@ def test_n_factors_changes_training_identity_even_when_the_preset_declares_one()
         "model_kwargs": {},
         "fold_extras": [],
         "n_epochs": 50,
+        "model_name": "ipca",
     }
     at_five = _apply_latent_factor_runtime_spec(spec=preset, n_factors=5, **identity)
     at_two = _apply_latent_factor_runtime_spec(spec=preset, n_factors=2, **identity)
@@ -1484,6 +1659,7 @@ def test_fold_temporal_assembly_changes_training_identity() -> None:
     }
     placeholder = _apply_latent_factor_runtime_spec(
         spec=base,
+        model_name="ipca",
         n_factors=5,
         n_epochs=50,
         model_kwargs={},
@@ -1492,6 +1668,7 @@ def test_fold_temporal_assembly_changes_training_identity() -> None:
     )
     fold_scoped = _apply_latent_factor_runtime_spec(
         spec=base,
+        model_name="ipca",
         n_factors=5,
         n_epochs=50,
         model_kwargs={},
@@ -1507,6 +1684,7 @@ def test_fold_temporal_assembly_changes_training_identity() -> None:
 
     changed_fold_data = _apply_latent_factor_runtime_spec(
         spec=base,
+        model_name="ipca",
         n_factors=5,
         n_epochs=50,
         model_kwargs={},

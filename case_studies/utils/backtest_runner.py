@@ -24,17 +24,25 @@ Usage::
 
 from __future__ import annotations
 
+import warnings
+from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime, time
+from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import polars as pl
 
-from case_studies.utils.backtest_loaders import BacktestConfig, get_backtest_config
+from case_studies.utils.backtest_loaders import (
+    BacktestConfig,
+    declared_rebalance_step,
+    get_backtest_config,
+)
 from case_studies.utils.backtest_presets import (
     apply_calendar_session_enforcement,
     ensure_backtest_spec,
+    is_backtest_spec,
     runtime_backtest_config,
     strategy_view,
 )
@@ -291,7 +299,13 @@ def compute_portfolio_metrics(
         }
 
     analysis = PortfolioAnalysis(returns=returns, periods_per_year=periods_per_year)
-    pm = analysis.compute_summary_stats()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Precision loss occurred in moment calculation",
+            category=RuntimeWarning,
+        )
+        pm = analysis.compute_summary_stats()
 
     def _safe(v: float) -> float:
         """Sanitize metric value: handle complex, inf, nan."""
@@ -334,8 +348,6 @@ def compute_portfolio_metrics(
             )
             out.update(unc)
         except Exception as exc:  # pragma: no cover - never block point estimates
-            import warnings
-
             warnings.warn(
                 f"compute_backtest_uncertainty failed: {exc}; point metrics returned without CIs",
                 stacklevel=2,
@@ -364,21 +376,53 @@ class BacktestRunResult:
     execution_mode: str = "engine"
 
 
-def _target_weights_by_timestamp(weights: pl.DataFrame) -> dict[datetime, dict[str, float]]:
+def _target_weights_by_timestamp(
+    weights: pl.DataFrame,
+) -> dict[date | datetime, dict[str, float]]:
     """Build deterministic timestamp and symbol ordered engine targets."""
     duplicate_count = weights.select(pl.struct("timestamp", "symbol").is_duplicated().sum()).item()
     if duplicate_count:
         raise ValueError(
             f"Target weights contain {duplicate_count} duplicate timestamp-symbol rows"
         )
-    targets: dict[datetime, dict[str, float]] = {}
+    targets: dict[date | datetime, dict[str, float]] = {}
     for row in weights.sort("timestamp", "symbol").iter_rows(named=True):
         timestamp = row["timestamp"]
         if timestamp not in targets:
             targets[timestamp] = {}
-        if row["weight"] != 0:
-            targets[timestamp][row["symbol"]] = row["weight"]
+        targets[timestamp][row["symbol"]] = row["weight"]
     return targets
+
+
+def _engine_timestamp(
+    value: object,
+    *,
+    feed_is_date: bool,
+    feed_timezone: str | None,
+    configured_timezone: str,
+) -> date | datetime:
+    if feed_is_date:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        raise TypeError(f"engine target timestamp must be date-like, got {type(value).__name__}")
+    if isinstance(value, datetime):
+        timestamp = value
+    elif isinstance(value, date):
+        timestamp = datetime.combine(value, time.min)
+    else:
+        raise TypeError(f"engine target timestamp must be date-like, got {type(value).__name__}")
+    if feed_timezone is not None:
+        zone = ZoneInfo(feed_timezone)
+        return (
+            timestamp.replace(tzinfo=zone)
+            if timestamp.tzinfo is None
+            else timestamp.astimezone(zone)
+        )
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.astimezone(ZoneInfo(configured_timezone)).replace(tzinfo=None)
+    return timestamp
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +471,7 @@ def precompute_weights(
             case_study=case_study,
             prediction_hash=prediction_hash,
             conformal_widths=conformal_widths,
+            rebalance_step=rebal_spec.get("step"),
         )
     return weights
 
@@ -588,7 +633,17 @@ def substitute_continuous_return_for_classification(
         return predictions
 
     eval_label = str(mapping[label])
-    eval_path = _Path(CASE_STUDIES_DIR) / case_study / "labels" / f"{eval_label}.parquet"
+    # `get_case_study_dir`, not `CASE_STUDIES_DIR`. The setup file above is configuration and
+    # lives in the repository; a label parquet is generated output and lives wherever
+    # `ML4T_OUTPUT_DIR` puts it, which is what every other reader of one resolves. Reading it
+    # from the checkout meant this path could only work where the artifacts happened to sit
+    # beside the source: a run under output isolation raised FileNotFoundError for a label it
+    # had just written. Measured in CI on `crypto_perps_funding` 13_backtest, where the first
+    # classification label reached - `fwd_dir_8h` - looked for `fwd_ret_8h.parquet` under
+    # /app/case_studies/... while the labels were in the isolated output root.
+    from utils.paths import get_case_study_dir as _case_dir
+
+    eval_path = _case_dir(case_study) / "labels" / f"{eval_label}.parquet"
     if not eval_path.exists():
         raise FileNotFoundError(
             f"Continuous-return label {eval_label!r} expected at {eval_path} "
@@ -845,6 +900,28 @@ def apply_universe_filter(
 # ---------------------------------------------------------------------------
 
 
+def resolved_allow_short_selling(
+    strategy_spec: dict,
+    precomputed_weights: pl.DataFrame | None = None,
+) -> bool:
+    """Return the account short-selling flag implied by a resolved strategy spec.
+
+    Identity-defining, so it has exactly one implementation: callers that hash a
+    spec before handing it to :func:`run_backtest` must derive the flag through
+    this function, or the spec they hashed and the spec that runs will differ.
+    """
+    signal_config = strategy_view(strategy_spec)["signal"]
+    allow_short = bool(
+        strategy_spec["backtest_config"]["account"].get("allow_short_selling", False)
+    ) or bool(signal_config.get("long_short", False))
+    allow_short = allow_short or (
+        str(signal_config.get("direction", "long_only")).strip().lower() == "short_only"
+    )
+    if precomputed_weights is not None:
+        allow_short = allow_short or bool(precomputed_weights.filter(pl.col("weight") < 0).height)
+    return allow_short
+
+
 def run_backtest(
     case_study: str,
     prediction_hash: str,
@@ -857,8 +934,11 @@ def run_backtest(
     initial_cash: float = 1_000_000.0,
     calendar: str = "NYSE",
     precomputed_weights: pl.DataFrame | None = None,
+    funding_rates: pl.DataFrame | None = None,
     force_rebacktest: bool = False,
+    resolved_spec_only: bool = False,
     contract_specs: dict | None = None,
+    option_lifecycle: pl.DataFrame | None = None,
 ) -> BacktestRunResult:
     """Core backtest: predictions -> weights -> engine/vectorized -> result.
 
@@ -895,6 +975,8 @@ def run_backtest(
     contract_specs : dict, optional
         Per-asset contract specifications (futures multipliers, tick sizes).
         Pass for futures case studies to get correct P&L scaling.
+    funding_rates : pl.DataFrame, optional
+        Official position-signed perpetual-futures funding settlements.
 
     Returns
     -------
@@ -914,14 +996,35 @@ def run_backtest(
     # ``substitute_continuous_return_for_classification`` docstring).
     predictions = normalize_prediction_columns(predictions)
     predictions = substitute_continuous_return_for_classification(predictions, case_study, label)
-    strategy_spec = ensure_backtest_spec(
-        case_study,
-        get_backtest_config(case_study),
-        strategy_spec,
-        prices=prices,
-        prediction_hash=prediction_hash,
-        initial_cash=initial_cash,
-    )
+    if resolved_spec_only:
+        # The caller (the locked-holdout producer) hashed this exact spec and must
+        # get that identity back. Re-deriving it here would reread the mutable
+        # preset that ensure_backtest_spec consults, so an unrelated setup.yaml
+        # edit could silently move a locked backtest's identity.
+        if not is_backtest_spec(strategy_spec):
+            raise ValueError("resolved_spec_only requires an already-canonical backtest spec")
+        declared = strategy_spec.get("backtest_config", {}).get("metadata", {})
+        if declared.get("prediction_hash") != prediction_hash:
+            raise ValueError(
+                "resolved backtest specification does not declare the prediction being run"
+            )
+        # ensure_backtest_spec would have filled these from the preset. Skipping it means
+        # a spec that omits them reaches the rebalance logic and dies on a bare KeyError
+        # far from the cause, so require them here instead of defaulting them back in.
+        rebalance = strategy_spec.get("strategy", {}).get("rebalance") or {}
+        missing = {"min_weight_change", "min_trade_value"} - set(rebalance)
+        if missing:
+            raise ValueError(f"resolved backtest specification omits rebalance {sorted(missing)}")
+        strategy_spec = deepcopy(strategy_spec)
+    else:
+        strategy_spec = ensure_backtest_spec(
+            case_study,
+            get_backtest_config(case_study),
+            strategy_spec,
+            prices=prices,
+            prediction_hash=prediction_hash,
+            initial_cash=initial_cash,
+        )
     from case_studies.utils.conformal import ensure_conformal_calibration_identity
 
     strategy_spec = ensure_conformal_calibration_identity(strategy_spec)
@@ -933,7 +1036,20 @@ def run_backtest(
     # drawdown on bar 1 when the function-arg default ($1M) diverges from the
     # spec ($100K) — halting the strategy before any trade is placed.
     initial_cash = float(strategy_spec["backtest_config"]["cash"]["initial"])
+    # The step decides which slots are traded, so the spec has to record the one this run
+    # uses - otherwise two runs at different steps hash alike and the second is skipped
+    # (ml4t/agent-workspace#1005). Stamped here rather than only in build_backtest_spec
+    # because several notebooks build a spec without passing `label`, and this is the one
+    # place that always has both the case study and the label.
+    if label:
+        _declared = declared_rebalance_step(case_study, label)
+        if _declared is not None:
+            _rb = strategy_spec.setdefault("strategy", {}).setdefault("rebalance", {})
+            _rb.setdefault("step", _declared)
     strategy = strategy_view(strategy_spec)
+    signal_config = strategy["signal"]
+    allow_short = resolved_allow_short_selling(strategy_spec, precomputed_weights)
+    strategy_spec["backtest_config"]["account"]["allow_short_selling"] = allow_short
 
     # Apply spec-declared universe restriction (e.g., sp500_options rung-3
     # 'liquid' subset). Driven purely by strategy.signal.universe_filter so
@@ -989,7 +1105,6 @@ def run_backtest(
                     execution_mode=strategy.get("rebalance", {}).get("mode", "unknown"),
                 )
 
-    signal_config = strategy["signal"]
     rebal_spec = strategy.get("rebalance", {})
 
     if precomputed_weights is not None:
@@ -1045,6 +1160,7 @@ def run_backtest(
                 label=label,
                 case_study=case_study,
                 prediction_hash=prediction_hash,
+                rebalance_step=rebal_spec.get("step"),
             )
 
     # 2. Dispatch to engine or vectorized
@@ -1067,12 +1183,36 @@ def run_backtest(
         }
 
     if rebal_spec["mode"] == "vectorized":
+        if funding_rates is not None:
+            raise ValueError("vectorized backtests cannot execute funding cashflows")
+        if (
+            "_state_transition" in weights.columns
+            and weights.filter(pl.col("_state_transition")).height
+        ):
+            raise ValueError("vectorized backtests cannot sequence state transitions")
         # sp500_options HTM short-straddle uses a dedicated multi-cohort daily-MTM
         # backtest path: overlapping 5-cohort book, per-cohort daily premium + hedge
         # P&L, entry-spread + hedge-rebalance transaction costs. The simple
         # weights × y_true vectorized path cannot express this strategy because
         # y_true is a single 30-day return, not a daily P&L series.
         if case_study == "sp500_options" and label == "ret_to_expiry":
+            from case_studies.sp500_options._htm_backtest import OPTION_DECISION_COLUMNS
+
+            # A short-straddle spec says the strategy's decisions are typed option contracts;
+            # it does not say this frame is one. Where `run_backtest` was handed a decision
+            # artifact as `precomputed_weights`, it is - the artifact carries the strike,
+            # expiration and both legs' quotes. Where `run_backtest` derived the weights from
+            # predictions itself, which is what the Ch20 holdout retrain does, the frame is
+            # `[timestamp, symbol, weight]` and carries none of them, and passing it on the
+            # strength of the declared kind alone made `run_htm_daily_mtm` reject the holdout
+            # for ten missing columns. Asking the frame is the same question that function asks,
+            # so the two cannot disagree, and `None` is the path it already has for this case:
+            # it selects the cohorts from `contract_returns.parquet` under the spec's own method
+            # and top_k, which is the same selection the artifact records.
+            decision_kind = (strategy_spec.get("decision_artifact") or {}).get("kind")
+            typed_decisions = decision_kind == "short_straddles" and not (
+                OPTION_DECISION_COLUMNS - set(weights.columns)
+            )
             result = _run_htm_daily_mtm(
                 case_study=case_study,
                 predictions=predictions,
@@ -1082,6 +1222,9 @@ def run_backtest(
                 allocation_spec=strategy.get("allocation", {}),
                 label=label,
                 prediction_hash=prediction_hash,
+                option_decisions=weights if typed_decisions else None,
+                option_lifecycle=option_lifecycle,
+                option_accounting=strategy_spec.get("options_accounting"),
             )
         else:
             result = _run_vectorized(
@@ -1095,11 +1238,9 @@ def run_backtest(
                 initial_cash=initial_cash,
                 risk_spec=strategy.get("risk", {}),
                 prediction_hash=prediction_hash,
+                rebalance_step=rebal_spec.get("step"),
             )
     else:
-        allow_short = signal_config.get("long_short", False) or (
-            str(signal_config.get("direction", "long_only")).strip().lower() == "short_only"
-        )
         result = _run_engine(
             weights=weights,
             prices=prices,
@@ -1113,6 +1254,7 @@ def run_backtest(
             contract_specs=contract_specs,
             case_study=case_study,
             label=label,
+            funding_rates=funding_rates,
         )
 
     # Build metrics dict
@@ -1131,6 +1273,7 @@ def run_backtest(
     # 3. Register
     backtest_hash = None
     if register:
+        _refuse_an_allocation_that_produced_no_target(weights, daily_returns, strategy_spec)
         from case_studies.utils.registry import (
             compute_backtest_fold_metrics,
             register_backtest_fold_metrics,
@@ -1204,6 +1347,7 @@ def _run_engine(
     *,
     case_study: str | None = None,
     label: str | None = None,
+    funding_rates: pl.DataFrame | None = None,
 ) -> dict:
     """Run backtest via ml4t-backtest Engine."""
     from ml4t.backtest import DataFeed, Engine, RebalanceConfig, Strategy, TargetWeightExecutor
@@ -1223,7 +1367,21 @@ def _run_engine(
     apply_calendar_session_enforcement(config, calendar)
 
     # Pre-compute weight dict from DataFrame
-    weight_dict = _target_weights_by_timestamp(weights)
+    price_timestamp_dtype = prices.schema["timestamp"]
+    feed_is_date = price_timestamp_dtype == pl.Date
+    feed_timezone = (
+        price_timestamp_dtype.time_zone if isinstance(price_timestamp_dtype, pl.Datetime) else None
+    )
+    raw_weight_dict = _target_weights_by_timestamp(weights)
+    weight_dict = {
+        _engine_timestamp(
+            timestamp,
+            feed_is_date=feed_is_date,
+            feed_timezone=feed_timezone,
+            configured_timezone=config.resolved_timezone,
+        ): targets
+        for timestamp, targets in raw_weight_dict.items()
+    }
 
     # Resolve calendar-aware rebalance schedule, then thin by the label's
     # non-overlapping step from setup.yaml::labels.rebalance_step. Mirrors
@@ -1241,18 +1399,39 @@ def _run_engine(
     # ~step× too rarely. The on_data callback already gates on
     # ``timestamp in weight_dict``, so dates without weights are skipped.
     from case_studies.utils.backtest_loaders import (
-        get_rebalance_step,
-        resolve_rebalance_timestamps,
+        resolve_decision_schedule,
+        resolved_rebalance_step,
     )
 
     cadence = rebalance_spec.get("cadence", "monthly_month_end")
     all_pred_ts = pl.Series("ts", predictions["timestamp"].unique().sort().to_list())
-    schedule_dates = resolve_rebalance_timestamps(all_pred_ts, cadence, calendar)
-    if case_study and label:
-        step = get_rebalance_step(case_study, label)
-        if step > 1:
-            schedule_dates = schedule_dates.gather_every(step)
-    rebalance_schedule = set(schedule_dates.to_list())
+    step = resolved_rebalance_step(rebalance_spec, case_study, label) if case_study and label else 1
+    schedule_dates = resolve_decision_schedule(all_pred_ts, cadence, step, calendar)
+    rebalance_schedule = {
+        _engine_timestamp(
+            timestamp,
+            feed_is_date=feed_is_date,
+            feed_timezone=feed_timezone,
+            configured_timezone=config.resolved_timezone,
+        )
+        for timestamp in schedule_dates.to_list()
+    }
+    transition_timestamps = {
+        _engine_timestamp(
+            timestamp,
+            feed_is_date=feed_is_date,
+            feed_timezone=feed_timezone,
+            configured_timezone=config.resolved_timezone,
+        )
+        for timestamp in (
+            weights.filter(pl.col("_state_transition")).get_column("timestamp").unique().to_list()
+            if "_state_transition" in weights.columns
+            else []
+        )
+    }
+    rebalance_schedule.update(transition_timestamps)
+    if transition_timestamps and config.execution_mode.value != "same_bar":
+        raise ValueError("state-transition sequencing requires same-bar engine execution")
 
     # Build risk components from spec (Ch19)
     position_rules = _build_position_rules(risk_spec)
@@ -1263,6 +1442,12 @@ def _run_engine(
     # ensure_backtest_spec()).
     min_weight_change = float(rebalance_spec["min_weight_change"])
     min_trade_value = float(rebalance_spec["min_trade_value"])
+
+    funding_ledger = None
+    if funding_rates is not None:
+        from case_studies.crypto_perps_funding.funding_backtest import FundingSettlementLedger
+
+        funding_ledger = FundingSettlementLedger(funding_rates)
 
     # Build strategy
     class _PrecomputedStrategy(Strategy):
@@ -1278,12 +1463,20 @@ def _run_engine(
                 )
             )
 
+        def on_start(self, broker):
+            if funding_ledger is not None:
+                funding_ledger.install(broker)
+
         def on_data(self, timestamp, data, context, broker):
             # Set position rules on broker (once, first bar)
             if not self._rules_set:
                 if position_rules:
                     broker.set_position_rules(position_rules)
                 self._rules_set = True
+
+            if timestamp in transition_timestamps:
+                broker.flatten_all_positions(reason="declared state transition")
+                broker._process_orders()
 
             # Check portfolio-level limits (each bar)
             if risk_manager:
@@ -1347,8 +1540,8 @@ def _run_engine(
         # weights. The daily_returns frame is sliced to [win_start, win_end]
         # below regardless of how wide the load was.
         prices_dates = prices["timestamp"].dt.date()
-        prices_min_date = prices_dates.min()
-        prices_max_date = prices_dates.max()
+        prices_min_date = cast(date | None, prices_dates.min())
+        prices_max_date = cast(date | None, prices_dates.max())
         if prices_min_date is None or prices_max_date is None:
             raise RuntimeError(
                 f"Empty prices frame for cs={case_study} label={label} "
@@ -1381,6 +1574,8 @@ def _run_engine(
     engine = Engine.from_config(feed, strategy, config, contract_specs=contract_specs)
     engine_result = engine.run()
 
+    funding_metrics = funding_ledger.metrics() if funding_ledger is not None else {}
+
     # Extract daily returns
     session_aligned = infer_session_alignment(calendar)
     daily_df = extract_daily_returns_frame(
@@ -1403,6 +1598,7 @@ def _run_engine(
 
     ppy = overall_periods_per_year(case_study, calendar, daily_df)
     metrics = compute_portfolio_metrics(returns_arr, periods_per_year=ppy, trim_leading_zeros=False)
+    metrics.update(funding_metrics)
 
     # Engine-specific metrics (execution details not derivable from returns)
     m = engine_result.metrics
@@ -1417,22 +1613,53 @@ def _run_engine(
     # for leveraged products (cme_futures multipliers inflate it 10⁴–10⁵×) and
     # mixes incompatibly with vectorized-path rows on the same column.
     if weights.height > 0:
-        weights_sorted = weights.sort("symbol", "timestamp").with_columns(
+        turnover_weights = weights.with_columns(pl.lit(1).alias("_event_order"))
+        if "_state_transition" in weights.columns:
+            flat_states = []
+            transition_timestamps = (
+                weights.filter(pl.col("_state_transition"))
+                .get_column("timestamp")
+                .unique()
+                .sort()
+                .to_list()
+            )
+            for transition_timestamp in transition_timestamps:
+                previous_state = (
+                    weights.filter(pl.col("timestamp") < transition_timestamp)
+                    .sort("symbol", "timestamp")
+                    .group_by("symbol", maintain_order=True)
+                    .last()
+                )
+                if previous_state.height > 0:
+                    flat_states.append(
+                        previous_state.with_columns(
+                            pl.lit(transition_timestamp)
+                            .cast(weights.schema["timestamp"])
+                            .alias("timestamp"),
+                            pl.lit(0.0).cast(weights.schema["weight"]).alias("weight"),
+                            pl.lit(0).alias("_event_order"),
+                        ).select(turnover_weights.columns)
+                    )
+            if flat_states:
+                turnover_weights = pl.concat([turnover_weights, *flat_states])
+        weights_sorted = turnover_weights.sort("symbol", "timestamp", "_event_order").with_columns(
             abs_change=(
                 pl.col("weight") - pl.col("weight").shift(1).over("symbol").fill_null(0.0)
             ).abs(),
         )
-        turnover_by_ts = weights_sorted.group_by("timestamp").agg(
-            turnover=pl.col("abs_change").sum()
+        turnover_by_ts = (
+            weights_sorted.with_columns(pl.col("timestamp").cast(daily_df.schema["timestamp"]))
+            .group_by("timestamp")
+            .agg(turnover=pl.col("abs_change").sum())
         )
         # Align to daily timeline so non-rebalance days contribute 0 to the mean
         # (matches port_ret.join(turnover) in the vectorized path).
         turnover_aligned = daily_df.join(
-            turnover_by_ts.with_columns(pl.col("timestamp").cast(daily_df.schema["timestamp"])),
+            turnover_by_ts,
             on="timestamp",
             how="left",
         ).with_columns(pl.col("turnover").fill_null(0.0))
-        mean_turnover = turnover_aligned["turnover"].mean()
+        mean_turnover = cast(float | None, turnover_aligned["turnover"].mean())
         metrics["avg_turnover"] = float(mean_turnover) if mean_turnover is not None else 0.0
     else:
         metrics["avg_turnover"] = 0.0
@@ -1493,6 +1720,9 @@ def _run_htm_daily_mtm(
     allocation_spec: dict | None = None,
     label: str | None = None,
     prediction_hash: str | None = None,
+    option_decisions: pl.DataFrame | None = None,
+    option_lifecycle: pl.DataFrame | None = None,
+    option_accounting: dict | None = None,
 ) -> dict:
     """Dispatch wrapper for the hold-to-expiry daily-MTM short-straddle backtest.
 
@@ -1514,44 +1744,40 @@ def _run_htm_daily_mtm(
     where ``daily_returns`` has columns ``[timestamp, daily_return]`` so the
     registry write path treats it identically to any other backtest.
     """
-    from pathlib import Path
-
-    import yaml
-
     from case_studies.sp500_options._htm_backtest import run_htm_daily_mtm
-    from utils import CASE_STUDIES_DIR
-    from utils.paths import REPO_ROOT
+    from utils import ML4T_DATA_PATH
+    from utils.paths import get_case_study_dir
 
-    cs_dir = CASE_STUDIES_DIR / case_study
+    # The same reason the classification eval label above resolves this way: a label parquet is
+    # generated output, so it is read from wherever ML4T_OUTPUT_DIR puts it. The two paths are
+    # the same directory whenever the artifacts sit beside the source, which is why reading the
+    # checkout was never wrong in production and always wrong under isolation.
+    cs_dir = get_case_study_dir(case_study)
     labels_dir = cs_dir / "labels"
-    # Anchor on REPO_ROOT — same convention as every other case-study data
-    # path. Resolving relative to cwd masked real "data missing" errors as
-    # cwd-mismatch fallbacks pointing at a different (also-missing) path.
-    raw_options_dir = REPO_ROOT / "data" / "equities" / "market" / "sp500" / "options_straddles_raw"
+    raw_options_dir = ML4T_DATA_PATH / "equities" / "market" / "sp500" / "options_straddles_raw"
 
     method = str(signal_config.get("method", "equal_weight_top_k"))
     top_k = int(signal_config.get("top_k", 20))
     percentile = float(signal_config.get("percentile", 90.0))
-    exit_at_max_days = signal_config.get("exit_at_max_days")
-    if exit_at_max_days is not None:
-        exit_at_max_days = int(exit_at_max_days)
-
-    # For round-trip mode (exit_at_max_days set), weekly entry with a 10-day
-    # hold yields ~2 concurrent cohorts, not 5. Caller can override via
-    # signal_config.n_roll; default is the HTM-expiry value (5).
-    from case_studies.sp500_options._htm_backtest import N_ROLL_DEFAULT
-
-    n_roll = int(signal_config.get("n_roll", N_ROLL_DEFAULT))
-
-    # Read cost/risk parameters from setup.yaml so the wrapper does not
-    # silently drop them. Required keys raise KeyError; missing optional keys
-    # fall through to run_htm_daily_mtm's defaults.
-    setup = yaml.safe_load((cs_dir / "config" / "setup.yaml").read_text())
-    cost_components = setup["costs"]["components"]
-    delta_threshold = float(setup["hedging_protocol"]["delta_threshold"])
-    hedge_spread_bps = float(cost_components["hedge_spread"]["estimate_bps_of_notional"])
-    equity_commission_per_share = float(cost_components["commission"]["equity_per_share"])
-    option_commission_per_contract = float(cost_components["commission"]["option_per_contract"])
+    if risk_spec:
+        raise ValueError("the specialized option path does not support risk overlays")
+    required_accounting = {
+        "n_roll",
+        "delta_hedge",
+        "delta_threshold",
+        "hedge_spread_bps",
+        "equity_commission_per_share",
+        "option_commission_per_contract",
+        "option_contract_multiplier",
+        "option_spread_fraction",
+        "exit_at_max_days",
+    }
+    missing_accounting = required_accounting - set(option_accounting or {})
+    if missing_accounting:
+        raise ValueError(
+            f"specialized option accounting is missing fields: {sorted(missing_accounting)}"
+        )
+    assert option_accounting is not None
 
     result = run_htm_daily_mtm(
         case_study=case_study,
@@ -1561,13 +1787,20 @@ def _run_htm_daily_mtm(
         method=method,
         top_k=top_k,
         percentile=percentile,
-        exit_at_max_days=exit_at_max_days,
-        n_roll=n_roll,
-        delta_threshold=delta_threshold,
-        hedge_spread_bps=hedge_spread_bps,
-        equity_commission_per_share=equity_commission_per_share,
-        option_commission_per_contract=option_commission_per_contract,
+        exit_at_max_days=option_accounting["exit_at_max_days"],
+        n_roll=int(option_accounting["n_roll"]),
+        delta_hedge=bool(option_accounting["delta_hedge"]),
+        delta_threshold=float(option_accounting["delta_threshold"]),
+        hedge_spread_bps=float(option_accounting["hedge_spread_bps"]),
+        equity_commission_per_share=float(option_accounting["equity_commission_per_share"]),
+        option_commission_per_contract=float(option_accounting["option_commission_per_contract"]),
+        option_contract_multiplier=int(option_accounting["option_contract_multiplier"]),
         allocation_spec=allocation_spec,
+        decisions=option_decisions,
+        option_lifecycle=option_lifecycle,
+        option_spread_fraction=float(option_accounting["option_spread_fraction"]),
+        prediction_hash=prediction_hash,
+        label=label,
     )
     port = result["daily_returns"]
     metrics = result["metrics"]
@@ -1617,21 +1850,6 @@ def _run_htm_daily_mtm(
         from case_studies.sp500_options._htm_backtest import _compute_metrics
 
         metrics.update(_compute_metrics(port))
-
-    # Optional portfolio-level risk overlay (Ch19). Same mechanism as vectorized
-    # path: operates on the daily return series post-hoc.
-    if risk_spec:
-        from case_studies.sp500_options._htm_backtest import _compute_metrics
-
-        port_for_risk = daily_returns.rename({"daily_return": "net_ret"})
-        port_for_risk = _apply_vectorized_risk(port_for_risk, risk_spec)
-        daily_returns = port_for_risk.select(
-            pl.col("timestamp"), pl.col("net_ret").alias("daily_return")
-        )
-        # Recompute the full metric set from the post-overlay return series so
-        # cagr/max_drawdown/volatility/etc. reflect the same series as Sharpe.
-        post = daily_returns.rename({"daily_return": "portfolio_ret"})
-        metrics.update(_compute_metrics(post))
 
     # Final unified metric pass: replace HTM-internal Sharpe/Sortino/etc. with
     # the canonical ml4t.diagnostic.PortfolioAnalysis values so HTM metrics are
@@ -1684,10 +1902,14 @@ def _run_vectorized(
     initial_cash: float,
     risk_spec: dict | None = None,
     prediction_hash: str | None = None,
+    rebalance_step: int | None = None,
 ) -> dict:
     """Run vectorized backtest (weight × forward return - costs).
 
-    Used for us_firm_characteristics, sp500_options, nasdaq100_microstructure.
+    Used for the case studies in `VECTORIZED_CASE_STUDIES`: us_firm_characteristics and
+    sp500_options. This line named nasdaq100_microstructure until 2026-09-06 and nothing
+    dispatched it here - no config declares `execution.mode`, so the preset's default decides,
+    and nasdaq is not in the set.
 
     Cost dispatch supports two models:
       * percentage — fractional drag = turnover × (commission_bps + slippage_bps) / 1e4
@@ -1706,9 +1928,9 @@ def _run_vectorized(
     """
     from case_studies.utils.backtest_loaders import get_rebalance_step, thin_to_rebalance_dates
 
-    # Thin predictions to non-overlapping periods. Step is declared per-label
-    # in the case study's setup.yaml under labels.rebalance_step.
-    step = get_rebalance_step(case_study, label)
+    # The step the spec recorded, so the run trades what its identity says. setup.yaml is
+    # the fallback for a spec written before the step entered the identity.
+    step = rebalance_step if rebalance_step is not None else get_rebalance_step(case_study, label)
     thinned = thin_to_rebalance_dates(predictions, cadence=cadence, step=step)
 
     # Re-compute weights on thinned predictions
@@ -1726,12 +1948,44 @@ def _run_vectorized(
     if weights_thinned["timestamp"].dtype != thinned_sel["timestamp"].dtype:
         thinned_sel = thinned_sel.cast({"timestamp": weights_thinned["timestamp"].dtype})
 
-    # Join weights with forward returns
+    # Join weights with forward returns.
+    #
+    # Left, not inner, and then a refusal. An inner join discarded a selected position whose
+    # outcome row is missing, and three things followed. Weights are never renormalized after
+    # the join, so `gross_ret` summed the survivors' contributions against the original
+    # weights - the dropped name was marked at exactly zero return, which is an assertion
+    # about a position nobody could price rather than an exclusion. `n_positions` counted the
+    # survivors, so the one diagnostic that would show the loss reported the reduced count as
+    # though it were intended. And turnover is computed from `weights_thinned` below, which
+    # still holds the dropped name, so the position paid its cost and returned nothing.
+    #
+    # Renormalizing instead would be a filter applied to a chosen position using data from
+    # after the choice: "the selection step is unbiased" and "the realized result is
+    # unbiased" are different claims, and that fails the second while passing the first. So
+    # the run stops. A zero weight is exempt because it is not a position: its outcome
+    # cannot change any number here.
     bt = weights_thinned.join(
         thinned_sel,
         on=["timestamp", "symbol"],
-        how="inner",
+        how="left",
     )
+    unpriceable = bt.filter(
+        (pl.col("weight") != 0.0) & (pl.col("y_true").is_null() | ~pl.col("y_true").is_finite())
+    )
+    if not unpriceable.is_empty():
+        sample = unpriceable.sort("timestamp", "symbol").head(5)
+        named = ", ".join(
+            f"{row['symbol']}@{row['timestamp']}" for row in sample.iter_rows(named=True)
+        )
+        raise ValueError(
+            f"{case_study}/{label}: {unpriceable.height} of {bt.height} selected positions have "
+            f"no usable outcome, across {unpriceable['timestamp'].n_unique()} rebalance dates "
+            f"(first: {named}). Marking them at zero return asserts a result for a position "
+            "nobody could price, and they would still pay turnover. Supply the missing outcome "
+            "rows, or exclude these names before the weights are computed so the selection and "
+            "the realized result are drawn from the same set."
+        )
+    bt = bt.filter(pl.col("y_true").is_not_null())
 
     # Portfolio returns per period
     port_ret = (
@@ -1863,7 +2117,7 @@ def _run_vectorized(
     metrics = compute_portfolio_metrics(returns_arr, periods_per_year=periods_per_year or 252)
 
     # Vectorized-specific metrics (not derivable from returns alone)
-    avg_turnover = float(port_ret["turnover"].mean()) if n > 0 else 0.0
+    avg_turnover = cast(float, port_ret["turnover"].mean()) if n > 0 else 0.0
     metrics["avg_turnover"] = avg_turnover
     metrics["n_periods"] = n
 
@@ -1956,6 +2210,7 @@ def _apply_allocation(
     case_study: str = "",
     prediction_hash: str | None = None,
     conformal_widths: pl.DataFrame | None = None,
+    rebalance_step: int | None = None,
 ) -> pl.DataFrame:
     """Post-process signal weights with an allocation method.
 
@@ -2020,7 +2275,8 @@ def _apply_allocation(
             "_apply_allocation requires both case_study and label to look up "
             "labels.rebalance_step from setup.yaml. Pass them from the caller."
         )
-    step = get_rebalance_step(case_study, label)
+    # The step the spec recorded; setup.yaml only when the spec predates the key.
+    step = rebalance_step if rebalance_step is not None else get_rebalance_step(case_study, label)
     rebal_preds = thin_to_rebalance_dates(filtered_preds, cadence=cadence, step=step)
 
     # Max weight cap — applied after all covariance-based allocators
@@ -2045,11 +2301,19 @@ def _apply_allocation(
                 "conformal_weighted allocation requires prediction_hash; "
                 "caller must pass it through _apply_allocation."
             )
-        from case_studies.utils.conformal import load_conformal_widths
+        from case_studies.utils.conformal import (
+            CALIBRATION_VERSION,
+            DEFAULT_ALPHA,
+            DEFAULT_MIN_CALIBRATION_N,
+            load_conformal_widths,
+        )
 
-        alpha = float(alloc_spec.get("alpha", 0.20))
-        min_calibration_n = int(alloc_spec.get("min_calibration_n", 30))
-        calibration_version = str(alloc_spec.get("calibration_version", "walk_forward_v2"))
+        alpha = float(alloc_spec.get("alpha", DEFAULT_ALPHA))
+        min_calibration_n = int(alloc_spec.get("min_calibration_n", DEFAULT_MIN_CALIBRATION_N))
+        # The default has to track the constant. Pinning the string here meant a version
+        # bump left this branch asking for widths that the writer no longer produces, and
+        # the failure surfaced as "no widths for calibration_version" on a fresh artifact.
+        calibration_version = str(alloc_spec.get("calibration_version", CALIBRATION_VERSION))
         widths = conformal_widths
         if widths is None:
             widths = load_conformal_widths(
@@ -2058,6 +2322,7 @@ def _apply_allocation(
                 alpha=alpha,
                 min_calibration_n=min_calibration_n,
                 calibration_version=calibration_version,
+                label=label or None,
             )
         # Conformal widths are keyed by the timestamps stored in predictions.parquet,
         # which keep their original time zone; `normalize_prediction_columns` has
@@ -2125,6 +2390,52 @@ def _apply_allocation(
 # ---------------------------------------------------------------------------
 # Risk rules (Ch19) — engine-level integration
 # ---------------------------------------------------------------------------
+
+
+def _refuse_an_allocation_that_produced_no_target(
+    weights: pl.DataFrame | None,
+    daily_returns: pl.DataFrame | None,
+    strategy_spec: dict,
+) -> None:
+    """Refuse to register a run whose strategy produced no target weight at any rebalance.
+
+    An empty weight frame over a non-empty evaluation window is not a strategy that traded
+    little. It is a strategy the engine was never given anything to trade towards, so it holds
+    a flat account for the whole window and every return-derived metric it records is the
+    metric of that flat account: `total_return` 0, `sharpe` 0.0. Written to the registry those
+    read as a configuration that was tried and lost nothing, and a 0.0 Sharpe then sits above
+    every candidate whose Sharpe is negative. Nothing downstream filters it out of the trial
+    count - `cohort_metrics` lists cohort members straight from `backtest_runs` with no
+    zero-trade clause - so an absence is counted as a trial against every real candidate
+    beside it.
+
+    `fx_pairs`' `mvo_ledoit_wolf` at `top_k=2` is the measured case
+    (ml4t/agent-workspace#1004): `compute_mvo_weights` skipped every one of 2,063 rebalances
+    for having a two-name cross-section and returned the empty schema-only frame.
+
+    **The test is the weight frame, not the trade count.** A run with `num_trades == 0` and a
+    non-empty weight frame is a different condition with different causes, and at least one of
+    them is legitimate: a CI fixture whose panel is one or four bars long has a target and no
+    later bar to fill it on under `next_bar` execution. Refusing on the trade count alone
+    stopped eleven such fixture backtests across `test_research_contract_execution` and
+    `test_cme_futures_research`, which is the wrong answer - nothing is wrong with them.
+
+    An empty return series is a different failure with its own diagnosis upstream and is left
+    to it.
+    """
+    if weights is None or weights.height > 0:
+        return
+    if daily_returns is None or daily_returns.height == 0:
+        return
+    strategy = strategy_spec.get("strategy", strategy_spec)
+    raise ValueError(
+        "the strategy produced no target weight at any rebalance, over "
+        f"{daily_returns.height} periods, so this run is refused rather than registered as a "
+        f"Sharpe of 0.0: signal={strategy.get('signal')} "
+        f"allocation={strategy.get('allocation')} rebalance={strategy.get('rebalance')}. "
+        "A run with no target never opened a position and measured nothing; fix the allocator "
+        "or the selection that emptied the weight frame."
+    )
 
 
 def _build_position_rules(risk_spec: dict):
@@ -2205,9 +2516,10 @@ def run_plumbing_test(
     This validates the backtest pipeline produces no spurious alpha
     from random inputs.
     """
+    backtest_config = get_backtest_config(case_study)
     strategy_spec = ensure_backtest_spec(
         case_study,
-        get_backtest_config(case_study),
+        backtest_config,
         strategy_spec,
         prices=prices,
         prediction_hash="plumbing_test",
@@ -2217,8 +2529,23 @@ def run_plumbing_test(
     rebal_spec = strategy.get("rebalance", {})
 
     if rebal_spec["mode"] == "vectorized":
-        if predictions is None or label is None:
-            raise ValueError("Vectorized plumbing tests require predictions and label")
+        prediction_hash = "plumbing_test"
+        label = label or backtest_config.primary_label
+        if predictions is None:
+            from case_studies.utils.registry import load_prediction_index, read_predictions
+
+            prediction_index = load_prediction_index(
+                case_study,
+                label=label,
+                split="validation",
+            )
+            if prediction_index.is_empty():
+                raise ValueError(
+                    f"Vectorized plumbing test found no validation predictions for "
+                    f"{case_study}/{label}"
+                )
+            prediction_hash = prediction_index.row(0, named=True)["prediction_hash"]
+            predictions = read_predictions(case_study, prediction_hash)
 
         random_predictions = normalize_prediction_columns(predictions)
         rng = np.random.default_rng(seed)
@@ -2227,7 +2554,7 @@ def run_plumbing_test(
         )
         result = run_backtest(
             case_study,
-            "plumbing_test",
+            prediction_hash,
             strategy_spec,
             prices=prices,
             predictions=random_predictions,
